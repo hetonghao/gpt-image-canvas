@@ -215,7 +215,7 @@ type PanelTab = "manual" | "agent";
 type PanelStatusTone = "progress" | "success" | "warning" | "error";
 type CodexLoginStatus = "idle" | "starting" | "pending" | "authorized" | "expired" | "denied" | "error";
 type AgentRunStatus = "idle" | "connecting" | "running";
-type AgentChatMessageRole = "user" | "assistant" | "system" | "error" | "plan";
+type AgentChatMessageRole = "user" | "assistant" | "thinking" | "system" | "error" | "plan";
 
 interface PanelStatus {
   tone: PanelStatusTone;
@@ -238,6 +238,7 @@ interface AgentChatMessage {
   role: AgentChatMessageRole;
   content: string;
   timestamp: string;
+  runId?: string;
   plan?: GenerationPlan;
   previews?: AgentChatAssetPreview[];
 }
@@ -2295,6 +2296,7 @@ export function App() {
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
   const [agentRunStatus, setAgentRunStatus] = useState<AgentRunStatus>("idle");
   const [agentReferenceSelection, setAgentReferenceSelection] = useState<AgentReferenceSelection>(() => emptyAgentReferenceSelection(t));
+  const [isAgentSettingsOpen, setIsAgentSettingsOpen] = useState(false);
   const [isCanvasDarkMode, setIsCanvasDarkMode] = useState(false);
   const canvasShellRef = useRef<HTMLElement | null>(null);
   const panelCloseButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -2306,6 +2308,7 @@ export function App() {
   const agentSocketRef = useRef<WebSocket | null>(null);
   const agentSocketOpenPromiseRef = useRef<Promise<WebSocket> | null>(null);
   const activeAgentRunIdRef = useRef<string | null>(null);
+  const agentTranscriptRef = useRef<HTMLElement | null>(null);
   const agentOutputPlacementCountsRef = useRef<Map<string, number>>(new Map());
   const saveTimerRef = useRef<number | undefined>();
   const codexPollTimerRef = useRef<number | undefined>();
@@ -2330,6 +2333,16 @@ export function App() {
     }),
     [agentHeight, agentOutputFormat, agentQuality, agentWidth]
   );
+  const agentSizeSummary = `${agentWidth} x ${agentHeight}`;
+  const agentCompactSizeSummary = `${agentWidth}x${agentHeight}`;
+  const agentQualitySummary = t("qualityLabel", { quality: agentQuality });
+  const agentFormatSummary = t("outputFormatLabel", { format: agentOutputFormat });
+  const agentReferenceCount = agentReferenceSelection.references.length;
+  const agentReferenceSummary = t("agentParamReferences", {
+    count: agentReferenceCount,
+    max: MAX_REFERENCE_IMAGES
+  });
+  const agentReferenceCompactSummary = `${agentReferenceCount}/${MAX_REFERENCE_IMAGES}`;
 
   const trimmedPrompt = prompt.trim();
   const promptValidationMessage = prompt.trim() ? "" : t("promptRequired");
@@ -2571,6 +2584,15 @@ export function App() {
       controller.abort();
     };
   }, [loadAgentConfig]);
+
+  useEffect(() => {
+    const transcript = agentTranscriptRef.current;
+    if (!transcript) {
+      return;
+    }
+
+    transcript.scrollTop = transcript.scrollHeight;
+  }, [agentMessages]);
 
   useEffect(() => {
     if (isAuthLoading || !authStatus || route === "gallery") {
@@ -3425,14 +3447,32 @@ export function App() {
     ]);
   }
 
-  function appendAgentAssistantDelta(delta: string): void {
+  function isAgentStreamEventForActiveRun(event: Pick<AgentServerEvent, "runId">): boolean {
+    const activeRunId = activeAgentRunIdRef.current;
+    return Boolean(activeRunId && (!event.runId || event.runId === activeRunId));
+  }
+
+  function isStaleAgentRunEvent(event: Pick<AgentServerEvent, "runId">): boolean {
+    const activeRunId = activeAgentRunIdRef.current;
+    return Boolean(event.runId && (!activeRunId || event.runId !== activeRunId));
+  }
+
+  function runIdForAgentEvent(event: Pick<AgentServerEvent, "runId">): string | undefined {
+    return event.runId ?? activeAgentRunIdRef.current ?? undefined;
+  }
+
+  function appendAgentStreamDelta(role: Extract<AgentChatMessageRole, "assistant" | "thinking">, delta: string, runId?: string): void {
     if (!delta) {
       return;
     }
 
     setAgentMessages((messages) => {
       const lastMessage = messages[messages.length - 1];
-      if (lastMessage?.role === "assistant" && !lastMessage.plan) {
+      if (lastMessage?.role === role && !lastMessage.plan && lastMessage.runId === runId) {
+        if (!lastMessage.content && !delta.trim()) {
+          return messages;
+        }
+
         return [
           ...messages.slice(0, -1),
           {
@@ -3442,13 +3482,62 @@ export function App() {
         ];
       }
 
+      if (!delta.trim()) {
+        return messages;
+      }
+
+      return [
+        ...messages,
+        {
+          id: `agent-message-${crypto.randomUUID()}`,
+          role,
+          content: delta,
+          timestamp: new Date().toISOString(),
+          runId
+        }
+      ];
+    });
+  }
+
+  function appendAgentAssistantDelta(delta: string, runId?: string): void {
+    appendAgentStreamDelta("assistant", delta, runId);
+  }
+
+  function appendAgentThinkingDelta(delta: string, runId?: string): void {
+    appendAgentStreamDelta("thinking", delta, runId);
+  }
+
+  function upsertAgentPlanAttachment(plan: GenerationPlan, fallbackContent: string, runId?: string): void {
+    setAgentMessages((messages) => {
+      let existingIndex = -1;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index]?.plan?.id === plan.id) {
+          existingIndex = index;
+          break;
+        }
+      }
+      if (existingIndex >= 0) {
+        return messages.map((message, index) =>
+          index === existingIndex
+            ? {
+                ...message,
+                content: fallbackContent,
+                plan,
+                runId: message.runId ?? runId
+              }
+            : message
+        );
+      }
+
       return [
         ...messages,
         {
           id: `agent-message-${crypto.randomUUID()}`,
           role: "assistant",
-          content: delta,
-          timestamp: new Date().toISOString()
+          content: fallbackContent,
+          timestamp: new Date().toISOString(),
+          runId,
+          plan
         }
       ];
     });
@@ -3501,7 +3590,7 @@ export function App() {
 
     setAgentMessages((messages) => {
       const lastMessage = messages[messages.length - 1];
-      if (lastMessage?.role === "assistant" && lastMessage.previews) {
+      if (lastMessage?.role === "assistant" && lastMessage.previews && lastMessage.runId === event.runId) {
         return [
           ...messages.slice(0, -1),
           {
@@ -3518,6 +3607,7 @@ export function App() {
           role: "assistant",
           content: t("agentPreviewReady"),
           timestamp: new Date().toISOString(),
+          runId: event.runId,
           previews: [preview]
         }
       ];
@@ -3557,34 +3647,51 @@ export function App() {
   function handleAgentServerEvent(event: AgentServerEvent): void {
     switch (event.type) {
       case "assistant_delta":
-        appendAgentAssistantDelta(event.delta);
+        if (!isAgentStreamEventForActiveRun(event)) {
+          return;
+        }
+        appendAgentAssistantDelta(event.delta, runIdForAgentEvent(event));
+        return;
+      case "assistant_thinking_delta":
+        if (!isAgentStreamEventForActiveRun(event)) {
+          return;
+        }
+        appendAgentThinkingDelta(event.delta, runIdForAgentEvent(event));
         return;
       case "plan_created":
+        if (isStaleAgentRunEvent(event)) {
+          return;
+        }
         syncAgentPlanNodeFromEvent(event);
-        addAgentMessage({
-          role: "plan",
-          content: t("agentPlanCreated", { title: event.plan.title }),
-          plan: event.plan
-        });
+        upsertAgentPlanAttachment(event.plan, t("agentPlanCreated", { title: event.plan.title }), runIdForAgentEvent(event));
         return;
       case "plan_updated":
+        if (isStaleAgentRunEvent(event)) {
+          return;
+        }
         syncAgentPlanNodeFromEvent(event);
-        addAgentMessage({
-          role: "plan",
-          content: t("agentPlanUpdated", { title: event.plan.title }),
-          plan: event.plan
-        });
+        upsertAgentPlanAttachment(event.plan, t("agentPlanUpdated", { title: event.plan.title }), runIdForAgentEvent(event));
         return;
       case "asset_preview":
+        if (isStaleAgentRunEvent(event)) {
+          return;
+        }
         addAgentAssetPreview(event);
         return;
       case "job_started":
+        if (isStaleAgentRunEvent(event)) {
+          return;
+        }
         addAgentMessage({
           role: "system",
-          content: t("agentJobStarted", { jobId: event.jobId })
+          content: t("agentJobStarted", { jobId: event.jobId }),
+          runId: runIdForAgentEvent(event)
         });
         return;
       case "job_completed":
+        if (isStaleAgentRunEvent(event)) {
+          return;
+        }
         if (event.record) {
           setGenerationHistory((history) =>
             [event.record as GenerationRecord, ...history.filter((record) => record.id !== event.record?.id)].slice(0, 20)
@@ -3592,22 +3699,34 @@ export function App() {
         }
         addAgentMessage({
           role: "system",
-          content: t("agentJobCompleted", { jobId: event.jobId })
+          content: t("agentJobCompleted", { jobId: event.jobId }),
+          runId: runIdForAgentEvent(event)
         });
         return;
       case "job_failed":
+        if (isStaleAgentRunEvent(event)) {
+          return;
+        }
         addAgentMessage({
           role: "error",
-          content: t("agentJobFailed", { jobId: event.jobId, error: event.error })
+          content: t("agentJobFailed", { jobId: event.jobId, error: event.error }),
+          runId: runIdForAgentEvent(event)
         });
         return;
       case "job_blocked":
+        if (isStaleAgentRunEvent(event)) {
+          return;
+        }
         addAgentMessage({
           role: "error",
-          content: t("agentJobBlocked", { jobId: event.jobId, reason: event.reason })
+          content: t("agentJobBlocked", { jobId: event.jobId, reason: event.reason }),
+          runId: runIdForAgentEvent(event)
         });
         return;
       case "error":
+        if (isStaleAgentRunEvent(event)) {
+          return;
+        }
         addAgentMessage({
           role: "error",
           content: localizedApiErrorMessage({
@@ -3616,7 +3735,8 @@ export function App() {
             fallbackText: event.message,
             locale,
             status: 400
-          })
+          }),
+          runId: runIdForAgentEvent(event)
         });
         if (event.runId && activeAgentRunIdRef.current === event.runId) {
           activeAgentRunIdRef.current = null;
@@ -3624,21 +3744,29 @@ export function App() {
         }
         return;
       case "run_cancelled":
+        if (isStaleAgentRunEvent(event)) {
+          return;
+        }
         activeAgentRunIdRef.current = null;
         setAgentRunStatus("idle");
         addAgentMessage({
           role: "system",
-          content: event.alreadyCancelled ? t("agentRunAlreadyCancelled") : t("agentRunCancelled")
+          content: event.alreadyCancelled ? t("agentRunAlreadyCancelled") : t("agentRunCancelled"),
+          runId: runIdForAgentEvent(event)
         });
         return;
       case "run_done":
+        if (isStaleAgentRunEvent(event)) {
+          return;
+        }
         if (!event.runId || activeAgentRunIdRef.current === event.runId) {
           activeAgentRunIdRef.current = null;
           setAgentRunStatus("idle");
         }
         addAgentMessage({
           role: event.status === "succeeded" ? "system" : "error",
-          content: t("agentRunDone", { status: event.status })
+          content: t("agentRunDone", { status: event.status }),
+          runId: runIdForAgentEvent(event)
         });
         return;
       case "connected":
@@ -3768,9 +3896,11 @@ export function App() {
     agentRequestRef.current += 1;
     activeAgentRunIdRef.current = runId;
     setAgentInput("");
+    setIsAgentSettingsOpen(false);
     addAgentMessage({
       role: "user",
-      content: trimmedAgentInput
+      content: trimmedAgentInput,
+      runId
     });
 
     try {
@@ -4585,38 +4715,43 @@ export function App() {
         </>
         ) : (
         <>
-        <div className="ai-panel-body agent-panel-body flex-1 overflow-y-auto px-5 py-4" data-testid="agent-tab-panel">
+        <div className="ai-panel-body agent-panel-body flex-1 px-5 py-4" data-testid="agent-tab-panel">
           {saveError ? (
             <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" data-testid="save-error">
               {saveError}
             </p>
           ) : null}
 
-          <section className="agent-status-card" data-testid="agent-config-state" data-configured={isAgentConfigured}>
-            <div className="agent-status-card__icon" data-state={isAgentConfigured ? "ready" : "missing"}>
-              {isAgentConfigLoading ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              ) : isAgentConfigured ? (
-                <ShieldCheck className="size-4" aria-hidden="true" />
-              ) : (
-                <AlertTriangle className="size-4" aria-hidden="true" />
-              )}
-            </div>
-            <div className="min-w-0">
-              <p className="agent-status-card__title">
-                {isAgentConfigLoading
-                  ? t("agentConfigLoading")
-                  : isAgentConfigured
-                    ? t(agentConfig?.supportsVision ? "agentVisionMode" : "agentTextOnlyMode")
-                    : t("agentConfigMissingTitle")}
-              </p>
-              <p className="agent-status-card__copy">
-                {agentConfigError || (isAgentConfigured ? t("agentConfigReadyCopy", { model: agentConfig?.model ?? "" }) : t("agentConfigMissingCopy"))}
-              </p>
-            </div>
+          <div className="agent-chat-head" data-testid="agent-config-state" data-configured={isAgentConfigured}>
+            <button
+              className="agent-model-pill"
+              data-configured={isAgentConfigured}
+              type="button"
+              onClick={() => setIsProviderConfigDialogOpen(true)}
+            >
+              <span className="agent-model-pill__icon" data-state={isAgentConfigured ? "ready" : "missing"}>
+                {isAgentConfigLoading ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                ) : isAgentConfigured ? (
+                  <ShieldCheck className="size-4" aria-hidden="true" />
+                ) : (
+                  <AlertTriangle className="size-4" aria-hidden="true" />
+                )}
+              </span>
+              <span className="agent-model-pill__copy">
+                <strong>
+                  {isAgentConfigLoading
+                    ? t("agentConfigLoading")
+                    : isAgentConfigured
+                      ? t(agentConfig?.supportsVision ? "agentVisionMode" : "agentTextOnlyMode")
+                      : t("agentConfigMissingTitle")}
+                </strong>
+                <span>{agentConfigError || (isAgentConfigured ? t("agentConfigReadyCopy", { model: agentConfig?.model ?? "" }) : t("agentOpenModelConfig"))}</span>
+              </span>
+            </button>
             <button
               aria-label={t("agentConfigRefresh")}
-              className="history-icon-action"
+              className="agent-icon-button"
               data-testid="agent-config-refresh"
               disabled={isAgentConfigLoading}
               type="button"
@@ -4624,127 +4759,9 @@ export function App() {
             >
               {isAgentConfigLoading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <RotateCcw className="size-4" aria-hidden="true" />}
             </button>
-          </section>
+          </div>
 
-          <section className="agent-defaults" aria-labelledby="agent-defaults-title">
-            <div className="agent-section-heading">
-              <h2 id="agent-defaults-title">{t("agentDefaultsTitle")}</h2>
-              <span>{agentWidth} x {agentHeight}</span>
-            </div>
-            <label className="block">
-              <span className="control-label">{t("generationSizeLabel")}</span>
-              <select
-                className="field-control"
-                data-testid="agent-size-preset"
-                value={agentSizePresetId}
-                onChange={(event) => selectAgentSizePreset(event.target.value)}
-              >
-                {SIZE_PRESETS.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {sizePresetOptionLabel(preset, t)}
-                  </option>
-                ))}
-                <option value={CUSTOM_SIZE_PRESET_ID}>{t("customSizeOption")}</option>
-              </select>
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <label>
-                <span className="control-label">{t("generationWidthLabel")}</span>
-                <input
-                  className="field-control"
-                  data-testid="agent-width"
-                  max={MAX_IMAGE_DIMENSION}
-                  min={MIN_IMAGE_DIMENSION}
-                  step={1}
-                  type="number"
-                  value={Number.isNaN(agentWidth) ? "" : agentWidth}
-                  onChange={(event) => updateAgentWidth(event.target.value)}
-                />
-              </label>
-              <label>
-                <span className="control-label">{t("generationHeightLabel")}</span>
-                <input
-                  className="field-control"
-                  data-testid="agent-height"
-                  max={MAX_IMAGE_DIMENSION}
-                  min={MIN_IMAGE_DIMENSION}
-                  step={1}
-                  type="number"
-                  value={Number.isNaN(agentHeight) ? "" : agentHeight}
-                  onChange={(event) => updateAgentHeight(event.target.value)}
-                />
-              </label>
-            </div>
-            {agentDefaultsValidationMessage ? (
-              <p className="agent-inline-warning" role="alert">
-                {agentDefaultsValidationMessage}
-              </p>
-            ) : null}
-            <div className="grid grid-cols-2 gap-3">
-              <label>
-                <span className="control-label">{t("generationQualityLabel")}</span>
-                <select
-                  className="field-control"
-                  data-testid="agent-quality"
-                  value={agentQuality}
-                  onChange={(event) => setAgentQuality(event.target.value as ImageQuality)}
-                >
-                  {IMAGE_QUALITIES.map((item) => (
-                    <option key={item} value={item}>
-                      {t("qualityLabel", { quality: item })}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span className="control-label">{t("generationOutputFormatLabel")}</span>
-                <select
-                  className="field-control"
-                  data-testid="agent-format"
-                  value={agentOutputFormat}
-                  onChange={(event) => setAgentOutputFormat(event.target.value as OutputFormat)}
-                >
-                  {OUTPUT_FORMATS.map((item) => (
-                    <option key={item} value={item}>
-                      {t("outputFormatLabel", { format: item })}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          </section>
-
-          <section className="agent-references" data-testid="agent-reference-state" aria-labelledby="agent-references-title">
-            <div className="agent-section-heading">
-              <h2 id="agent-references-title">{t("agentReferencesTitle")}</h2>
-              <span>{agentReferenceSelection.references.length} / {MAX_REFERENCE_IMAGES}</span>
-            </div>
-            <p className="agent-reference-hint">{agentReferenceSelection.hint}</p>
-            {agentReferenceSelection.warning ? (
-              <p className="agent-inline-warning" data-testid="agent-reference-warning" role="alert">
-                {agentReferenceSelection.warning}
-              </p>
-            ) : null}
-            {agentReferenceSelection.references.length > 0 ? (
-              <div className="agent-reference-list">
-                {agentReferenceSelection.references.map((reference, index) => (
-                  <article className="agent-reference-item" data-testid="agent-reference-item" key={`${reference.sourceUrl}-${index}`}>
-                    <img
-                      alt={t("generationReferenceAlt", { index: index + 1, name: agentReferenceLabel(reference, index, t) })}
-                      className="agent-reference-item__image"
-                      src={reference.sourceUrl}
-                    />
-                    <div className="min-w-0">
-                      <p>{agentReferenceLabel(reference, index, t)}</p>
-                      <span>{Math.round(reference.width)} x {Math.round(reference.height)}</span>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-          </section>
-
-          <section className="agent-transcript" aria-label={t("agentTranscriptLabel")} data-testid="agent-transcript">
+          <section className="agent-transcript" aria-label={t("agentTranscriptLabel")} data-testid="agent-transcript" ref={agentTranscriptRef}>
             {agentMessages.length === 0 ? (
               <div className="agent-empty-state">
                 <Bot className="size-5" aria-hidden="true" />
@@ -4753,12 +4770,25 @@ export function App() {
               </div>
             ) : (
               agentMessages.map((message) => (
-                <article className={`agent-message agent-message--${message.role}`} data-testid="agent-message" key={message.id}>
-                  <div className="agent-message__meta">
-                    <span>{t("agentMessageRole", { role: message.role })}</span>
-                    <time dateTime={message.timestamp}>{formatDateTime(message.timestamp, { hour: "2-digit", minute: "2-digit" })}</time>
-                  </div>
-                  <p>{message.content}</p>
+                <article
+                  className={`agent-message agent-message--${message.role}`}
+                  data-message-role={message.role}
+                  data-run-id={message.runId}
+                  data-testid="agent-message"
+                  key={message.id}
+                >
+                  {message.role === "system" || message.role === "error" ? (
+                    <div className="agent-status-line__meta">
+                      <span>{t("agentMessageRole", { role: message.role })}</span>
+                      <time dateTime={message.timestamp}>{formatDateTime(message.timestamp, { hour: "2-digit", minute: "2-digit" })}</time>
+                    </div>
+                  ) : (
+                    <div className="agent-message__meta">
+                      <span>{t("agentMessageRole", { role: message.role })}</span>
+                      <time dateTime={message.timestamp}>{formatDateTime(message.timestamp, { hour: "2-digit", minute: "2-digit" })}</time>
+                    </div>
+                  )}
+                  <p className="agent-message__content">{message.content}</p>
                   {message.plan ? (
                     <div className="agent-plan-card" data-testid="agent-plan-card">
                       <strong>{message.plan.title}</strong>
@@ -4787,32 +4817,191 @@ export function App() {
           </section>
         </div>
 
-        <div className="ai-panel-actions agent-panel-actions border-t border-neutral-200 bg-white px-5 py-4">
-          <label className="block">
-            <span className="sr-only">{t("agentInputLabel")}</span>
-            <textarea
-              className="agent-input"
-              data-testid="agent-message-input"
-              disabled={isAgentRunning}
-              placeholder={isAgentConfigured ? t("agentInputPlaceholder") : t("agentConfigMissingInputPlaceholder")}
-              rows={3}
-              value={agentInput}
-              onChange={(event) => setAgentInput(event.target.value)}
-            />
-          </label>
-          <div className="agent-action-row">
-            <span className="agent-run-state" data-state={agentRunStatus} data-testid="agent-run-state">
-              {isAgentRunning ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <Sparkles className="size-3.5" aria-hidden="true" />}
-              {t("agentRunStatus", { status: agentRunStatus })}
+        <div className="ai-panel-actions agent-panel-actions agent-composer-shell border-t border-neutral-200 bg-white px-5 py-4">
+          <div className="agent-param-bar">
+            <div className="agent-param-group">
+              <button
+                aria-expanded={isAgentSettingsOpen}
+                aria-label={t("agentOpenParameters")}
+                className="agent-param-chip agent-param-chip--primary"
+                data-testid="agent-parameter-toggle"
+                title={agentSizeSummary}
+                type="button"
+                onClick={() => setIsAgentSettingsOpen((isOpen) => !isOpen)}
+              >
+                <Settings className="size-3.5" aria-hidden="true" />
+                <span>{agentCompactSizeSummary}</span>
+              </button>
+              <button className="agent-param-chip" title={agentQualitySummary} type="button" onClick={() => setIsAgentSettingsOpen((isOpen) => !isOpen)}>
+                <Sparkles className="size-3.5" aria-hidden="true" />
+                <span>{agentQualitySummary}</span>
+              </button>
+              <button className="agent-param-chip" title={agentFormatSummary} type="button" onClick={() => setIsAgentSettingsOpen((isOpen) => !isOpen)}>
+                <ImageIcon className="size-3.5" aria-hidden="true" />
+                <span>{agentFormatSummary}</span>
+              </button>
+              <button
+                className="agent-param-chip"
+                data-testid="agent-reference-state"
+                title={agentReferenceSummary}
+                type="button"
+                onClick={() => setIsAgentSettingsOpen((isOpen) => !isOpen)}
+              >
+                <MapPin className="size-3.5" aria-hidden="true" />
+                <span>{agentReferenceCompactSummary}</span>
+              </button>
+            </div>
+            <span className="agent-run-state" data-state={agentRunStatus} data-testid="agent-run-state" title={t("agentRunStatus", { status: agentRunStatus })}>
+              {isAgentRunning ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <span className="agent-run-state__dot" aria-hidden="true" />
+              )}
+              <span>{t("agentRunStatus", { status: agentRunStatus })}</span>
             </span>
+          </div>
+
+          {isAgentSettingsOpen ? (
+            <section className="agent-parameter-popover" aria-label={t("agentDefaultsTitle")} data-testid="agent-parameter-popover">
+              <div className="agent-parameter-popover__grid">
+                <label className="provider-field provider-field--span">
+                  <span>{t("generationSizeLabel")}</span>
+                  <select
+                    className="field-control"
+                    data-testid="agent-size-preset"
+                    value={agentSizePresetId}
+                    onChange={(event) => selectAgentSizePreset(event.target.value)}
+                  >
+                    {SIZE_PRESETS.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {sizePresetOptionLabel(preset, t)}
+                      </option>
+                    ))}
+                    <option value={CUSTOM_SIZE_PRESET_ID}>{t("customSizeOption")}</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="control-label">{t("generationWidthLabel")}</span>
+                  <input
+                    className="field-control"
+                    data-testid="agent-width"
+                    max={MAX_IMAGE_DIMENSION}
+                    min={MIN_IMAGE_DIMENSION}
+                    step={1}
+                    type="number"
+                    value={Number.isNaN(agentWidth) ? "" : agentWidth}
+                    onChange={(event) => updateAgentWidth(event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span className="control-label">{t("generationHeightLabel")}</span>
+                  <input
+                    className="field-control"
+                    data-testid="agent-height"
+                    max={MAX_IMAGE_DIMENSION}
+                    min={MIN_IMAGE_DIMENSION}
+                    step={1}
+                    type="number"
+                    value={Number.isNaN(agentHeight) ? "" : agentHeight}
+                    onChange={(event) => updateAgentHeight(event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span className="control-label">{t("generationQualityLabel")}</span>
+                  <select
+                    className="field-control"
+                    data-testid="agent-quality"
+                    value={agentQuality}
+                    onChange={(event) => setAgentQuality(event.target.value as ImageQuality)}
+                  >
+                    {IMAGE_QUALITIES.map((item) => (
+                      <option key={item} value={item}>
+                        {t("qualityLabel", { quality: item })}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span className="control-label">{t("generationOutputFormatLabel")}</span>
+                  <select
+                    className="field-control"
+                    data-testid="agent-format"
+                    value={agentOutputFormat}
+                    onChange={(event) => setAgentOutputFormat(event.target.value as OutputFormat)}
+                  >
+                    {OUTPUT_FORMATS.map((item) => (
+                      <option key={item} value={item}>
+                        {t("outputFormatLabel", { format: item })}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              {agentDefaultsValidationMessage ? (
+                <p className="agent-inline-warning" role="alert">
+                  {agentDefaultsValidationMessage}
+                </p>
+              ) : null}
+              <div className="agent-reference-summary">
+                <div>
+                  <strong>{t("agentReferencesTitle")}</strong>
+                  <span>{agentReferenceSelection.hint}</span>
+                </div>
+                <span>{agentReferenceSelection.references.length} / {MAX_REFERENCE_IMAGES}</span>
+              </div>
+              {agentReferenceSelection.warning ? (
+                <p className="agent-inline-warning" data-testid="agent-reference-warning" role="alert">
+                  {agentReferenceSelection.warning}
+                </p>
+              ) : null}
+              {agentReferenceSelection.references.length > 0 ? (
+                <div className="agent-reference-list">
+                  {agentReferenceSelection.references.map((reference, index) => (
+                    <article className="agent-reference-item" data-testid="agent-reference-item" key={`${reference.sourceUrl}-${index}`}>
+                      <img
+                        alt={t("generationReferenceAlt", { index: index + 1, name: agentReferenceLabel(reference, index, t) })}
+                        className="agent-reference-item__image"
+                        src={reference.sourceUrl}
+                      />
+                      <div className="min-w-0">
+                        <p>{agentReferenceLabel(reference, index, t)}</p>
+                        <span>{Math.round(reference.width)} x {Math.round(reference.height)}</span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          <div className="agent-composer-row">
+            <label className="agent-composer-input">
+              <span className="sr-only">{t("agentInputLabel")}</span>
+              <textarea
+                className="agent-input"
+                data-testid="agent-message-input"
+                disabled={isAgentRunning}
+                placeholder={isAgentConfigured ? t("agentInputPlaceholder") : t("agentConfigMissingInputPlaceholder")}
+                rows={2}
+                value={agentInput}
+                onChange={(event) => setAgentInput(event.target.value)}
+              />
+            </label>
             {isAgentRunning ? (
-              <button className="secondary-action h-10" data-testid="agent-cancel-button" type="button" onClick={cancelAgentRun}>
+              <button
+                aria-label={t("agentCancelRun")}
+                className="agent-send-or-cancel"
+                data-testid="agent-cancel-button"
+                title={t("agentCancelRun")}
+                type="button"
+                onClick={cancelAgentRun}
+              >
                 <CircleStop className="size-4" aria-hidden="true" />
-                {t("agentCancelRun")}
               </button>
             ) : (
               <button
-                className="primary-action h-10"
+                aria-label={t("agentSend")}
+                className="agent-send-or-cancel"
                 data-testid="agent-send-button"
                 disabled={!canSendAgentMessage}
                 title={!isAgentConfigured ? t("agentConfigMissingTitle") : agentDefaultsValidationMessage || undefined}
@@ -4820,7 +5009,6 @@ export function App() {
                 onClick={() => void submitAgentMessage()}
               >
                 <Send className="size-4" aria-hidden="true" />
-                {t("agentSend")}
               </button>
             )}
           </div>
@@ -5054,6 +5242,7 @@ export function App() {
           isCodexStarting={codexLoginStatus === "starting"}
           onClose={closeProviderConfigDialog}
           onLogoutCodex={logoutCodexSession}
+          onRefreshAgentConfig={loadAgentConfig}
           onRefreshAuthStatus={loadAuthStatus}
           onStartCodexLogin={startCodexLogin}
         />

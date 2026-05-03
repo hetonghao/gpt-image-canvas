@@ -2,9 +2,9 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  Bot,
   CheckCircle2,
   Database,
-  EyeOff,
   GripVertical,
   KeyRound,
   Loader2,
@@ -17,13 +17,15 @@ import {
   X
 } from "lucide-react";
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useMemo, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type PointerEvent, type ReactNode } from "react";
 import {
   PROVIDER_SOURCE_IDS,
+  type AgentLlmConfigView,
   type AuthStatusResponse,
   type ProviderConfigResponse,
   type ProviderSourceId,
   type ProviderSourceView,
+  type SaveAgentLlmConfigRequest,
   type SaveProviderConfigRequest
 } from "@gpt-image-canvas/shared";
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "./i18n";
@@ -33,6 +35,7 @@ interface ProviderConfigDialogProps {
   isCodexStarting: boolean;
   onClose: () => void;
   onLogoutCodex: () => Promise<void>;
+  onRefreshAgentConfig: () => Promise<AgentLlmConfigView | null>;
   onRefreshAuthStatus: () => Promise<AuthStatusResponse | null>;
   onStartCodexLogin: () => Promise<void>;
 }
@@ -44,7 +47,16 @@ interface LocalProviderFormState {
   timeoutMs: string;
 }
 
+interface AgentLlmFormState {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  timeoutMs: string;
+  supportsVision: boolean;
+}
+
 type DialogMessageTone = "success" | "error";
+type ProviderConfigTab = "image" | "agent";
 
 interface DialogMessage {
   tone: DialogMessageTone;
@@ -58,22 +70,35 @@ const emptyLocalProviderForm: LocalProviderFormState = {
   timeoutMs: "1200000"
 };
 
+const emptyAgentLlmForm: AgentLlmFormState = {
+  apiKey: "",
+  baseUrl: "",
+  model: "",
+  timeoutMs: "60000",
+  supportsVision: false
+};
+
 export function ProviderConfigDialog({
   isAuthLoading,
   isCodexStarting,
   onClose,
   onLogoutCodex,
+  onRefreshAgentConfig,
   onRefreshAuthStatus,
   onStartCodexLogin
 }: ProviderConfigDialogProps) {
   const { formatDateTime: formatLocaleDateTime, locale, t } = useI18n();
   const [config, setConfig] = useState<ProviderConfigResponse | null>(null);
+  const [agentConfig, setAgentConfig] = useState<AgentLlmConfigView | null>(null);
   const [sourceOrder, setSourceOrder] = useState<ProviderSourceId[]>([...PROVIDER_SOURCE_IDS]);
   const [localForm, setLocalForm] = useState<LocalProviderFormState>(emptyLocalProviderForm);
+  const [agentForm, setAgentForm] = useState<AgentLlmFormState>(emptyAgentLlmForm);
   const [isLoading, setIsLoading] = useState(true);
+  const [isAgentConfigLoading, setIsAgentConfigLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<DialogMessage | null>(null);
   const [draggingSourceId, setDraggingSourceId] = useState<ProviderSourceId | null>(null);
+  const [activeTab, setActiveTab] = useState<ProviderConfigTab>("image");
 
   const sourcesById = useMemo(() => {
     return new Map((config?.sources ?? []).map((source) => [source.id, source]));
@@ -82,6 +107,8 @@ export function ProviderConfigDialog({
   const activeSourceId = config?.activeSource?.id;
   const localApiKeyMask = config?.localOpenAI.apiKey.value;
   const hasSavedLocalKey = Boolean(config?.localOpenAI.apiKey.hasSecret);
+  const agentApiKeyMask = agentConfig?.apiKey.value;
+  const hasSavedAgentKey = Boolean(agentConfig?.apiKey.hasSecret);
   const codexSource = sourcesById.get("codex");
   const codex = codexSource?.details.codex;
   const envSource = sourcesById.get("env-openai");
@@ -122,14 +149,50 @@ export function ProviderConfigDialog({
     [locale, t]
   );
 
+  const loadAgentConfig = useCallback(
+    async (signal?: AbortSignal): Promise<AgentLlmConfigView | null> => {
+      setIsAgentConfigLoading(true);
+      setMessage(null);
+
+      try {
+        const response = await fetch("/api/agent-config", { signal });
+        if (!response.ok) {
+          throw new Error(await readProviderConfigError(response, locale, t));
+        }
+
+        const body = (await response.json()) as AgentLlmConfigView;
+        if (signal?.aborted) {
+          return null;
+        }
+
+        applyAgentConfig(body);
+        return body;
+      } catch (error) {
+        if (!signal?.aborted) {
+          setMessage({
+            tone: "error",
+            text: error instanceof Error ? error.message : t("agentConfigLoadFailed")
+          });
+        }
+        return null;
+      } finally {
+        if (!signal?.aborted) {
+          setIsAgentConfigLoading(false);
+        }
+      }
+    },
+    [locale, t]
+  );
+
   useEffect(() => {
     const controller = new AbortController();
     void loadProviderConfig(controller.signal);
+    void loadAgentConfig(controller.signal);
 
     return () => {
       controller.abort();
     };
-  }, [loadProviderConfig]);
+  }, [loadAgentConfig, loadProviderConfig]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -158,8 +221,27 @@ export function ProviderConfigDialog({
     });
   }
 
+  function applyAgentConfig(nextConfig: AgentLlmConfigView): void {
+    setAgentConfig(nextConfig);
+    setAgentForm({
+      apiKey: "",
+      baseUrl: nextConfig.baseUrl,
+      model: nextConfig.model,
+      timeoutMs: String(nextConfig.timeoutMs),
+      supportsVision: nextConfig.supportsVision
+    });
+  }
+
   function updateLocalForm(patch: Partial<LocalProviderFormState>): void {
     setLocalForm((current) => ({
+      ...current,
+      ...patch
+    }));
+    setMessage(null);
+  }
+
+  function updateAgentForm(patch: Partial<AgentLlmFormState>): void {
+    setAgentForm((current) => ({
       ...current,
       ...patch
     }));
@@ -262,6 +344,32 @@ export function ProviderConfigDialog({
       return;
     }
 
+    const shouldPersistAgentConfig = shouldSaveAgentConfig(agentForm, hasSavedAgentKey);
+    const agentTimeoutMs = Number.parseInt(agentForm.timeoutMs, 10);
+    const agentApiKey = agentForm.apiKey.trim();
+    const agentModel = agentForm.model.trim();
+    if (shouldPersistAgentConfig && !agentApiKey && !hasSavedAgentKey) {
+      setMessage({
+        tone: "error",
+        text: t("agentConfigApiKeyRequired")
+      });
+      return;
+    }
+    if (shouldPersistAgentConfig && !agentModel) {
+      setMessage({
+        tone: "error",
+        text: t("agentConfigModelRequired")
+      });
+      return;
+    }
+    if (shouldPersistAgentConfig && (!Number.isInteger(agentTimeoutMs) || agentTimeoutMs <= 0)) {
+      setMessage({
+        tone: "error",
+        text: t("agentConfigTimeoutInvalid")
+      });
+      return;
+    }
+
     setIsSaving(true);
     setMessage(null);
 
@@ -276,6 +384,16 @@ export function ProviderConfigDialog({
         timeoutMs
       }
     };
+    const agentBody: SaveAgentLlmConfigRequest | null = shouldPersistAgentConfig
+      ? {
+          apiKey: agentApiKey,
+          preserveApiKey: !agentApiKey && hasSavedAgentKey,
+          baseUrl: agentForm.baseUrl.trim(),
+          model: agentModel,
+          timeoutMs: agentTimeoutMs,
+          supportsVision: agentForm.supportsVision
+        }
+      : null;
 
     try {
       const response = await fetch("/api/provider-config", {
@@ -290,8 +408,26 @@ export function ProviderConfigDialog({
       }
 
       const savedConfig = (await response.json()) as ProviderConfigResponse;
+      let savedAgentConfig: AgentLlmConfigView | null = null;
+      if (agentBody) {
+        const agentResponse = await fetch("/api/agent-config", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(agentBody)
+        });
+        if (!agentResponse.ok) {
+          throw new Error(await readProviderConfigError(agentResponse, locale, t));
+        }
+        savedAgentConfig = (await agentResponse.json()) as AgentLlmConfigView;
+      }
+
       applyProviderConfig(savedConfig);
-      await onRefreshAuthStatus();
+      if (savedAgentConfig) {
+        applyAgentConfig(savedAgentConfig);
+      }
+      await Promise.all([onRefreshAuthStatus(), onRefreshAgentConfig()]);
       setMessage({
         tone: "success",
         text: savedConfig.activeSource
@@ -328,7 +464,6 @@ export function ProviderConfigDialog({
       >
         <header className="provider-config-dialog__header">
           <div className="min-w-0">
-            <p>Provider Console</p>
             <h2 id="provider-config-title">{t("providerConfigTitle")}</h2>
           </div>
           <button aria-label={t("providerCloseConfig")} className="provider-config-dialog__close" type="button" onClick={onClose}>
@@ -351,190 +486,309 @@ export function ProviderConfigDialog({
             </div>
           ) : null}
 
-          <section className="provider-config-priority" aria-labelledby="provider-priority-title">
-            <div className="provider-section-heading">
-              <div>
-                <p>{t("providerFallbackOrder")}</p>
-                <h3 id="provider-priority-title">{t("providerPriorityTitle")}</h3>
-              </div>
-              <span>{activeSourceId ? t("providerCurrent", { source: sourceLabel(activeSourceId, t) }) : t("providerCurrentNone")}</span>
-            </div>
+          <nav className="provider-config-tabs" aria-label={t("providerConfigTabsLabel")} data-testid="provider-config-tabs" role="tablist">
+            <button
+              aria-controls="provider-config-panel-image"
+              aria-selected={activeTab === "image"}
+              className="provider-config-tab"
+              data-active={activeTab === "image"}
+              data-testid="provider-config-tab-image"
+              id="provider-config-tab-image"
+              role="tab"
+              tabIndex={activeTab === "image" ? 0 : -1}
+              type="button"
+              onClick={() => setActiveTab("image")}
+            >
+              <Server className="size-4" aria-hidden="true" />
+              <span className="provider-config-tab__copy">
+                <strong>{t("providerImageModelTab")}</strong>
+                <span>{activeSourceId ? t("providerCurrent", { source: sourceLabel(activeSourceId, t) }) : t("providerCurrentNone")}</span>
+              </span>
+            </button>
+            <button
+              aria-controls="provider-config-panel-agent"
+              aria-selected={activeTab === "agent"}
+              className="provider-config-tab"
+              data-active={activeTab === "agent"}
+              data-testid="provider-config-tab-agent"
+              id="provider-config-tab-agent"
+              role="tab"
+              tabIndex={activeTab === "agent" ? 0 : -1}
+              type="button"
+              onClick={() => setActiveTab("agent")}
+            >
+              <Bot className="size-4" aria-hidden="true" />
+              <span className="provider-config-tab__copy">
+                <strong>{t("agentLlmTitle")}</strong>
+                <span>{isAgentConfigLoading ? t("agentConfigLoading") : agentConfig?.configured ? t("providerAvailable") : t("providerUnavailable")}</span>
+              </span>
+            </button>
+          </nav>
 
-            <ol className="provider-priority-list" data-testid="provider-priority-list">
-              {sourceOrder.map((sourceId, index) => {
-                const source = sourcesById.get(sourceId);
-                return (
-                  <li
-                    className="provider-priority-item"
-                    data-active={activeSourceId === sourceId}
-                    data-dragging={draggingSourceId === sourceId}
-                    data-provider-source-id={sourceId}
-                    data-testid={`provider-priority-${sourceId}`}
-                    key={sourceId}
+          {activeTab === "image" ? (
+            <div
+              aria-labelledby="provider-config-tab-image"
+              className="provider-config-tab-panel"
+              data-testid="provider-image-panel"
+              id="provider-config-panel-image"
+              role="tabpanel"
+            >
+              <div className="provider-image-layout">
+                <section className="provider-detail-card provider-detail-card--local" data-testid="provider-local-section" aria-labelledby="provider-local-title">
+                  <ProviderDetailHeader source={localSource} sourceId="local-openai" titleId="provider-local-title" />
+                  <div className="provider-form-grid">
+                    <label className="provider-field provider-field--span">
+                      <span>API Key</span>
+                      <input
+                        autoComplete="off"
+                        className="provider-field__control"
+                        data-testid="provider-local-api-key"
+                        name="localOpenAIKey"
+                        placeholder={localApiKeyMask ? t("providerLocalApiKeySaved", { mask: localApiKeyMask }) : t("providerLocalApiKeyPlaceholder")}
+                        type="password"
+                        value={localForm.apiKey}
+                        onChange={(event) => updateLocalForm({ apiKey: event.target.value })}
+                      />
+                    </label>
+                    <label className="provider-field provider-field--span">
+                      <span>Base URL</span>
+                      <input
+                        className="provider-field__control"
+                        data-testid="provider-local-base-url"
+                        name="localOpenAIBaseUrl"
+                        placeholder={t("providerBaseUrlPlaceholder")}
+                        value={localForm.baseUrl}
+                        onChange={(event) => updateLocalForm({ baseUrl: event.target.value })}
+                      />
+                    </label>
+                    <label className="provider-field">
+                      <span>{t("providerTimeoutMs")}</span>
+                      <input
+                        className="provider-field__control"
+                        data-testid="provider-local-timeout"
+                        min={1}
+                        name="localOpenAITimeout"
+                        type="number"
+                        value={localForm.timeoutMs}
+                        onChange={(event) => updateLocalForm({ timeoutMs: event.target.value })}
+                      />
+                    </label>
+                    <details className="provider-advanced-field">
+                      <summary>{t("providerAdvancedModel")}</summary>
+                      <label className="provider-field">
+                        <span>{t("providerFieldModel")}</span>
+                        <input
+                          className="provider-field__control"
+                          data-testid="provider-local-model"
+                          name="localOpenAIModel"
+                          value={localForm.model}
+                          onChange={(event) => updateLocalForm({ model: event.target.value })}
+                        />
+                      </label>
+                    </details>
+                  </div>
+                </section>
+
+                <section className="provider-config-priority" aria-labelledby="provider-priority-title">
+                  <div className="provider-section-heading">
+                    <h3 id="provider-priority-title">{t("providerPriorityTitle")}</h3>
+                    <span>{activeSourceId ? sourceLabel(activeSourceId, t) : t("providerCurrentNone")}</span>
+                  </div>
+
+                  <ol className="provider-priority-list" data-testid="provider-priority-list">
+                    {sourceOrder.map((sourceId, index) => {
+                      const source = sourcesById.get(sourceId);
+                      return (
+                        <li
+                          className="provider-priority-item"
+                          data-active={activeSourceId === sourceId}
+                          data-dragging={draggingSourceId === sourceId}
+                          data-provider-source-id={sourceId}
+                          data-testid={`provider-priority-${sourceId}`}
+                          key={sourceId}
+                          title={sourceStatusCopy(source, t)}
+                        >
+                          <button
+                            aria-label={t("providerDragSource", { source: sourceLabel(sourceId, t) })}
+                            className="provider-priority-item__drag"
+                            type="button"
+                            onPointerCancel={handlePriorityPointerEnd}
+                            onPointerDown={(event) => handlePriorityPointerDown(event, sourceId)}
+                            onPointerMove={(event) => handlePriorityPointerMove(event, sourceId)}
+                            onPointerUp={handlePriorityPointerEnd}
+                          >
+                            <GripVertical className="size-4" aria-hidden="true" />
+                          </button>
+                          <span className="provider-priority-item__rank">{index + 1}</span>
+                          <span className="provider-priority-item__icon">
+                            <SourceIcon sourceId={sourceId} />
+                          </span>
+                          <span className="provider-priority-item__copy">
+                            <strong>{sourceLabel(sourceId, t)}</strong>
+                          </span>
+                          <span className="provider-priority-item__badge" data-available={source?.available ?? false}>
+                            {source?.available ? t("providerAvailable") : t("providerUnavailable")}
+                          </span>
+                          <span className="provider-priority-item__buttons">
+                            <button
+                              aria-label={t("providerMoveUp", { source: sourceLabel(sourceId, t) })}
+                              className="provider-icon-button"
+                              disabled={index === 0}
+                              type="button"
+                              onClick={() => moveSource(sourceId, -1)}
+                            >
+                              <ArrowUp className="size-3.5" aria-hidden="true" />
+                            </button>
+                            <button
+                              aria-label={t("providerMoveDown", { source: sourceLabel(sourceId, t) })}
+                              className="provider-icon-button"
+                              disabled={index === sourceOrder.length - 1}
+                              type="button"
+                              onClick={() => moveSource(sourceId, 1)}
+                            >
+                              <ArrowDown className="size-3.5" aria-hidden="true" />
+                            </button>
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </section>
+
+                <div className="provider-source-mini-grid">
+                  <ProviderSourceMini source={envSource} sourceId="env-openai">
+                    <MiniRow label={t("providerFieldModel")} value={envSource?.details.model || "gpt-image-2"} />
+                    <MiniRow label={t("providerFieldBaseUrl")} value={envSource?.details.baseUrl || t("providerApiOfficial")} />
+                    <MiniRow label="Key" masked value={envSource?.secret.value ?? (envSource?.secret.hasSecret ? t("commonSaved") : t("commonNotSet"))} />
+                  </ProviderSourceMini>
+
+                  <ProviderSourceMini
+                    action={
+                      codex?.available ? (
+                        <button className="secondary-action h-10" disabled={isAuthLoading} data-testid="provider-codex-logout" type="button" onClick={() => void handleLogoutCodex()}>
+                          {isAuthLoading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <LogOut className="size-4" aria-hidden="true" />}
+                          {t("providerLogoutCodex")}
+                        </button>
+                      ) : (
+                        <button
+                          className="secondary-action h-10"
+                          disabled={isAuthLoading || isCodexStarting}
+                          data-testid="provider-codex-login"
+                          type="button"
+                          onClick={handleStartCodexLogin}
+                        >
+                          {isCodexStarting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <KeyRound className="size-4" aria-hidden="true" />}
+                          {t("providerLoginCodex")}
+                        </button>
+                      )
+                    }
+                    source={codexSource}
+                    sourceId="codex"
                   >
-                    <button
-                      aria-label={t("providerDragSource", { source: sourceLabel(sourceId, t) })}
-                      className="provider-priority-item__drag"
-                      type="button"
-                      onPointerCancel={handlePriorityPointerEnd}
-                      onPointerDown={(event) => handlePriorityPointerDown(event, sourceId)}
-                      onPointerMove={(event) => handlePriorityPointerMove(event, sourceId)}
-                      onPointerUp={handlePriorityPointerEnd}
-                    >
-                      <GripVertical className="size-4" aria-hidden="true" />
-                    </button>
-                    <span className="provider-priority-item__rank">{index + 1}</span>
-                    <span className="provider-priority-item__icon">
-                      <SourceIcon sourceId={sourceId} />
-                    </span>
-                      <span className="provider-priority-item__copy">
-                      <strong>{sourceLabel(sourceId, t)}</strong>
-                      <span>{sourceStatusCopy(source, t)}</span>
-                    </span>
-                    <span className="provider-priority-item__badge" data-available={source?.available ?? false}>
-                      {source?.available ? t("providerAvailable") : t("providerUnavailable")}
-                    </span>
-                    <span className="provider-priority-item__buttons">
-                      <button
-                        aria-label={t("providerMoveUp", { source: sourceLabel(sourceId, t) })}
-                        className="provider-icon-button"
-                        disabled={index === 0}
-                        type="button"
-                        onClick={() => moveSource(sourceId, -1)}
-                      >
-                        <ArrowUp className="size-3.5" aria-hidden="true" />
-                      </button>
-                      <button
-                        aria-label={t("providerMoveDown", { source: sourceLabel(sourceId, t) })}
-                        className="provider-icon-button"
-                        disabled={index === sourceOrder.length - 1}
-                        type="button"
-                        onClick={() => moveSource(sourceId, 1)}
-                      >
-                        <ArrowDown className="size-3.5" aria-hidden="true" />
-                      </button>
-                    </span>
-                  </li>
-                );
-              })}
-            </ol>
-            <p className="provider-priority-note">
-              {t("providerPriorityNote")}
-            </p>
-          </section>
-
-          <div className="provider-detail-grid">
-            <section className="provider-detail-card" data-testid="provider-env-section" aria-labelledby="provider-env-title">
-              <ProviderDetailHeader source={envSource} sourceId="env-openai" titleId="provider-env-title" />
-              <dl className="provider-readonly-grid">
-                <ReadonlyRow label="API Key" value={envSource?.secret.value ?? (envSource?.secret.hasSecret ? t("commonSaved") : t("commonNotSet"))} masked />
-                <ReadonlyRow label={t("providerFieldBaseUrl")} value={envSource?.details.baseUrl || t("providerApiOfficial")} />
-                <ReadonlyRow label={t("providerFieldModel")} value={envSource?.details.model || "gpt-image-2"} />
-                <ReadonlyRow label={t("providerFieldTimeout")} value={formatTimeout(envSource?.details.timeoutMs, t)} />
-              </dl>
-              <p className="provider-card-hint">{t("providerCardEnvHint")}</p>
-            </section>
-
-            <section className="provider-detail-card" data-testid="provider-local-section" aria-labelledby="provider-local-title">
-              <ProviderDetailHeader source={localSource} sourceId="local-openai" titleId="provider-local-title" />
+                    <MiniRow label={t("providerFieldAccount")} value={codex?.email ?? codex?.accountId ?? t("providerLoggedOut")} />
+                    <MiniRow label={t("providerFieldExpiresAt")} value={formatOptionalDateTime(codex?.expiresAt, formatLocaleDateTime, t)} />
+                  </ProviderSourceMini>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div
+              aria-labelledby="provider-config-tab-agent"
+              className="provider-config-tab-panel provider-config-tab-panel--agent"
+              data-testid="provider-agent-panel"
+              id="provider-config-panel-agent"
+              role="tabpanel"
+            >
+              <section className="provider-detail-card provider-detail-card--agent" data-testid="provider-agent-section" aria-labelledby="provider-agent-title">
+              <header className="provider-detail-card__header">
+                <span className="provider-detail-card__icon">
+                  <Bot className="size-4" aria-hidden="true" />
+                </span>
+                <div className="min-w-0">
+                  <h3 id="provider-agent-title">{t("agentLlmTitle")}</h3>
+                </div>
+                <span className="provider-source-status" data-available={agentConfig?.configured ?? false}>
+                  {agentConfig?.configured ? <ShieldCheck className="size-3.5" aria-hidden="true" /> : <AlertTriangle className="size-3.5" aria-hidden="true" />}
+                  {agentConfig?.configured ? t("providerAvailable") : t("providerUnavailable")}
+                </span>
+              </header>
               <div className="provider-form-grid">
                 <label className="provider-field provider-field--span">
                   <span>API Key</span>
                   <input
                     autoComplete="off"
                     className="provider-field__control"
-                    data-testid="provider-local-api-key"
-                    name="localOpenAIKey"
-                    placeholder={localApiKeyMask ? t("providerLocalApiKeySaved", { mask: localApiKeyMask }) : t("providerLocalApiKeyPlaceholder")}
+                    data-testid="provider-agent-api-key"
+                    name="agentLlmKey"
+                    placeholder={agentApiKeyMask ? t("agentConfigApiKeySaved", { mask: agentApiKeyMask }) : t("agentConfigApiKeyPlaceholder")}
                     type="password"
-                    value={localForm.apiKey}
-                    onChange={(event) => updateLocalForm({ apiKey: event.target.value })}
+                    value={agentForm.apiKey}
+                    onChange={(event) => updateAgentForm({ apiKey: event.target.value })}
                   />
                 </label>
-                {localApiKeyMask ? (
-                  <p className="provider-secret-pill" data-testid="provider-local-api-key-mask">
-                    <EyeOff className="size-3.5" aria-hidden="true" />
-                    {t("providerSavedSecret", { mask: localApiKeyMask })}
-                  </p>
-                ) : null}
                 <label className="provider-field provider-field--span">
                   <span>Base URL</span>
                   <input
                     className="provider-field__control"
-                    data-testid="provider-local-base-url"
-                    name="localOpenAIBaseUrl"
-                    placeholder={t("providerBaseUrlPlaceholder")}
-                    value={localForm.baseUrl}
-                    onChange={(event) => updateLocalForm({ baseUrl: event.target.value })}
+                    data-testid="provider-agent-base-url"
+                    name="agentLlmBaseUrl"
+                    placeholder={t("agentConfigBaseUrlPlaceholder")}
+                    value={agentForm.baseUrl}
+                    onChange={(event) => updateAgentForm({ baseUrl: event.target.value })}
+                  />
+                </label>
+                <label className="provider-field provider-field--span">
+                  <span>{t("providerFieldModel")}</span>
+                  <input
+                    className="provider-field__control"
+                    data-testid="provider-agent-model"
+                    name="agentLlmModel"
+                    placeholder={t("agentConfigModelPlaceholder")}
+                    value={agentForm.model}
+                    onChange={(event) => updateAgentForm({ model: event.target.value })}
                   />
                 </label>
                 <label className="provider-field">
                   <span>{t("providerTimeoutMs")}</span>
                   <input
                     className="provider-field__control"
-                    data-testid="provider-local-timeout"
+                    data-testid="provider-agent-timeout"
                     min={1}
-                    name="localOpenAITimeout"
+                    name="agentLlmTimeout"
                     type="number"
-                    value={localForm.timeoutMs}
-                    onChange={(event) => updateLocalForm({ timeoutMs: event.target.value })}
+                    value={agentForm.timeoutMs}
+                    onChange={(event) => updateAgentForm({ timeoutMs: event.target.value })}
                   />
                 </label>
-                <details className="provider-advanced-field provider-field--span">
-                  <summary>{t("providerAdvancedModel")}</summary>
-                  <label className="provider-field">
-                    <span>{t("providerFieldModel")}</span>
-                    <input
-                      className="provider-field__control"
-                      data-testid="provider-local-model"
-                      name="localOpenAIModel"
-                      value={localForm.model}
-                      onChange={(event) => updateLocalForm({ model: event.target.value })}
-                    />
-                  </label>
-                </details>
+                <label className="provider-toggle-field">
+                  <input
+                    checked={agentForm.supportsVision}
+                    data-testid="provider-agent-supports-vision"
+                    type="checkbox"
+                    onChange={(event) => updateAgentForm({ supportsVision: event.target.checked })}
+                  />
+                  <span>{t("agentConfigSupportsVision")}</span>
+              </label>
               </div>
-              <p className="provider-card-hint">{t("providerCardLocalHint")}</p>
-            </section>
-
-            <section className="provider-detail-card" data-testid="provider-codex-section" aria-labelledby="provider-codex-title">
-              <ProviderDetailHeader source={codexSource} sourceId="codex" titleId="provider-codex-title" />
-              <dl className="provider-readonly-grid">
-                <ReadonlyRow label={t("providerFieldAccount")} value={codex?.email ?? codex?.accountId ?? t("providerLoggedOut")} />
-                <ReadonlyRow label={t("providerFieldAvailability")} value={codex?.available ? t("providerStatusCodexCopy") : t("providerSourceMissingCodex")} />
-                <ReadonlyRow label={t("providerFieldExpiresAt")} value={formatOptionalDateTime(codex?.expiresAt, formatLocaleDateTime, t)} />
-                <ReadonlyRow label={t("providerFieldRefreshedAt")} value={formatOptionalDateTime(codex?.refreshedAt, formatLocaleDateTime, t)} />
-                <ReadonlyRow label={t("providerFieldReason")} value={codex?.unavailableReason || (codex?.available ? t("providerNoReason") : t("providerSourceMissingCodex"))} />
-              </dl>
-              <div className="provider-codex-actions">
-                {codex?.available ? (
-                  <button className="secondary-action h-10" disabled={isAuthLoading} data-testid="provider-codex-logout" type="button" onClick={() => void handleLogoutCodex()}>
-                    {isAuthLoading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <LogOut className="size-4" aria-hidden="true" />}
-                    {t("providerLogoutCodex")}
-                  </button>
-                ) : (
-                  <button
-                    className="secondary-action h-10"
-                    disabled={isAuthLoading || isCodexStarting}
-                    data-testid="provider-codex-login"
-                    type="button"
-                    onClick={handleStartCodexLogin}
-                  >
-                    {isCodexStarting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <KeyRound className="size-4" aria-hidden="true" />}
-                    {t("providerLoginCodex")}
-                  </button>
-                )}
-              </div>
-            </section>
-          </div>
+              </section>
+            </div>
+          )}
         </div>
 
         <footer className="provider-config-dialog__footer">
-          <button className="secondary-action h-10" disabled={isLoading || isSaving} type="button" onClick={() => void loadProviderConfig()}>
+          <button
+            className="secondary-action h-10"
+            disabled={isLoading || isAgentConfigLoading || isSaving}
+            type="button"
+            onClick={() => {
+              void loadProviderConfig();
+              void loadAgentConfig();
+            }}
+          >
             <RefreshCcw className="size-4" aria-hidden="true" />
             {t("providerRefresh")}
           </button>
-          <button className="primary-action h-10" data-testid="provider-config-save" disabled={isLoading || isSaving || !config} type="button" onClick={() => void saveProviderConfig()}>
+          <button className="primary-action h-10" data-testid="provider-config-save" disabled={isLoading || isAgentConfigLoading || isSaving || !config} type="button" onClick={() => void saveProviderConfig()}>
             {isSaving ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
             {t("providerSave")}
           </button>
@@ -563,7 +817,6 @@ function ProviderDetailHeader({
         <SourceIcon sourceId={sourceId} />
       </span>
       <div className="min-w-0">
-        <p>{t("sourceDescription", { sourceId })}</p>
         <h3 id={titleId}>{sourceLabel(sourceId, t)}</h3>
       </div>
       <span className="provider-source-status" data-available={source?.available ?? false}>
@@ -574,11 +827,41 @@ function ProviderDetailHeader({
   );
 }
 
-function ReadonlyRow({ label, masked = false, value }: { label: string; masked?: boolean; value: string }) {
+function ProviderSourceMini({
+  action,
+  children,
+  source,
+  sourceId
+}: {
+  action?: ReactNode;
+  children: ReactNode;
+  source: ProviderSourceView | undefined;
+  sourceId: ProviderSourceId;
+}) {
+  const { t } = useI18n();
+
   return (
-    <div className="provider-readonly-row">
+    <section className="provider-source-mini" data-available={source?.available ?? false} data-testid={`provider-${sourceId}-mini`}>
+      <header className="provider-source-mini__header">
+        <span className="provider-source-mini__icon">
+          <SourceIcon sourceId={sourceId} />
+        </span>
+        <h3>{sourceLabel(sourceId, t)}</h3>
+        <span className="provider-source-status" data-available={source?.available ?? false}>
+          {source?.available ? t("providerAvailable") : t("providerUnavailable")}
+        </span>
+      </header>
+      <dl className="provider-mini-grid">{children}</dl>
+      {action ? <div className="provider-source-mini__action">{action}</div> : null}
+    </section>
+  );
+}
+
+function MiniRow({ label, masked = false, value }: { label: string; masked?: boolean; value: string }) {
+  return (
+    <div className="provider-mini-row">
       <dt>{label}</dt>
-      <dd data-masked={masked}>{masked ? <EyeOff className="size-3.5" aria-hidden="true" /> : null}{value}</dd>
+      <dd data-masked={masked}>{value}</dd>
     </div>
   );
 }
@@ -633,6 +916,16 @@ function formatOptionalDateTime(value: string | undefined, formatDateTime: (valu
   }
 
   return formatDateTime(value);
+}
+
+function shouldSaveAgentConfig(form: AgentLlmFormState, hasSavedApiKey: boolean): boolean {
+  return Boolean(
+    hasSavedApiKey ||
+      form.apiKey.trim() ||
+      form.baseUrl.trim() ||
+      form.model.trim() ||
+      form.supportsVision
+  );
 }
 
 async function readProviderConfigError(response: Response, locale: Locale, t: Translate): Promise<string> {
