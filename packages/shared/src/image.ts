@@ -26,6 +26,7 @@ export const SIZE_PRESETS: SizePreset[] = [
   { id: "wide-2k", label: "Wide 2K", width: 2560, height: 1440, description: "Display page and wide composition" },
   { id: "portrait-2k", label: "Portrait 2K", width: 1440, height: 2560, description: "High-resolution portrait image" },
   { id: "square-2k", label: "Square 2K", width: 2048, height: 2048, description: "High-resolution square image" },
+  { id: "portrait-4k", label: "Portrait 4K", width: 2160, height: 3840, description: "Large portrait display image" },
   { id: "wide-4k", label: "Wide 4K", width: 3840, height: 2160, description: "Large display image" }
 ];
 

@@ -51,6 +51,7 @@ const sizePresetLabels: Record<Locale, Record<string, string>> = {
     "wide-2k": "宽屏展示 2K",
     "portrait-2k": "高清竖图 2K",
     "square-2k": "高清方图 2K",
+    "portrait-4k": "高清竖图 4K",
     "wide-4k": "宽屏展示 4K"
   },
   en: {
@@ -62,6 +63,7 @@ const sizePresetLabels: Record<Locale, Record<string, string>> = {
     "wide-2k": "Wide display 2K",
     "portrait-2k": "Portrait 2K",
     "square-2k": "Square 2K",
+    "portrait-4k": "Portrait 4K",
     "wide-4k": "Wide display 4K"
   }
 };
