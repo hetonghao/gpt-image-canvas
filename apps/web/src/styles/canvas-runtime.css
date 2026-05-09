@@ -1,25 +1,52 @@
-@keyframes generation-placeholder-spin {
-  to {
+@keyframes generation-placeholder-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes generation-placeholder-pulse-glow {
+  0%,
+  100% {
+    opacity: 0.8;
+    filter: drop-shadow(0 0 8px rgb(212 175 55 / 0.4));
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 16px rgb(212 175 55 / 0.8));
+  }
+}
+
+@keyframes generation-placeholder-draw {
+  0% {
+    stroke-dashoffset: 1000;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes generation-placeholder-spin-slow {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
     transform: rotate(360deg);
   }
 }
 
-@keyframes generation-placeholder-shimmer {
-  0% {
-    background-position: 180% 0, 0 0;
-  }
-  100% {
-    background-position: -80% 0, 0 0;
-  }
-}
-
-@keyframes generation-placeholder-breathe {
+@keyframes generation-placeholder-dot-bounce {
   0%,
   100% {
-    border-color: rgb(37 99 235 / 0.38);
+    transform: translateY(-25%);
+    animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
   }
   50% {
-    border-color: rgb(14 165 233 / 0.72);
+    transform: translateY(0);
+    animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
   }
 }
 

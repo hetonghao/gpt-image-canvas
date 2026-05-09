@@ -223,3 +223,7 @@ export interface GalleryImageItem {
 export interface GalleryResponse {
   items: GalleryImageItem[];
 }
+
+export interface GalleryExportRequest {
+  outputIds: string[];
+}

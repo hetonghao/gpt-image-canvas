@@ -96,8 +96,34 @@
     font-size: 1.35rem;
   }
 
+  .gallery-export-entry {
+    width: 100%;
+  }
+
   .gallery-search {
     height: 2.55rem;
+  }
+
+  .gallery-export-bar {
+    position: static;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .gallery-export-bar__summary {
+    align-items: flex-start;
+  }
+
+  .gallery-export-bar__actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  .gallery-export-bar__button,
+  .gallery-export-bar__primary {
+    width: 100%;
+    min-width: 0;
   }
 
   .gallery-feature__footer {

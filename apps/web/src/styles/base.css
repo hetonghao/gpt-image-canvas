@@ -154,6 +154,7 @@ button {
 
 .history-icon-action,
 .gallery-icon-action,
+.gallery-select-toggle,
 .provider-icon-button,
 .agent-icon-button {
   position: relative;
@@ -166,6 +167,7 @@ button {
 
 .history-icon-action::after,
 .gallery-icon-action::after,
+.gallery-select-toggle::after,
 .provider-icon-button::after,
 .agent-icon-button::after {
   content: "";
@@ -191,6 +193,9 @@ button {
 .history-toggle:not(:disabled):active,
 .history-icon-action:not(:disabled):active,
 .gallery-icon-action:not(:disabled):active,
+.gallery-export-entry:not(:disabled):active,
+.gallery-export-bar__primary:not(:disabled):active,
+.gallery-select-toggle:not(:disabled):active,
 .gallery-card__image-button:not(:disabled):active,
 .gallery-feature__image-button:not(:disabled):active,
 .gallery-prompt-toggle:not(:disabled):active,
@@ -342,6 +347,9 @@ a:focus-visible {
   .history-toggle:not(:disabled):active,
   .history-icon-action:not(:disabled):active,
   .gallery-icon-action:not(:disabled):active,
+  .gallery-export-entry:not(:disabled):active,
+  .gallery-export-bar__primary:not(:disabled):active,
+  .gallery-select-toggle:not(:disabled):active,
   .gallery-card__image-button:not(:disabled):active,
   .gallery-feature__image-button:not(:disabled):active,
   .gallery-prompt-toggle:not(:disabled):active,

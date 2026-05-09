@@ -1,10 +1,12 @@
 import {
   AlertTriangle,
+  Archive,
   CheckCircle2,
   ChevronDown,
   Clock3,
   Copy,
   Download,
+  Check,
   ImageIcon,
   Loader2,
   Maximize2,
@@ -21,6 +23,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   SIZE_PRESETS,
   STYLE_PRESETS,
+  type GalleryExportRequest,
   type GalleryImageItem,
   type GalleryResponse
 } from "@gpt-image-canvas/shared";
@@ -39,6 +42,12 @@ interface GalleryActionHandlers {
   onReuse: (item: GalleryImageItem) => void;
 }
 
+interface GallerySelectionHandlers {
+  exportMode: boolean;
+  onToggleSelected: (item: GalleryImageItem) => void;
+  selectedOutputIds: Set<string>;
+}
+
 export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
   const { locale, t } = useI18n();
   const [items, setItems] = useState<GalleryImageItem[]>([]);
@@ -51,6 +60,9 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
   const [pendingDeleteItem, setPendingDeleteItem] = useState<GalleryImageItem | null>(null);
   const [deletingOutputId, setDeletingOutputId] = useState<string | null>(null);
   const [copiedOutputId, setCopiedOutputId] = useState<string | null>(null);
+  const [exportMode, setExportMode] = useState(false);
+  const [selectedExportOutputIds, setSelectedExportOutputIds] = useState<string[]>([]);
+  const [isExporting, setIsExporting] = useState(false);
   const statusTimerRef = useRef<number | undefined>();
   const copiedTimerRef = useRef<number | undefined>();
 
@@ -135,6 +147,13 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
 
     return items.filter((item) => normalizeSearchText(item.prompt).includes(normalizedQuery));
   }, [items, query]);
+  const itemOutputIdSet = useMemo(() => new Set(items.map((item) => item.outputId)), [items]);
+  const selectedExportOutputIdSet = useMemo(() => new Set(selectedExportOutputIds), [selectedExportOutputIds]);
+  const filteredExportOutputIds = useMemo(() => filteredItems.map((item) => item.outputId), [filteredItems]);
+  const selectedFilteredExportCount = useMemo(
+    () => filteredExportOutputIds.filter((outputId) => selectedExportOutputIdSet.has(outputId)).length,
+    [filteredExportOutputIds, selectedExportOutputIdSet]
+  );
   const featuredItem = filteredItems[0] ?? null;
   const gridItems = featuredItem ? filteredItems.slice(1) : filteredItems;
   const actionHandlers: GalleryActionHandlers = {
@@ -143,6 +162,18 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
     onDownload: downloadItem,
     onReuse
   };
+  const selectionHandlers: GallerySelectionHandlers = {
+    exportMode,
+    onToggleSelected: toggleExportSelection,
+    selectedOutputIds: selectedExportOutputIdSet
+  };
+
+  useEffect(() => {
+    setSelectedExportOutputIds((current) => {
+      const next = current.filter((outputId) => itemOutputIdSet.has(outputId));
+      return next.length === current.length ? current : next;
+    });
+  }, [itemOutputIdSet]);
 
   function showStatus(message: string): void {
     window.clearTimeout(statusTimerRef.current);
@@ -158,6 +189,93 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
       ...current,
       [outputId]: !current[outputId]
     }));
+  }
+
+  function openExportMode(): void {
+    setError("");
+    setExportMode(true);
+  }
+
+  function closeExportMode(): void {
+    setExportMode(false);
+    setSelectedExportOutputIds([]);
+    setError("");
+  }
+
+  function toggleExportSelection(item: GalleryImageItem): void {
+    setError("");
+    setExportMode(true);
+    setSelectedExportOutputIds((current) => {
+      if (current.includes(item.outputId)) {
+        return current.filter((outputId) => outputId !== item.outputId);
+      }
+
+      return [...current, item.outputId];
+    });
+  }
+
+  function selectFilteredExportItems(): void {
+    setError("");
+    setExportMode(true);
+    setSelectedExportOutputIds((current) => {
+      const next = new Set(current);
+      filteredExportOutputIds.forEach((outputId) => {
+        next.add(outputId);
+      });
+      return Array.from(next);
+    });
+  }
+
+  function clearExportSelection(): void {
+    setError("");
+    setSelectedExportOutputIds([]);
+  }
+
+  async function exportSelectedItems(): Promise<void> {
+    if (selectedExportOutputIds.length === 0) {
+      setError(t("galleryExportSelectAtLeastOne"));
+      return;
+    }
+
+    const request: GalleryExportRequest = {
+      outputIds: selectedExportOutputIds
+    };
+
+    setIsExporting(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/gallery/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(request)
+      });
+
+      if (!response.ok) {
+        throw new Error(await readGalleryError(response, locale, t));
+      }
+
+      const archive = await response.blob();
+      if (archive.size === 0) {
+        throw new Error(t("galleryExportFailed"));
+      }
+
+      const archiveUrl = window.URL.createObjectURL(archive);
+      const link = document.createElement("a");
+      link.href = archiveUrl;
+      link.download = contentDispositionFileName(response.headers.get("Content-Disposition")) ?? "gpt-image-canvas-gallery.zip";
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(archiveUrl), 1000);
+      showStatus(t("galleryExportStarted", { count: selectedExportOutputIds.length }));
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : t("galleryExportFailed"));
+    } finally {
+      setIsExporting(false);
+    }
   }
 
   async function copyPrompt(item: GalleryImageItem): Promise<void> {
@@ -226,6 +344,16 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
             <span>{t("galleryWorkCount")}</span>
             <span>{t("galleryWorkSort")}</span>
           </div>
+          <button
+            aria-pressed={exportMode}
+            className="gallery-export-entry"
+            data-active={exportMode}
+            type="button"
+            onClick={exportMode ? closeExportMode : openExportMode}
+          >
+            <Archive className="size-4" aria-hidden="true" />
+            {exportMode ? t("galleryExportExit") : t("galleryExportMode")}
+          </button>
           <div className="gallery-search" role="search">
             <Search className="size-4" aria-hidden="true" />
             <input
@@ -254,6 +382,18 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
           </div>
         ) : null}
 
+        {exportMode ? (
+          <GalleryExportBar
+            filteredCount={filteredItems.length}
+            filteredSelectedCount={selectedFilteredExportCount}
+            isExporting={isExporting}
+            selectedCount={selectedExportOutputIds.length}
+            onClear={clearExportSelection}
+            onExport={() => void exportSelectedItems()}
+            onSelectFiltered={selectFilteredExportItems}
+          />
+        ) : null}
+
         {isLoading ? (
           <div className="gallery-empty-state" data-testid="gallery-loading" role="status">
             <Loader2 className="size-5 animate-spin" aria-hidden="true" />
@@ -277,6 +417,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
                 item={featuredItem}
                 onOpen={setSelectedItem}
                 onTogglePrompt={togglePrompt}
+                selection={selectionHandlers}
                 {...actionHandlers}
               />
             ) : null}
@@ -292,6 +433,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
                     key={item.outputId}
                     onOpen={setSelectedItem}
                     onTogglePrompt={togglePrompt}
+                    selection={selectionHandlers}
                     {...actionHandlers}
                   />
                 ))}
@@ -326,6 +468,66 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
   );
 }
 
+function GalleryExportBar({
+  filteredCount,
+  filteredSelectedCount,
+  isExporting,
+  selectedCount,
+  onClear,
+  onExport,
+  onSelectFiltered
+}: {
+  filteredCount: number;
+  filteredSelectedCount: number;
+  isExporting: boolean;
+  selectedCount: number;
+  onClear: () => void;
+  onExport: () => void;
+  onSelectFiltered: () => void;
+}) {
+  const { t } = useI18n();
+  const allFilteredSelected = filteredCount > 0 && filteredSelectedCount === filteredCount;
+
+  return (
+    <div className="gallery-export-bar" role="region" aria-label={t("galleryExportBarLabel")}>
+      <div className="gallery-export-bar__summary" aria-live="polite">
+        <span className="gallery-export-bar__mark" aria-hidden="true">
+          <Archive className="size-4" />
+        </span>
+        <strong>{t("galleryExportSelectedCount", { count: selectedCount })}</strong>
+        <span>{t("galleryExportVisibleCount", { selected: filteredSelectedCount, total: filteredCount })}</span>
+      </div>
+      <div className="gallery-export-bar__actions">
+        <button
+          className="secondary-action gallery-export-bar__button h-10"
+          disabled={filteredCount === 0 || allFilteredSelected || isExporting}
+          type="button"
+          onClick={onSelectFiltered}
+        >
+          {t("galleryExportSelectVisible", { count: filteredCount })}
+        </button>
+        <button
+          className="secondary-action gallery-export-bar__button h-10"
+          disabled={selectedCount === 0 || isExporting}
+          type="button"
+          onClick={onClear}
+        >
+          {t("galleryExportClear")}
+        </button>
+        <button
+          className="gallery-export-bar__primary h-10"
+          disabled={selectedCount === 0 || isExporting}
+          type="button"
+          onClick={onExport}
+        >
+          {isExporting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Archive className="size-4" aria-hidden="true" />}
+          {t("galleryExportZip", { count: selectedCount })}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function FeaturedGalleryItem({
   copied,
   deleting,
@@ -336,7 +538,8 @@ function FeaturedGalleryItem({
   onDownload,
   onOpen,
   onReuse,
-  onTogglePrompt
+  onTogglePrompt,
+  selection
 }: {
   copied: boolean;
   deleting: boolean;
@@ -344,29 +547,34 @@ function FeaturedGalleryItem({
   item: GalleryImageItem;
   onOpen: (item: GalleryImageItem) => void;
   onTogglePrompt: (outputId: string) => void;
+  selection: GallerySelectionHandlers;
 } & GalleryActionHandlers) {
   const { formatDateTime, t } = useI18n();
+  const selected = selection.selectedOutputIds.has(item.outputId);
 
   return (
-    <article className="gallery-feature" data-testid="gallery-feature">
-      <button
-        aria-label={t("galleryActionOpenLatest", { excerpt: promptExcerpt(item.prompt) })}
-        className="gallery-feature__image-button"
-        type="button"
-        onClick={() => onOpen(item)}
-      >
-        <img
-          alt={item.prompt}
-          className="gallery-feature__image"
-          height={item.asset.height}
-          src={assetPreviewUrl(item.asset.id, 1024)}
-          width={item.asset.width}
-        />
-        <span className="gallery-feature__badge">{t("galleryBadgeLatest")}</span>
-        <span className="gallery-card__zoom">
-          <Maximize2 className="size-4" aria-hidden="true" />
-        </span>
-      </button>
+    <article className="gallery-feature" data-export-mode={selection.exportMode} data-selected={selected} data-testid="gallery-feature">
+      <div className="gallery-feature__media">
+        {selection.exportMode ? <GallerySelectToggle item={item} selected={selected} onToggle={selection.onToggleSelected} /> : null}
+        <button
+          aria-label={t("galleryActionOpenLatest", { excerpt: promptExcerpt(item.prompt) })}
+          className="gallery-feature__image-button"
+          type="button"
+          onClick={() => onOpen(item)}
+        >
+          <img
+            alt={item.prompt}
+            className="gallery-feature__image"
+            height={item.asset.height}
+            src={assetPreviewUrl(item.asset.id, 1024)}
+            width={item.asset.width}
+          />
+          <span className="gallery-feature__badge">{t("galleryBadgeLatest")}</span>
+          <span className="gallery-card__zoom">
+            <Maximize2 className="size-4" aria-hidden="true" />
+          </span>
+        </button>
+      </div>
 
       <div className="gallery-feature__body">
         <GalleryTags item={item} />
@@ -413,7 +621,8 @@ function GalleryCard({
   onDownload,
   onOpen,
   onReuse,
-  onTogglePrompt
+  onTogglePrompt,
+  selection
 }: {
   copied: boolean;
   deleting: boolean;
@@ -421,29 +630,34 @@ function GalleryCard({
   item: GalleryImageItem;
   onOpen: (item: GalleryImageItem) => void;
   onTogglePrompt: (outputId: string) => void;
+  selection: GallerySelectionHandlers;
 } & GalleryActionHandlers) {
   const { formatDateTime, t } = useI18n();
+  const selected = selection.selectedOutputIds.has(item.outputId);
 
   return (
-    <article className="gallery-card" data-testid="gallery-card">
-      <button
-        aria-label={t("galleryActionOpenImage", { excerpt: promptExcerpt(item.prompt) })}
-        className="gallery-card__image-button"
-        type="button"
-        onClick={() => onOpen(item)}
-      >
-        <img
-          alt={item.prompt}
-          className="gallery-card__image"
-          height={item.asset.height}
-          loading="lazy"
-          src={assetPreviewUrl(item.asset.id, 512)}
-          width={item.asset.width}
-        />
-        <span className="gallery-card__zoom">
-          <Maximize2 className="size-4" aria-hidden="true" />
-        </span>
-      </button>
+    <article className="gallery-card" data-export-mode={selection.exportMode} data-selected={selected} data-testid="gallery-card">
+      <div className="gallery-card__media">
+        {selection.exportMode ? <GallerySelectToggle item={item} selected={selected} onToggle={selection.onToggleSelected} /> : null}
+        <button
+          aria-label={t("galleryActionOpenImage", { excerpt: promptExcerpt(item.prompt) })}
+          className="gallery-card__image-button"
+          type="button"
+          onClick={() => onOpen(item)}
+        >
+          <img
+            alt={item.prompt}
+            className="gallery-card__image"
+            height={item.asset.height}
+            loading="lazy"
+            src={assetPreviewUrl(item.asset.id, 512)}
+            width={item.asset.width}
+          />
+          <span className="gallery-card__zoom">
+            <Maximize2 className="size-4" aria-hidden="true" />
+          </span>
+        </button>
+      </div>
 
       <div className="gallery-card__body">
         <GalleryTags item={item} compact />
@@ -471,6 +685,36 @@ function GalleryCard({
         </div>
       </div>
     </article>
+  );
+}
+
+function GallerySelectToggle({
+  item,
+  selected,
+  onToggle
+}: {
+  item: GalleryImageItem;
+  selected: boolean;
+  onToggle: (item: GalleryImageItem) => void;
+}) {
+  const { t } = useI18n();
+  const excerpt = promptExcerpt(item.prompt);
+  const label = selected ? t("galleryActionDeselectExport", { excerpt }) : t("galleryActionSelectExport", { excerpt });
+
+  return (
+    <button
+      aria-label={label}
+      aria-pressed={selected}
+      className="gallery-select-toggle"
+      data-selected={selected}
+      title={label}
+      type="button"
+      onClick={() => onToggle(item)}
+    >
+      <span className="gallery-select-toggle__box" aria-hidden="true">
+        {selected ? <Check className="size-3.5" /> : null}
+      </span>
+    </button>
   );
 }
 
@@ -781,6 +1025,29 @@ async function readGalleryError(response: Response, locale: Locale, t: Translate
   } catch {
     return t("galleryRequestFailed", { status: response.status });
   }
+}
+
+function contentDispositionFileName(value: string | null): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const encoded = /filename\*=UTF-8''([^;]+)/iu.exec(value);
+  if (encoded?.[1]) {
+    try {
+      return decodeURIComponent(encoded[1]);
+    } catch {
+      return undefined;
+    }
+  }
+
+  const quoted = /filename="([^"]+)"/iu.exec(value);
+  if (quoted?.[1]) {
+    return quoted[1];
+  }
+
+  const unquoted = /filename=([^;]+)/iu.exec(value);
+  return unquoted?.[1]?.trim();
 }
 
 async function writeClipboardText(text: string): Promise<void> {

@@ -1,4 +1,4 @@
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type {
   GeneratedAsset,
   GalleryImageItem,
@@ -21,6 +21,13 @@ const fallbackWarnings = new Set<string>();
 interface ProjectSnapshotInput {
   name?: string;
   snapshotJson: string;
+}
+
+export interface GalleryExportAsset {
+  outputId: string;
+  assetId: string;
+  fileName: string;
+  mimeType: string;
 }
 
 function nowIso(): string {
@@ -132,6 +139,30 @@ export function getGalleryImages(): GalleryResponse {
 export function deleteGalleryOutput(outputId: string): boolean {
   const result = db.delete(generationOutputs).where(eq(generationOutputs.id, outputId)).run();
   return result.changes > 0;
+}
+
+export function getGalleryExportAssets(outputIds: string[]): GalleryExportAsset[] {
+  if (outputIds.length === 0) {
+    return [];
+  }
+
+  const rows = db
+    .select({
+      outputId: generationOutputs.id,
+      assetId: assets.id,
+      fileName: assets.fileName,
+      mimeType: assets.mimeType
+    })
+    .from(generationOutputs)
+    .innerJoin(assets, eq(generationOutputs.assetId, assets.id))
+    .where(and(inArray(generationOutputs.id, outputIds), eq(generationOutputs.status, "succeeded")))
+    .all();
+
+  const rowByOutputId = new Map(rows.map((row) => [row.outputId, row]));
+  return outputIds.flatMap((outputId) => {
+    const row = rowByOutputId.get(outputId);
+    return row ? [row] : [];
+  });
 }
 
 function getDefaultProjectRow(): (typeof projects.$inferSelect) | undefined {

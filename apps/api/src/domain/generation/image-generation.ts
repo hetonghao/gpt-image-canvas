@@ -43,7 +43,7 @@ const INTERRUPTED_GENERATION_ERROR = "Generation was interrupted by an API resta
 const CANCELLED_GENERATION_ERROR = "This generation was cancelled.";
 const localAssetStorage = new LocalAssetStorageAdapter();
 
-interface StoredAssetFile {
+export interface StoredAssetFile {
   id: string;
   fileName: string;
   filePath: string;
