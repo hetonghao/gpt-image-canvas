@@ -205,6 +205,8 @@ const zhMessages = {
   agentConfigModelRequired: "请填写 Agent 大模型模型名称，或清空 Agent 字段后只保存图像服务配置。",
   agentConfigSupportsVision: "支持视觉输入",
   agentConfigTimeoutInvalid: "Agent 大模型超时必须是正整数毫秒。",
+  agentContextResolvedPreviousOutputs: ({ count, indexes }: { count: number; indexes: string }) =>
+    indexes ? `已使用上一轮 Agent 输出（${indexes}）中的 ${count} 张作为编辑源。` : `已使用上一轮 Agent 输出中的 ${count} 张作为编辑源。`,
   agentDefaultsTitle: "默认输出",
   agentEmptyCopy: "输入需求后，Agent 会基于当前默认参数和选中的画布参考图创建生成计划。",
   agentEmptyTitle: "还没有 Agent 对话",
@@ -707,6 +709,10 @@ const enMessages: I18nMessages = {
   agentConfigModelRequired: "Enter an Agent LLM model name, or clear Agent fields to save only image service settings.",
   agentConfigSupportsVision: "Supports vision input",
   agentConfigTimeoutInvalid: "Agent LLM timeout must be a positive integer in milliseconds.",
+  agentContextResolvedPreviousOutputs: ({ count, indexes }) =>
+    indexes
+      ? `Using ${count} previous Agent output image(s) (${indexes}) as edit sources.`
+      : `Using ${count} previous Agent output image(s) as edit sources.`,
   agentDefaultsTitle: "Output defaults",
   agentEmptyCopy: "Send a request and the Agent will use the current defaults plus selected canvas references to create a generation plan.",
   agentEmptyTitle: "No Agent conversation yet",

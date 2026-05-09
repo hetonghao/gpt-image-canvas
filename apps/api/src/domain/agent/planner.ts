@@ -111,6 +111,7 @@ export interface AgentPlannerInput {
   userText: string;
   defaults?: unknown;
   selectedReferences?: unknown;
+  conversationContext?: AgentPlannerConversationContext;
   plannerOptions?: unknown;
   llmConfig: UsableAgentLlmConfig;
   onAssistantDelta?: (delta: string) => void;
@@ -118,6 +119,26 @@ export interface AgentPlannerInput {
   signal?: AbortSignal;
   now?: Date;
   runner?: GenerationPlanAgentRunner;
+}
+
+export interface AgentPlannerConversationOutput {
+  index: number;
+  assetId: string;
+  label?: string;
+  width?: number;
+  height?: number;
+  mimeType?: string;
+  planId?: string;
+  jobId?: string;
+  outputId?: string;
+}
+
+export interface AgentPlannerConversationContext {
+  previousUserText?: string;
+  previousPlan?: GenerationPlan;
+  previousOutputs?: AgentPlannerConversationOutput[];
+  resolvedReferences?: AgentPlannerConversationOutput[];
+  referenceResolution?: "manual_selection" | "previous_agent_outputs";
 }
 
 export type AgentPlannerResult =
@@ -198,7 +219,8 @@ export async function createGenerationPlan(input: AgentPlannerInput): Promise<Ag
     userText,
     defaults: defaultsResult.defaults,
     selectedReferences,
-    supportsVision: input.llmConfig.supportsVision
+    supportsVision: input.llmConfig.supportsVision,
+    conversationContext: input.conversationContext
   });
 
   const planningSkillFiles = createPlanningSkillFiles(now);
@@ -689,14 +711,17 @@ export function buildPlannerUserMessage(input: {
   defaults: GenerationPlanDefaults;
   selectedReferences: AgentSelectedCanvasReference[];
   supportsVision: boolean;
+  conversationContext?: AgentPlannerConversationContext;
 }): PlannerMessage {
   const referenceSummaries = input.selectedReferences.map((reference, index) =>
     formatReferenceSummary(reference, index, input.supportsVision)
   );
+  const contextSummary = formatConversationContextSummary(input.conversationContext);
   const text = [
     `User request:\n${input.userText.trim()}`,
     `Current Agent defaults:\n${JSON.stringify(input.defaults)}`,
     `supportsVision: ${input.supportsVision ? "true" : "false"}`,
+    contextSummary,
     'Allowed quality values: "auto", "low", "medium", "high". Allowed outputFormat values: "png", "jpeg", "webp". Omit job quality/outputFormat when using defaults.',
     referenceSummaries.length > 0
       ? `Selected canvas references, capped at ${MAX_AGENT_SELECTED_REFERENCES}:\n${referenceSummaries.join("\n")}`
@@ -1756,6 +1781,66 @@ function hasDependencyCycle(jobs: GenerationJob[], edges: GenerationDependencyEd
   };
 
   return jobs.some((job) => visit(job.id));
+}
+
+function formatConversationContextSummary(context: AgentPlannerConversationContext | undefined): string {
+  if (!context) {
+    return "";
+  }
+
+  const lines: string[] = ["Current Agent conversation context:"];
+  if (context.previousUserText?.trim()) {
+    lines.push(`- Previous user request: ${truncate(context.previousUserText.trim(), 500)}`);
+  }
+
+  if (context.previousPlan) {
+    lines.push(`- Previous plan: ${formatPlanSummary(context.previousPlan)}`);
+  }
+
+  if (context.previousOutputs?.length) {
+    lines.push("- Previous successful Agent outputs:");
+    for (const output of context.previousOutputs.slice(0, MAX_AGENT_SELECTED_REFERENCES)) {
+      lines.push(`  ${formatConversationOutputSummary(output)}`);
+    }
+  }
+
+  if (context.resolvedReferences?.length) {
+    const source =
+      context.referenceResolution === "previous_agent_outputs"
+        ? "previous Agent outputs"
+        : "current manual canvas selection";
+    lines.push(`- Resolved follow-up image references from ${source}:`);
+    for (const output of context.resolvedReferences.slice(0, MAX_AGENT_SELECTED_REFERENCES)) {
+      lines.push(`  ${formatConversationOutputSummary(output)}`);
+    }
+    lines.push(
+      "- The current user request is a follow-up. Use the resolved references as the image sources for any edit jobs unless the user explicitly asks for new unrelated images."
+    );
+  }
+
+  return lines.length > 1 ? lines.join("\n") : "";
+}
+
+function formatPlanSummary(plan: GenerationPlan): string {
+  const jobs = plan.jobs
+    .slice(0, 8)
+    .map((job) => `${job.id}:${job.role}:count=${job.count}:status=${job.status}`)
+    .join(", ");
+  const extra = plan.jobs.length > 8 ? `, +${plan.jobs.length - 8} more` : "";
+  return `"${truncate(plan.title, 160)}" id=${plan.id} status=${plan.status} jobs=[${jobs}${extra}]`;
+}
+
+function formatConversationOutputSummary(output: AgentPlannerConversationOutput): string {
+  const label = output.label ? ` label="${truncate(output.label, 120)}"` : "";
+  const size = output.width && output.height ? ` size=${output.width}x${output.height}` : "";
+  const mimeType = output.mimeType ? ` mimeType="${truncate(output.mimeType, 80)}"` : "";
+  const origin = [
+    output.planId ? `planId=${output.planId}` : "",
+    output.jobId ? `jobId=${output.jobId}` : "",
+    output.outputId ? `outputId=${output.outputId}` : ""
+  ].filter(Boolean).join(" ");
+
+  return `- output${output.index}: assetId="${output.assetId}"${label}${size}${mimeType}${origin ? ` ${origin}` : ""}`;
 }
 
 function formatReferenceSummary(

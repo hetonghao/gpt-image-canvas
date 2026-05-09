@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { WSEvents, WSContext, WSMessageReceive } from "hono/ws";
-import type {
-  AgentClientMessage,
-  AgentClientMessageType,
-  AgentErrorEvent,
-  AgentServerEvent,
-  GenerationPlan
+import {
+  MAX_AGENT_SELECTED_REFERENCES,
+  type AgentClientMessage,
+  type AgentClientMessageType,
+  type AgentContextResolvedReference,
+  type AgentErrorEvent,
+  type AgentSelectedCanvasReference,
+  type AgentServerEvent,
+  type GeneratedAsset,
+  type GenerationPlan
 } from "../contracts.js";
 import { getUsableAgentLlmConfig } from "./config.js";
 import {
@@ -13,7 +17,7 @@ import {
   isExecutableGenerationPlan,
   type StoredAgentGenerationPlan
 } from "./executor.js";
-import { createGenerationPlan } from "./planner.js";
+import { createGenerationPlan, type AgentPlannerConversationContext } from "./planner.js";
 
 const OPEN_READY_STATE = 1;
 const AGENT_SOCKET_SERVER_HEARTBEAT_INTERVAL_MS = 10_000;
@@ -46,9 +50,29 @@ interface AgentSocketSession {
   ws?: WSContext;
   activeRun?: ActiveAgentRun;
   plans: Map<string, StoredAgentGenerationPlan>;
+  conversationContext: AgentConversationContext;
   pendingEvents: AgentServerEvent[];
   keepAliveTimer?: ReturnType<typeof setInterval>;
   disconnectTimer?: ReturnType<typeof setTimeout>;
+}
+
+interface AgentConversationContext {
+  previousUserText?: string;
+  previousPlan?: GenerationPlan;
+  previousOutputs: AgentConversationOutputReference[];
+  pendingOutputsByRun: Map<string, AgentConversationOutputReference[]>;
+}
+
+export interface AgentConversationOutputReference {
+  index: number;
+  assetId: string;
+  label?: string;
+  width?: number;
+  height?: number;
+  mimeType?: string;
+  planId?: string;
+  jobId?: string;
+  outputId?: string;
 }
 
 interface ParsedMessage {
@@ -115,6 +139,10 @@ function createAgentSocketSession(): AgentSocketSession {
   return {
     connectionId: randomUUID(),
     plans: new Map(),
+    conversationContext: {
+      previousOutputs: [],
+      pendingOutputsByRun: new Map()
+    },
     pendingEvents: []
   };
 }
@@ -224,6 +252,7 @@ function stopSessionKeepAlive(session: AgentSocketSession): void {
 function disposeAgentSession(session: AgentSocketSession): void {
   clearSessionDisconnectTimer(session);
   stopSessionKeepAlive(session);
+  session.conversationContext.pendingOutputsByRun.clear();
   session.pendingEvents = [];
   session.ws = undefined;
   sessions.delete(session.connectionId);
@@ -390,11 +419,53 @@ async function handleAgentPlanMessage(
   llmConfig: NonNullable<ReturnType<typeof getUsableAgentLlmConfig>>
 ): Promise<void> {
   let result: Awaited<ReturnType<typeof createGenerationPlan>>;
+  const clientSelectedReferences = Array.isArray(message.selectedReferences)
+    ? (message.selectedReferences as AgentSelectedCanvasReference[])
+    : [];
+  let effectiveSelectedReferences: AgentSelectedCanvasReference[] = clientSelectedReferences;
+  let selectedReferencesForPlanner: unknown = message.selectedReferences ?? [];
+  let resolvedConversationReferences: AgentConversationOutputReference[] | undefined;
+
+  const canUseImplicitContextReferences = message.selectedReferences === undefined || Array.isArray(message.selectedReferences);
+  if (canUseImplicitContextReferences && clientSelectedReferences.length === 0) {
+    const contextResolution = resolveImplicitAgentContextReferences({
+      userText: message.text,
+      previousOutputs: session.conversationContext.previousOutputs
+    });
+    if (!contextResolution.ok) {
+      finishAgentPlanRunWithError(session, message, activeRun, contextResolution.code, contextResolution.message);
+      return;
+    }
+
+    if (contextResolution.selectedReferences.length > 0) {
+      effectiveSelectedReferences = contextResolution.selectedReferences;
+      selectedReferencesForPlanner = effectiveSelectedReferences;
+      resolvedConversationReferences = contextResolution.resolvedOutputs;
+      sendSessionEvent(session, {
+        type: "context_resolved",
+        requestId: message.requestId,
+        runId: activeRun.id,
+        source: "previous_agent_outputs",
+        referenceCount: contextResolution.resolvedOutputs.length,
+        referenceIndexes: contextResolution.resolvedOutputs.map((output) => output.index),
+        references: contextResolution.resolvedOutputs.map(contextResolvedReferenceFromOutput),
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+
+  const conversationContext = createPlannerConversationContext(
+    session.conversationContext,
+    resolvedConversationReferences,
+    resolvedConversationReferences ? "previous_agent_outputs" : clientSelectedReferences.length > 0 ? "manual_selection" : undefined
+  );
+
   try {
     result = await createGenerationPlan({
       userText: message.text,
       defaults: message.defaults,
-      selectedReferences: message.selectedReferences,
+      selectedReferences: selectedReferencesForPlanner,
+      conversationContext,
       plannerOptions: message.plannerOptions,
       llmConfig,
       onAssistantDelta: (delta) => {
@@ -460,8 +531,10 @@ async function handleAgentPlanMessage(
 
   session.plans.set(result.plan.id, {
     plan: result.plan,
-    selectedReferences: message.selectedReferences ?? []
+    selectedReferences: effectiveSelectedReferences
   });
+  session.conversationContext.previousUserText = message.text;
+  session.conversationContext.previousPlan = result.plan;
 
   sendSessionEvent(session, {
     type: "plan_created",
@@ -479,6 +552,61 @@ async function handleAgentPlanMessage(
   });
 }
 
+function finishAgentPlanRunWithError(
+  session: AgentSocketSession,
+  message: Extract<AgentClientMessage, { type: "user_message" }>,
+  activeRun: ActiveAgentRun,
+  code: string,
+  errorMessage: string
+): void {
+  if (session.activeRun?.id !== activeRun.id || activeRun.cancelled) {
+    return;
+  }
+
+  session.activeRun = undefined;
+  scheduleDisconnectedSessionCleanup(session);
+  sendSessionError(session, {
+    code,
+    message: errorMessage,
+    requestId: message.requestId,
+    runId: activeRun.id,
+    recoverable: true
+  });
+  sendSessionEvent(session, {
+    type: "run_done",
+    requestId: message.requestId,
+    runId: activeRun.id,
+    status: "failed",
+    timestamp: new Date().toISOString()
+  });
+}
+
+function createPlannerConversationContext(
+  context: AgentConversationContext,
+  resolvedReferences: AgentConversationOutputReference[] | undefined,
+  referenceResolution: AgentPlannerConversationContext["referenceResolution"] | undefined
+): AgentPlannerConversationContext | undefined {
+  if (!context.previousUserText && !context.previousPlan && context.previousOutputs.length === 0 && !resolvedReferences?.length) {
+    return undefined;
+  }
+
+  return {
+    previousUserText: context.previousUserText,
+    previousPlan: context.previousPlan,
+    previousOutputs: context.previousOutputs,
+    resolvedReferences,
+    referenceResolution
+  };
+}
+
+function contextResolvedReferenceFromOutput(output: AgentConversationOutputReference): AgentContextResolvedReference {
+  return {
+    index: output.index,
+    assetId: output.assetId,
+    label: output.label
+  };
+}
+
 async function handleAgentPlanExecutionMessage(
   message: Extract<AgentClientMessage, { type: "execute_plan" | "retry_failed" }>,
   session: AgentSocketSession,
@@ -494,7 +622,7 @@ async function handleAgentPlanExecutionMessage(
       runId: activeRun.id,
       signal: activeRun.controller.signal,
       isRunActive: () => session.activeRun?.id === activeRun.id && !activeRun.cancelled,
-      sendEvent: (event) => sendSessionEvent(session, event)
+      sendEvent: (event) => sendAgentExecutionEvent(session, event)
     });
   } catch (error) {
     if (activeRun.controller.signal.aborted || activeRun.cancelled || session.activeRun?.id !== activeRun.id) {
@@ -527,6 +655,7 @@ async function handleAgentPlanExecutionMessage(
 
   session.activeRun = undefined;
   scheduleDisconnectedSessionCleanup(session);
+  updateConversationContextAfterExecution(session, activeRun.id, result.plan, storedPlan.plan);
   session.plans.set(result.plan.id, {
     plan: result.plan,
     selectedReferences: storedPlan.selectedReferences
@@ -538,6 +667,325 @@ async function handleAgentPlanExecutionMessage(
     status: result.status,
     timestamp: new Date().toISOString()
   });
+}
+
+function sendAgentExecutionEvent(session: AgentSocketSession, event: AgentServerEvent): void {
+  if (event.type === "asset_preview") {
+    rememberAgentExecutionOutput(session, event);
+  } else if (event.type === "plan_updated") {
+    session.conversationContext.previousPlan = event.plan;
+  }
+
+  sendSessionEvent(session, event);
+}
+
+function rememberAgentExecutionOutput(
+  session: AgentSocketSession,
+  event: Extract<AgentServerEvent, { type: "asset_preview" }>
+): void {
+  if (!event.runId) {
+    return;
+  }
+
+  const outputs = session.conversationContext.pendingOutputsByRun.get(event.runId) ?? [];
+  const output = outputReferenceFromAssetPreview(event.asset, {
+    index: outputs.length + 1,
+    planId: event.planId,
+    jobId: event.jobId,
+    outputId: event.outputId,
+    assetId: event.assetId
+  });
+  const existingIndex = outputs.findIndex(
+    (item) => item.assetId === output.assetId && item.jobId === output.jobId && item.outputId === output.outputId
+  );
+  const nextOutputs = [...outputs];
+  if (existingIndex >= 0) {
+    nextOutputs[existingIndex] = {
+      ...output,
+      index: nextOutputs[existingIndex]?.index ?? output.index
+    };
+  } else {
+    nextOutputs.push(output);
+  }
+
+  session.conversationContext.pendingOutputsByRun.set(event.runId, nextOutputs);
+}
+
+function updateConversationContextAfterExecution(
+  session: AgentSocketSession,
+  runId: string,
+  resultPlan: GenerationPlan,
+  fallbackPlan: GenerationPlan
+): void {
+  session.conversationContext.previousPlan = resultPlan;
+  const pendingOutputs = session.conversationContext.pendingOutputsByRun.get(runId);
+  session.conversationContext.pendingOutputsByRun.delete(runId);
+  if (pendingOutputs?.length) {
+    session.conversationContext.previousOutputs = pendingOutputs.slice(0, MAX_AGENT_SELECTED_REFERENCES);
+    return;
+  }
+
+  const outputsFromPlan = outputReferencesFromPlan(resultPlan);
+  if (outputsFromPlan.length) {
+    session.conversationContext.previousOutputs = outputsFromPlan.slice(0, MAX_AGENT_SELECTED_REFERENCES);
+    return;
+  }
+
+  const fallbackOutputs = outputReferencesFromPlan(fallbackPlan);
+  if (fallbackOutputs.length) {
+    session.conversationContext.previousOutputs = fallbackOutputs.slice(0, MAX_AGENT_SELECTED_REFERENCES);
+  }
+}
+
+function outputReferencesFromPlan(plan: GenerationPlan): AgentConversationOutputReference[] {
+  const outputs: AgentConversationOutputReference[] = [];
+  for (const job of plan.jobs) {
+    for (const output of job.outputs) {
+      if (output.status !== "succeeded" || !output.asset) {
+        continue;
+      }
+      outputs.push(
+        outputReferenceFromAsset(output.asset, {
+          index: outputs.length + 1,
+          planId: plan.id,
+          jobId: job.id,
+          outputId: output.id
+        })
+      );
+    }
+  }
+
+  return outputs;
+}
+
+function outputReferenceFromAssetPreview(
+  asset: GeneratedAsset,
+  input: {
+    index: number;
+    planId: string;
+    jobId: string;
+    outputId: string;
+    assetId: string;
+  }
+): AgentConversationOutputReference {
+  return {
+    ...outputReferenceFromAsset(asset, input),
+    assetId: input.assetId
+  };
+}
+
+function outputReferenceFromAsset(
+  asset: GeneratedAsset,
+  input: {
+    index: number;
+    planId?: string;
+    jobId?: string;
+    outputId?: string;
+  }
+): AgentConversationOutputReference {
+  return {
+    index: input.index,
+    assetId: asset.id,
+    label: asset.fileName,
+    width: asset.width,
+    height: asset.height,
+    mimeType: asset.mimeType,
+    planId: input.planId,
+    jobId: input.jobId,
+    outputId: input.outputId
+  };
+}
+
+export type AgentImplicitContextReferenceResolution =
+  | {
+      ok: true;
+      selectedReferences: AgentSelectedCanvasReference[];
+      resolvedOutputs: AgentConversationOutputReference[];
+    }
+  | {
+      ok: false;
+      code: string;
+      message: string;
+    };
+
+export function resolveImplicitAgentContextReferences(input: {
+  userText: string;
+  previousOutputs: AgentConversationOutputReference[];
+}): AgentImplicitContextReferenceResolution {
+  const outputs = input.previousOutputs.filter((output) => output.assetId).slice(0, MAX_AGENT_SELECTED_REFERENCES);
+  if (outputs.length === 0 || !hasFollowUpEditAction(input.userText)) {
+    return {
+      ok: true,
+      selectedReferences: [],
+      resolvedOutputs: []
+    };
+  }
+
+  const requestedIndexes = extractRequestedOutputIndexes(input.userText);
+  if (requestedIndexes.length > 0) {
+    const outOfRangeIndex = requestedIndexes.find((index) => index < 1 || index > outputs.length);
+    if (outOfRangeIndex !== undefined) {
+      return {
+        ok: false,
+        code: "agent_context_reference_out_of_range",
+        message: `The previous Agent run has ${outputs.length} output image(s), so output ${outOfRangeIndex} is not available. Choose a number from 1 to ${outputs.length}, or ask to edit all outputs.`
+      };
+    }
+
+    const resolvedOutputs = requestedIndexes.map((index) => outputs[index - 1]).filter(isDefined);
+    return successfulImplicitResolution(resolvedOutputs);
+  }
+
+  if (hasAllPreviousOutputsTarget(input.userText)) {
+    return successfulImplicitResolution(outputs);
+  }
+
+  if (hasLastOutputTarget(input.userText)) {
+    return successfulImplicitResolution([outputs[outputs.length - 1]].filter(isDefined));
+  }
+
+  if (hasAmbiguousPreviousOutputTarget(input.userText)) {
+    if (outputs.length === 1) {
+      return successfulImplicitResolution(outputs);
+    }
+
+    return {
+      ok: false,
+      code: "agent_context_reference_ambiguous",
+      message: `The previous Agent run has ${outputs.length} output images. Specify an output number such as "image 3", or ask to edit all outputs.`
+    };
+  }
+
+  return {
+    ok: true,
+    selectedReferences: [],
+    resolvedOutputs: []
+  };
+}
+
+function successfulImplicitResolution(
+  outputs: AgentConversationOutputReference[]
+): Extract<AgentImplicitContextReferenceResolution, { ok: true }> {
+  return {
+    ok: true,
+    selectedReferences: selectedReferencesFromConversationOutputs(outputs),
+    resolvedOutputs: outputs
+  };
+}
+
+function selectedReferencesFromConversationOutputs(outputs: AgentConversationOutputReference[]): AgentSelectedCanvasReference[] {
+  return outputs.slice(0, MAX_AGENT_SELECTED_REFERENCES).map((output) => ({
+    id: `previous-agent-output-${output.index}`,
+    assetId: output.assetId,
+    label: output.label ?? `Agent output ${output.index}`,
+    width: output.width,
+    height: output.height,
+    mimeType: output.mimeType
+  }));
+}
+
+function hasFollowUpEditAction(userText: string): boolean {
+  return /(?:\u7f16\u8f91|\u4fee\u6539|\u8c03\u6574|\u6539\u6210|\u6539\u4e3a|\u4f18\u5316|\u6da6\u8272|\u91cd\u7ed8|\u4fee\u56fe|\u4fdd\u7559|\u57fa\u4e8e|\u52a0\u5b57|\u52a0\u6587\u5b57|\u914d\u5b57|\u914d\u6587|\u6587\u6848|\u6587\u5b57|\u5b57\u4f53|\u5b57\u53f7|\u6807\u9898|\u5b57\u5e55|\u6392\u7248|\u8d34\u5b57|\u53d8\u5927|\u53d8\u5c0f|\u5927\u4e00\u70b9|\u5c0f\u4e00\u70b9|edit|modify|adjust|retouch|polish|redesign|based on|add text|text|caption|title|typography|copy|font|bigger|smaller|larger|resize)/iu.test(
+    normalizeAgentContextText(userText)
+  );
+}
+
+function hasAllPreviousOutputsTarget(userText: string): boolean {
+  return /(?:\u6240\u6709|\u5168\u90e8|\u6bcf\u5f20|\u6bcf\u4e00\u5f20|\u6bcf\u4e2a|\u4e0a\u4e00\u8f6e\u8f93\u51fa|\u4e0a\u6b21\u8f93\u51fa|all|each|every|previous outputs?|latest outputs?|generated outputs?)/iu.test(
+    normalizeAgentContextText(userText)
+  );
+}
+
+function hasLastOutputTarget(userText: string): boolean {
+  return /(?:\u6700\u540e\u4e00?\u5f20|\u6700\u540e\u4e00?\u4e2a|last image|last output|last one)/iu.test(
+    normalizeAgentContextText(userText)
+  );
+}
+
+function hasAmbiguousPreviousOutputTarget(userText: string): boolean {
+  return /(?:\u8fd9\u5f20|\u90a3\u5f20|\u8fd9\u4e2a|\u90a3\u4e2a|\u56fe|\u56fe\u7247|\u753b\u9762|\u521a\u521a|\u521a\u751f\u6210|\u4e0a\u4e00\u8f6e|\u4e0a\u6b21|this image|that image|this one|that one|image|picture|output|previous|latest|generated)/iu.test(
+    normalizeAgentContextText(userText)
+  );
+}
+
+function extractRequestedOutputIndexes(userText: string): number[] {
+  const text = normalizeAgentContextText(userText);
+  const indexes = new Set<number>();
+
+  for (const match of text.matchAll(/(?:\u7b2c|#)\s*(\d{1,2})\s*(?:\u5f20|\u4e2a|\u5e45|\u4efd|image|output|picture)?/giu)) {
+    const index = Number(match[1]);
+    if (Number.isSafeInteger(index)) {
+      indexes.add(index);
+    }
+  }
+
+  for (const match of text.matchAll(/(?:image|output|picture)\s*(?:#|number|no\.?)?\s*(\d{1,2})\b/giu)) {
+    const index = Number(match[1]);
+    if (Number.isSafeInteger(index)) {
+      indexes.add(index);
+    }
+  }
+
+  for (const match of text.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)\s+(?:image|output|picture)\b/giu)) {
+    const index = Number(match[1]);
+    if (Number.isSafeInteger(index)) {
+      indexes.add(index);
+    }
+  }
+
+  for (const match of text.matchAll(/\u7b2c\s*([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u4e24]+)\s*(?:\u5f20|\u4e2a|\u5e45|\u4efd)?/giu)) {
+    const index = chineseOrdinalToNumber(match[1] ?? "");
+    if (index !== undefined) {
+      indexes.add(index);
+    }
+  }
+
+  return [...indexes].sort((left, right) => left - right);
+}
+
+function chineseOrdinalToNumber(value: string): number | undefined {
+  const digits = new Map<string, number>([
+    ["\u4e00", 1],
+    ["\u4e8c", 2],
+    ["\u4e24", 2],
+    ["\u4e09", 3],
+    ["\u56db", 4],
+    ["\u4e94", 5],
+    ["\u516d", 6],
+    ["\u4e03", 7],
+    ["\u516b", 8],
+    ["\u4e5d", 9]
+  ]);
+  if (!value) {
+    return undefined;
+  }
+
+  if (digits.has(value)) {
+    return digits.get(value);
+  }
+
+  const tenIndex = value.indexOf("\u5341");
+  if (tenIndex < 0) {
+    return undefined;
+  }
+
+  const beforeTen = value.slice(0, tenIndex);
+  const afterTen = value.slice(tenIndex + 1);
+  const tens = beforeTen ? digits.get(beforeTen) : 1;
+  const ones = afterTen ? digits.get(afterTen) : 0;
+  if (!tens || ones === undefined) {
+    return undefined;
+  }
+
+  return tens * 10 + ones;
+}
+
+function normalizeAgentContextText(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/gu, " ");
+}
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
 }
 
 function resolveStoredPlanForExecution(

@@ -14,11 +14,12 @@ mkdirSync(dataDir, { recursive: true });
 
 async function main(): Promise<void> {
   try {
-    const [{ app, agentWebSocketServer }, { closeDatabase }, { closeAllAgentSessions }] = await Promise.all([
+    const [{ app, agentWebSocketServer }, { closeDatabase }, agentSession] = await Promise.all([
       import("../index.js"),
       import("../infrastructure/database.js"),
       import("../domain/agent/websocket-session.js")
     ]);
+    const { closeAllAgentSessions, resolveImplicitAgentContextReferences } = agentSession;
 
     let server: ReturnType<typeof serve> | undefined;
     const port = await new Promise<number>((resolvePort) => {
@@ -36,6 +37,7 @@ async function main(): Promise<void> {
     });
 
     try {
+      smokeImplicitContextResolution(resolveImplicitAgentContextReferences);
       await smokeAgentWebSocket(port);
       await smokeAgentConfig(app);
     } finally {
@@ -110,6 +112,62 @@ async function smokeAgentWebSocket(port: number): Promise<void> {
   } finally {
     probe.close();
   }
+}
+
+function smokeImplicitContextResolution(
+  resolveImplicitAgentContextReferences: typeof import("../domain/agent/websocket-session.js").resolveImplicitAgentContextReferences
+): void {
+  const previousOutputs = Array.from({ length: 10 }, (_, index) => ({
+    index: index + 1,
+    assetId: `asset-output-${index + 1}`,
+    label: `output-${index + 1}.png`,
+    width: 1024,
+    height: 1024,
+    mimeType: "image/png"
+  }));
+
+  const third = resolveImplicitAgentContextReferences({
+    userText: "Adjust image 3 text size.",
+    previousOutputs
+  });
+  expect(third.ok, "image-number follow-up resolves");
+  expect(third.resolvedOutputs.length === 1, "image-number follow-up resolves one output");
+  expect(third.resolvedOutputs[0]?.assetId === "asset-output-3", "image-number follow-up uses the third output");
+
+  const tenth = resolveImplicitAgentContextReferences({
+    userText: "\u8c03\u6574\u7b2c\u5341\u5f20\u56fe\u7684\u6587\u5b57\u5927\u5c0f",
+    previousOutputs
+  });
+  expect(tenth.ok, "Chinese ordinal follow-up resolves");
+  expect(tenth.resolvedOutputs[0]?.assetId === "asset-output-10", "Chinese ordinal follows the tenth output");
+
+  const all = resolveImplicitAgentContextReferences({
+    userText: "Edit all previous outputs and make the title larger.",
+    previousOutputs
+  });
+  expect(all.ok, "all-output follow-up resolves");
+  expect(all.resolvedOutputs.length === 10, "all-output follow-up resolves every output");
+
+  const outOfRange = resolveImplicitAgentContextReferences({
+    userText: "Adjust output 11 text size.",
+    previousOutputs
+  });
+  expect(!outOfRange.ok, "out-of-range output asks for user input");
+  expect(outOfRange.code === "agent_context_reference_out_of_range", "out-of-range output uses stable code");
+
+  const ambiguous = resolveImplicitAgentContextReferences({
+    userText: "Make this image text bigger.",
+    previousOutputs
+  });
+  expect(!ambiguous.ok, "ambiguous multi-output follow-up asks for clarification");
+  expect(ambiguous.code === "agent_context_reference_ambiguous", "ambiguous output uses stable code");
+
+  const freshRequest = resolveImplicitAgentContextReferences({
+    userText: "Generate two new food images.",
+    previousOutputs
+  });
+  expect(freshRequest.ok, "fresh generation request does not fail implicit context");
+  expect(freshRequest.resolvedOutputs.length === 0, "fresh generation request does not attach previous outputs");
 }
 
 interface RequestApp {

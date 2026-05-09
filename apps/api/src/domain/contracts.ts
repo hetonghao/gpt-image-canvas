@@ -70,6 +70,8 @@ export type {
   AgentClientMessage,
   AgentClientMessageType,
   AgentConnectedEvent,
+  AgentContextResolvedEvent,
+  AgentContextResolvedReference,
   AgentErrorEvent,
   AgentExecutePlanClientMessage,
   AgentPlannerOptions,

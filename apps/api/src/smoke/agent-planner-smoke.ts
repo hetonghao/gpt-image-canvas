@@ -11,6 +11,7 @@ import {
 import type { UsableAgentLlmConfig } from "../domain/agent/config.js";
 import type {
   AgentSelectedCanvasReference,
+  GenerationPlan,
   GenerationPlanDefaults,
   GenerationPlanValidationResult
 } from "../domain/contracts.js";
@@ -51,6 +52,7 @@ async function main(): Promise<void> {
   smokeCyclePlanRejection();
   smokeInvalidJsonRejection();
   smokeNoVisionReferenceHandling();
+  smokePlannerConversationContextPrompt();
   smokeDeepSeekPlannerKwargs();
   smokeReasoningExtraction();
   await smokePlannerQuestionOutput();
@@ -372,6 +374,60 @@ function smokeNoVisionReferenceHandling(): void {
   expect(typeof message.content === "string", "no-vision planner message is text-only");
   expect(!message.content.includes("data:image"), "no-vision planner message does not include image data");
   expect(message.content.includes("Do not claim visual inspection"), "no-vision message includes inspection warning");
+}
+
+function smokePlannerConversationContextPrompt(): void {
+  const message = buildPlannerUserMessage({
+    userText: "Make image 3 text bigger.",
+    defaults,
+    selectedReferences: [
+      {
+        id: "previous-agent-output-3",
+        assetId: "asset-output-3",
+        label: "dish-3.png",
+        width: 1024,
+        height: 1024,
+        mimeType: "image/png"
+      }
+    ],
+    supportsVision: false,
+    conversationContext: {
+      previousUserText: "Generate 10 Guangdong food images.",
+      previousPlan: planFixture({
+        id: "plan-food",
+        title: "Guangdong food batch"
+      }) as unknown as GenerationPlan,
+      previousOutputs: [
+        {
+          index: 1,
+          assetId: "asset-output-1",
+          label: "dish-1.png"
+        },
+        {
+          index: 3,
+          assetId: "asset-output-3",
+          label: "dish-3.png"
+        }
+      ],
+      resolvedReferences: [
+        {
+          index: 3,
+          assetId: "asset-output-3",
+          label: "dish-3.png"
+        }
+      ],
+      referenceResolution: "previous_agent_outputs"
+    }
+  });
+  const content =
+    typeof message.content === "string"
+      ? message.content
+      : String(message.content.find((block) => block.type === "text")?.text ?? "");
+
+  expect(content.includes("Current Agent conversation context"), "planner prompt includes conversation context heading");
+  expect(content.includes("Previous user request: Generate 10 Guangdong food images."), "planner prompt includes previous user request");
+  expect(content.includes("output3: assetId=\"asset-output-3\""), "planner prompt includes resolved output index");
+  expect(content.includes("Resolved follow-up image references from previous Agent outputs"), "planner prompt explains resolved references");
 }
 
 function smokeDeepSeekPlannerKwargs(): void {

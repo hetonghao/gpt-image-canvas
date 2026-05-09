@@ -294,20 +294,6 @@ function isAgentUserInputErrorCode(code: string | undefined): boolean {
   return code === "missing_selected_canvas_reference" || code === "agent_requires_user_input";
 }
 
-function shouldUseRecentAgentOutputsForAgentEdit(userText: string): boolean {
-  const text = userText.trim().toLowerCase().replace(/\s+/gu, " ");
-  if (!text) {
-    return false;
-  }
-
-  const hasImageContext =
-    /(?:\u56fe|\u56fe\u7247|\u753b\u9762|\u521a\u521a|\u4e0a\u4e00\u8f6e|\u751f\u6210\u7684|\u6240\u6709|\u5168\u90e8|\u6bcf\u5f20|\u6bcf\u4e00\u5f20|image|images|picture|pictures|previous|latest|generated|all|each|every)/u.test(text);
-  const hasEditAction =
-    /(?:\u7f16\u8f91|\u4fee\u6539|\u8c03\u6574|\u6539\u6210|\u6539\u4e3a|\u4f18\u5316|\u6da6\u8272|\u91cd\u7ed8|\u4fee\u56fe|\u4fdd\u7559|\u57fa\u4e8e|\u57fa\u7840\u4e0a|\u52a0\u5b57|\u52a0\u4e0a\u5b57|\u52a0\u6587\u5b57|\u914d\u5b57|\u914d\u6587|\u6587\u6848|\u6807\u9898|\u5b57\u5e55|\u5b57\u4f53|\u6392\u7248|\u8d34\u5b57|\u4e00\u81f4|\u7edf\u4e00|edit|modify|retouch|polish|redesign|based on|from the original|add text|text overlay|caption|title|typography|copy|font|consistent|unify)/u.test(text);
-
-  return hasImageContext && hasEditAction;
-}
-
 interface PanelStatus {
   tone: PanelStatusTone;
   message: string;
@@ -322,16 +308,6 @@ interface AgentChatAssetPreview {
   planId?: string;
   shapeId?: TLShapeId;
   url: string;
-}
-
-interface RecentAgentOutputReference {
-  assetId: string;
-  jobId: string;
-  outputId?: string;
-  planId?: string;
-  shapeId?: TLShapeId;
-  url: string;
-  asset: GeneratedAsset;
 }
 
 interface AgentChatMessage {
@@ -1924,17 +1900,6 @@ async function buildAgentSelectedReferences(input: {
   );
 }
 
-function buildRecentAgentOutputSelectedReferences(outputs: RecentAgentOutputReference[]): AgentSelectedCanvasReference[] {
-  return outputs.slice(0, MAX_AGENT_SELECTED_REFERENCES).map((output, index) => ({
-    id: `recent-agent-output-${index + 1}`,
-    assetId: output.assetId,
-    label: output.asset.fileName || `Agent output ${index + 1}`,
-    width: output.asset.width,
-    height: output.asset.height,
-    mimeType: output.asset.mimeType
-  }));
-}
-
 function parseAgentServerEvent(data: MessageEvent["data"]): AgentServerEvent | undefined {
   if (typeof data !== "string") {
     return undefined;
@@ -2601,8 +2566,6 @@ export function App() {
   const agentJobPlaceholdersRef = useRef<Map<string, AgentJobPlaceholderSet>>(new Map());
   const pendingAgentSelectedReferencesRef = useRef<Map<string, AgentSelectedCanvasReference[]>>(new Map());
   const agentPlanSelectedReferencesRef = useRef<Map<string, AgentSelectedCanvasReference[]>>(new Map());
-  const pendingAgentOutputReferencesRef = useRef<Map<string, RecentAgentOutputReference[]>>(new Map());
-  const recentSuccessfulAgentOutputReferencesRef = useRef<RecentAgentOutputReference[]>([]);
   const agentPlaceholderRequestRef = useRef(0);
   const agentCopyResetTimerRef = useRef<number | undefined>();
   const agentPlanCreatedRunIdsRef = useRef<Set<string>>(new Set());
@@ -4393,37 +4356,8 @@ export function App() {
     return imageShape.id;
   }
 
-  function rememberAgentOutputReference(event: Extract<AgentServerEvent, { type: "asset_preview" }>, shapeId: TLShapeId | undefined): void {
-    if (!event.runId) {
-      return;
-    }
-
-    const outputs = pendingAgentOutputReferencesRef.current.get(event.runId) ?? [];
-    const nextOutput: RecentAgentOutputReference = {
-      assetId: event.assetId,
-      jobId: event.jobId,
-      outputId: event.outputId,
-      planId: event.planId,
-      shapeId,
-      url: event.url,
-      asset: event.asset
-    };
-    const existingIndex = outputs.findIndex(
-      (output) => output.assetId === event.assetId && output.jobId === event.jobId && output.outputId === event.outputId
-    );
-    const nextOutputs = [...outputs];
-    if (existingIndex >= 0) {
-      nextOutputs[existingIndex] = nextOutput;
-    } else {
-      nextOutputs.push(nextOutput);
-    }
-
-    pendingAgentOutputReferencesRef.current.set(event.runId, nextOutputs);
-  }
-
   function addAgentAssetPreview(event: Extract<AgentServerEvent, { type: "asset_preview" }>): void {
     const shapeId = addAgentOutputAssetToCanvas(event);
-    rememberAgentOutputReference(event, shapeId);
     const preview: AgentChatAssetPreview = {
       id: `agent-preview-${event.jobId}-${event.assetId}-${crypto.randomUUID()}`,
       assetId: event.assetId,
@@ -4470,8 +4404,34 @@ export function App() {
     }
   }
 
+  function agentContextIndexesLabel(indexes: number[]): string {
+    if (indexes.length === 0) {
+      return "";
+    }
+
+    const isConsecutive = indexes.every((index, itemIndex) => itemIndex === 0 || index === indexes[itemIndex - 1] + 1);
+    if (isConsecutive && indexes.length > 4) {
+      return `${indexes[0]}-${indexes[indexes.length - 1]}`;
+    }
+
+    return indexes.length <= 4 ? indexes.join(", ") : `${indexes.slice(0, 4).join(", ")}...`;
+  }
+
   function handleAgentServerEvent(event: AgentServerEvent): void {
     switch (event.type) {
+      case "context_resolved":
+        if (isStaleAgentRunEvent(event)) {
+          return;
+        }
+        addAgentMessage({
+          role: "system",
+          content: t("agentContextResolvedPreviousOutputs", {
+            count: event.referenceCount,
+            indexes: agentContextIndexesLabel(event.referenceIndexes)
+          }),
+          runId: runIdForAgentEvent(event)
+        });
+        return;
       case "assistant_delta":
         if (!isAgentStreamEventForActiveRun(event)) {
           return;
@@ -4598,7 +4558,6 @@ export function App() {
         }
         if (event.runId) {
           pendingAgentSelectedReferencesRef.current.delete(event.runId);
-          pendingAgentOutputReferencesRef.current.delete(event.runId);
         }
         {
           const eventRunId = runIdForAgentEvent(event);
@@ -4631,7 +4590,6 @@ export function App() {
         }
         if (event.runId) {
           pendingAgentSelectedReferencesRef.current.delete(event.runId);
-          pendingAgentOutputReferencesRef.current.delete(event.runId);
         }
         activeAgentRunIdRef.current = null;
         setAgentRunStatus("idle");
@@ -4649,11 +4607,6 @@ export function App() {
         }
         if (event.runId) {
           pendingAgentSelectedReferencesRef.current.delete(event.runId);
-          const completedOutputReferences = pendingAgentOutputReferencesRef.current.get(event.runId);
-          if (event.status === "succeeded" && completedOutputReferences?.length) {
-            recentSuccessfulAgentOutputReferencesRef.current = completedOutputReferences.slice(0, MAX_AGENT_SELECTED_REFERENCES);
-          }
-          pendingAgentOutputReferencesRef.current.delete(event.runId);
         }
         if (!event.runId || activeAgentRunIdRef.current === event.runId) {
           activeAgentRunIdRef.current = null;
@@ -4866,6 +4819,7 @@ export function App() {
     stopAgentSocketHeartbeat(socket ?? undefined);
     resetAgentSocketReconnectState();
     activeAgentRunIdRef.current = null;
+    agentConnectionIdRef.current = null;
     agentSocketRef.current = null;
     agentSocketOpenPromiseRef.current = null;
 
@@ -4875,8 +4829,6 @@ export function App() {
 
     pendingAgentSelectedReferencesRef.current.clear();
     agentPlanSelectedReferencesRef.current.clear();
-    pendingAgentOutputReferencesRef.current.clear();
-    recentSuccessfulAgentOutputReferencesRef.current = [];
     agentPlanCreatedRunIdsRef.current.clear();
     agentUserInputRunIdsRef.current.clear();
     agentOutputPlacementCountsRef.current.clear();
@@ -4956,16 +4908,6 @@ export function App() {
         selectedReferences = await buildAgentSelectedReferences({
           references: agentReferenceSelection.references,
           t
-        });
-      } else if (
-        recentSuccessfulAgentOutputReferencesRef.current.length > 0 &&
-        shouldUseRecentAgentOutputsForAgentEdit(trimmedAgentInput)
-      ) {
-        selectedReferences = buildRecentAgentOutputSelectedReferences(recentSuccessfulAgentOutputReferencesRef.current);
-        addAgentMessage({
-          role: "system",
-          content: t("agentUsingRecentOutputs", { count: selectedReferences.length }),
-          runId
         });
       }
 

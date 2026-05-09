@@ -98,6 +98,7 @@ export type AgentClientMessage =
 
 export type AgentServerEventType =
   | "connected"
+  | "context_resolved"
   | "assistant_delta"
   | "assistant_thinking_delta"
   | "plan_created"
@@ -126,6 +127,20 @@ export interface AgentConnectedEvent extends AgentBaseServerEvent {
 
 export interface AgentPongEvent extends AgentBaseServerEvent {
   type: "pong";
+}
+
+export interface AgentContextResolvedReference {
+  index: number;
+  assetId: string;
+  label?: string;
+}
+
+export interface AgentContextResolvedEvent extends AgentBaseServerEvent {
+  type: "context_resolved";
+  source: "previous_agent_outputs";
+  referenceCount: number;
+  referenceIndexes: number[];
+  references: AgentContextResolvedReference[];
 }
 
 export interface AgentErrorEvent extends AgentBaseServerEvent {
@@ -207,6 +222,7 @@ export interface AgentRunDoneEvent extends AgentBaseServerEvent {
 
 export type AgentServerEvent =
   | AgentConnectedEvent
+  | AgentContextResolvedEvent
   | AgentPongEvent
   | AgentErrorEvent
   | AgentAssistantDeltaEvent
