@@ -497,6 +497,10 @@ export function createDeepAgentsPlanner(
   plannerOptions?: AgentPlannerOptions,
   skillLoadout?: PlanningSkillLoadout
 ): GenerationPlanAgentRunner {
+  if (agentConfigRequiresStreamingPlanner(config)) {
+    return createAiCoveCompatiblePlanner(config, skillLoadout);
+  }
+
   const isDeepSeek = isDeepSeekAgentConfig(config);
   const model = createAgentChatModel(config, isDeepSeek, plannerOptions);
 
@@ -512,21 +516,29 @@ export function createDeepAgentsPlanner(
   }) as unknown as GenerationPlanAgentRunner;
 }
 
+export function agentConfigRequiresStreamingPlanner(
+  config: Pick<UsableAgentLlmConfig, "baseUrl" | "model">
+): boolean {
+  const baseUrl = config.baseUrl?.trim().toLowerCase() ?? "";
+  return baseUrl.includes("api.ai-cove.com");
+}
+
 function createAgentChatModel(
   config: UsableAgentLlmConfig,
   isDeepSeek = isDeepSeekAgentConfig(config),
   plannerOptions?: AgentPlannerOptions
 ): ChatOpenAI {
   const modelKwargs = agentModelKwargsForConfig(config, plannerOptions);
+  const usesStreamingCompatibility = isDeepSeek || agentConfigRequiresStreamingPlanner(config);
   return new ChatOpenAI({
     apiKey: config.apiKey,
     configuration: config.baseUrl ? { baseURL: config.baseUrl } : undefined,
     maxRetries: 1,
     model: config.model,
     modelKwargs,
-    streaming: isDeepSeek,
+    streaming: usesStreamingCompatibility,
     streamUsage: false,
-    temperature: isDeepSeek ? undefined : 0,
+    temperature: usesStreamingCompatibility ? undefined : 0,
     timeout: config.timeoutMs
   });
 }
@@ -580,6 +592,62 @@ export function createDirectChatPlanner(
   };
 }
 
+export function createAiCoveCompatiblePlanner(
+  config: Pick<UsableAgentLlmConfig, "apiKey" | "baseUrl" | "model" | "timeoutMs">,
+  skillLoadout?: PlanningSkillLoadout
+): GenerationPlanAgentRunner {
+  return {
+    streamsThinkingDeltas: true,
+    async invoke(input, options) {
+      const body = {
+        model: config.model,
+        stream: true,
+        temperature: 0,
+        messages: [
+          {
+            role: "system",
+            content: createDirectPlanningSystemPrompt(skillLoadout)
+          },
+          ...input.messages
+        ]
+      };
+
+      const timeout = timeoutSignal(options?.signal, config.timeoutMs);
+      try {
+        const response = await fetch(`${(config.baseUrl ?? "").replace(/\/+$/u, "")}/chat/completions`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(body),
+          signal: timeout.signal
+        });
+
+        const text = await response.text();
+        if (!response.ok) {
+          throw new Error(extractAiCoveChatErrorMessage(text, response.status));
+        }
+
+        const content = parseAiCoveChatCompletionText(text);
+        if (!content) {
+          throw new Error("Agent planner returned no content.");
+        }
+
+        return {
+          messages: [
+            {
+              content
+            }
+          ]
+        };
+      } finally {
+        timeout.cleanup();
+      }
+    }
+  };
+}
+
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new Error("Agent planning was cancelled.");
@@ -610,6 +678,95 @@ function createDirectPlanningSystemPrompt(skillLoadout?: PlanningSkillLoadout): 
     "The full built-in planning skills are embedded below for this single chat completion request.",
     createEmbeddedPlanningSkillsPrompt(skillLoadout)
   ].join("\n\n");
+}
+
+function parseAiCoveChatCompletionText(body: string): string | undefined {
+  const parsed = parseJsonRecord(body);
+  if (parsed) {
+    const direct = stringValue(parsed.choices?.[0]?.message?.content);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  const sseText = extractTextFromChatCompletionSse(body);
+  return sseText ? sseText : undefined;
+}
+
+function extractAiCoveChatErrorMessage(body: string, status: number): string {
+  const parsed = parseJsonRecord(body);
+  return (
+    stringValue(parsed?.error?.message) ??
+    stringValue(parsed?.message) ??
+    `Agent planner request failed (HTTP ${status}).`
+  );
+}
+
+function extractTextFromChatCompletionSse(body: string): string | undefined {
+  const chunks: string[] = [];
+  let eventDataLines: string[] = [];
+
+  const flush = (): void => {
+    if (eventDataLines.length === 0) {
+      return;
+    }
+    const joined = eventDataLines.join("\n").trim();
+    eventDataLines = [];
+    if (!joined || joined === "[DONE]") {
+      return;
+    }
+    const parsed = parseJsonRecord(joined);
+    const delta = stringValue(parsed?.choices?.[0]?.delta?.content);
+    if (delta) {
+      chunks.push(delta);
+    }
+    const final = stringValue(parsed?.choices?.[0]?.message?.content);
+    if (final) {
+      chunks.push(final);
+    }
+  };
+
+  for (const line of body.split(/\r?\n/u)) {
+    if (line.length === 0) {
+      flush();
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      eventDataLines.push(line.slice(5).trimStart());
+    }
+  }
+  flush();
+
+  return nonEmptyString(chunks.join(""));
+}
+
+function parseJsonRecord(value: string): Record<string, any> | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? (parsed as Record<string, any>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function timeoutSignal(signal: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const abort = (): void => controller.abort(signal?.reason);
+
+  if (signal?.aborted) {
+    abort();
+  } else if (signal) {
+    signal.addEventListener("abort", abort, { once: true });
+  }
+
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+    }
+  };
 }
 
 export function agentModelKwargsForConfig(

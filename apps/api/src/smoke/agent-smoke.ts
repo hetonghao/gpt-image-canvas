@@ -296,6 +296,14 @@ interface SecretView {
 }
 
 async function smokeAgentConfig(app: RequestApp): Promise<void> {
+  const seededProviderConfig = await requestJson(app, "/api/provider-config?base_url=https%3A%2F%2Fapi.ai-cove.com");
+  expect(seededProviderConfig.response.status === 200, "seeded provider config GET returns 200");
+  expect(isRecord(seededProviderConfig.body.localOpenAI), "seeded provider config includes localOpenAI");
+  expect(
+    seededProviderConfig.body.localOpenAI.baseUrl === "https://api.ai-cove.com/v1",
+    "provider config seed normalizes ai-cove base URL to /v1"
+  );
+
   const initial = await requestJson(app, "/api/agent-config");
   expect(initial.response.status === 200, "initial config GET returns 200");
   expectEventShape(initial.body, "initial config body");

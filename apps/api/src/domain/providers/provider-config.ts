@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import {
   IMAGE_MODEL,
   PROVIDER_SOURCE_IDS,
@@ -38,7 +38,11 @@ interface ResolvedLocalConfig {
 }
 
 export function getProviderConfig(): ProviderConfigResponse {
-  const row = getProviderConfigRow();
+  return getProviderConfigWithSeed();
+}
+
+export function getProviderConfigWithSeed(baseUrlSeed?: string): ProviderConfigResponse {
+  const row = getProviderConfigRowWithSeed(baseUrlSeed);
   const sourceOrder = readSavedSourceOrder(row?.sourceOrderJson);
   const sourcesById = new Map(providerSources(row).map((source) => [source.id, source]));
   const sources = sourceOrder.map((sourceId) => sourcesById.get(sourceId)).filter(isDefined);
@@ -133,6 +137,85 @@ export function isProviderSourceId(value: unknown): value is ProviderSourceId {
 
 function getProviderConfigRow(): ProviderConfigRow | undefined {
   return db.select().from(providerConfigs).where(eq(providerConfigs.id, ACTIVE_PROVIDER_CONFIG_ID)).get();
+}
+
+function getProviderConfigRowWithSeed(baseUrlSeed?: string): ProviderConfigRow | undefined {
+  const row = getProviderConfigRow();
+  const normalizedBaseUrlSeed = normalizeProviderBaseUrlSeed(baseUrlSeed);
+  const rawLocalBaseUrl = trimToUndefined(row?.localBaseUrl);
+  const currentLocalBaseUrl = normalizeProviderBaseUrlSeed(rawLocalBaseUrl);
+
+  if (!normalizedBaseUrlSeed) {
+    return row;
+  }
+
+  const now = new Date().toISOString();
+  if (!row) {
+    const seededRow: ProviderConfigRow = {
+      id: ACTIVE_PROVIDER_CONFIG_ID,
+      sourceOrderJson: JSON.stringify(DEFAULT_PROVIDER_SOURCE_ORDER),
+      localApiKey: null,
+      localBaseUrl: normalizedBaseUrlSeed,
+      localModel: null,
+      localTimeoutMs: null,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.insert(providerConfigs).values(seededRow).onConflictDoNothing().run();
+    return getProviderConfigRow();
+  }
+
+  if (rawLocalBaseUrl && currentLocalBaseUrl === normalizedBaseUrlSeed && rawLocalBaseUrl !== currentLocalBaseUrl) {
+    db.update(providerConfigs)
+      .set({
+        localBaseUrl: normalizedBaseUrlSeed,
+        updatedAt: now
+      })
+      .where(
+        and(
+          eq(providerConfigs.id, ACTIVE_PROVIDER_CONFIG_ID),
+          eq(providerConfigs.localBaseUrl, rawLocalBaseUrl)
+        )
+      )
+      .run();
+    return getProviderConfigRow();
+  }
+
+  if (currentLocalBaseUrl) {
+    return row;
+  }
+
+  db.update(providerConfigs)
+    .set({
+      localBaseUrl: normalizedBaseUrlSeed,
+      updatedAt: now
+    })
+    .where(
+      and(
+        eq(providerConfigs.id, ACTIVE_PROVIDER_CONFIG_ID),
+        or(isNull(providerConfigs.localBaseUrl), eq(providerConfigs.localBaseUrl, ""))
+      )
+    )
+    .run();
+  return getProviderConfigRow();
+}
+
+function normalizeProviderBaseUrlSeed(value: string | null | undefined): string | undefined {
+  const trimmed = trimToUndefined(value);
+  if (!trimmed) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    const pathname = url.pathname.replace(/\/+$/u, "");
+    url.pathname = pathname.endsWith("/v1") ? pathname : `${pathname}/v1`;
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/u, "");
+  } catch {
+    return trimmed;
+  }
 }
 
 function providerSources(row: ProviderConfigRow | undefined): ProviderSourceView[] {

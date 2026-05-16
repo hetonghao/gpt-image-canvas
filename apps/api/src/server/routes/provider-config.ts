@@ -1,11 +1,11 @@
 import type { Hono } from "hono";
-import { getProviderConfig, saveProviderConfig } from "../../domain/providers/provider-config.js";
+import { getProviderConfigWithSeed, saveProviderConfig } from "../../domain/providers/provider-config.js";
 import { errorResponse, errorToMessage } from "../http/errors.js";
 import { readJson } from "../http/json.js";
 import { parseProviderConfigPayload } from "../http/validation.js";
 
 export function registerProviderConfigRoutes(app: Hono): void {
-  app.get("/api/provider-config", (c) => c.json(getProviderConfig()));
+  app.get("/api/provider-config", (c) => c.json(getProviderConfigWithSeed(c.req.query("base_url"))));
 
   app.put("/api/provider-config", async (c) => {
     const payload = await readJson(c.req.raw);

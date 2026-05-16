@@ -128,6 +128,10 @@ class OpenAIImageProvider implements ImageProvider {
   }
 
   async generate(input: ImageProviderInput, signal?: AbortSignal): Promise<ProviderResult> {
+    if (isAiCoveCompatibleBaseUrl(this.config.baseURL)) {
+      return this.generateViaCompatibleJsonEndpoint(input, signal);
+    }
+
     try {
       const response = await this.client.images.generate(
         imageGenerateRequestBody({
@@ -166,6 +170,43 @@ class OpenAIImageProvider implements ImageProvider {
       return await normalizeProviderResponse(response, input.sizeApiValue, this.config.model, signal);
     } catch (error) {
       throw toProviderError(error);
+    }
+  }
+
+  private async generateViaCompatibleJsonEndpoint(input: ImageProviderInput, signal?: AbortSignal): Promise<ProviderResult> {
+    const timeout = timeoutSignal(signal, this.config.timeoutMs);
+    try {
+      const response = await fetch(`${trimmedBaseUrl(this.config.baseURL)}/images/generations`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.config.apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: this.config.model,
+          prompt: input.prompt,
+          size: input.sizeApiValue,
+          quality: input.quality,
+          output_format: input.outputFormat,
+          n: input.count
+        }),
+        signal: timeout.signal
+      }).catch((error: unknown) => {
+        throw toProviderError(error);
+      });
+
+      const bodyText = await response.text();
+      const parsed = parseImagesResponseLike(bodyText);
+      if (!response.ok) {
+        throw providerHttpErrorFromJson(response.status, parsed);
+      }
+      if (!parsed) {
+        throw new ProviderError("unsupported_provider_behavior", "OpenAI 图像服务返回了无法识别的响应。", 502);
+      }
+
+      return await normalizeProviderResponse(parsed, input.sizeApiValue, this.config.model, timeout.signal);
+    } finally {
+      timeout.cleanup();
     }
   }
 }
@@ -223,7 +264,11 @@ async function normalizeProviderResponse(
   model: string,
   signal?: AbortSignal
 ): Promise<ProviderResult> {
+  const parsedResponse = parseImagesResponseLike(response);
   if (!Array.isArray(response.data) || response.data.length === 0) {
+    if (parsedResponse) {
+      return await normalizeProviderResponse(parsedResponse, sizeApiValue, model, signal);
+    }
     throw new ProviderError("unsupported_provider_behavior", "OpenAI 图像服务没有返回图像结果。", 502);
   }
 
@@ -237,6 +282,67 @@ async function normalizeProviderResponse(
     model,
     size: sizeApiValue,
     images
+  };
+}
+
+function parseImagesResponseLike(value: unknown): ImagesResponse | undefined {
+  if (typeof value === "string") {
+    try {
+      return parseImagesResponseLike(JSON.parse(value) as unknown);
+    } catch {
+      return undefined;
+    }
+  }
+
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Array.isArray((value as { data?: unknown[] }).data)
+  ) {
+    return value as ImagesResponse;
+  }
+
+  return undefined;
+}
+
+function isAiCoveCompatibleBaseUrl(baseURL: string | undefined): boolean {
+  const normalized = baseURL?.trim().toLowerCase() ?? "";
+  return normalized.includes("api.ai-cove.com");
+}
+
+function trimmedBaseUrl(baseURL: string | undefined): string {
+  return (baseURL ?? "").replace(/\/+$/u, "");
+}
+
+function providerHttpErrorFromJson(status: number, parsed: ImagesResponse | undefined): ProviderError {
+  const fallbackMessage = `OpenAI 图像服务请求失败（HTTP ${status}）。`;
+  if (!parsed || typeof parsed !== "object") {
+    return new ProviderError("upstream_failure", fallbackMessage, providerHttpStatus(status));
+  }
+
+  const errorRecord = (parsed as unknown as { error?: { message?: unknown } }).error;
+  const message = typeof errorRecord?.message === "string" && errorRecord.message.trim() ? errorRecord.message.trim() : fallbackMessage;
+  return new ProviderError("upstream_failure", message, providerHttpStatus(status));
+}
+
+function timeoutSignal(signal: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const abort = (): void => controller.abort(signal?.reason);
+
+  if (signal?.aborted) {
+    abort();
+  } else if (signal) {
+    signal.addEventListener("abort", abort, { once: true });
+  }
+
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+    }
   };
 }
 

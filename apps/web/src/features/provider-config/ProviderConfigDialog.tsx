@@ -78,6 +78,10 @@ const emptyAgentLlmForm: AgentLlmFormState = {
   supportsVision: false
 };
 
+const queryBaseUrlSeed = readQueryBaseUrlSeed();
+
+seedLocalProviderBaseUrlFromQuery();
+
 export function ProviderConfigDialog({
   isAuthLoading,
   isCodexStarting,
@@ -124,7 +128,7 @@ export function ProviderConfigDialog({
       setMessage(null);
 
       try {
-        const response = await fetch("/api/provider-config", { signal });
+        const response = await fetch(providerConfigUrl(), { signal });
         if (!response.ok) {
           throw new Error(await readProviderConfigError(response, locale, t));
         }
@@ -219,7 +223,7 @@ export function ProviderConfigDialog({
     setSourceOrder(nextConfig.sourceOrder);
     setLocalForm({
       apiKey: "",
-      baseUrl: nextConfig.localOpenAI.baseUrl,
+      baseUrl: nextConfig.localOpenAI.baseUrl || queryBaseUrlSeed,
       model: nextConfig.localOpenAI.model,
       timeoutMs: String(nextConfig.localOpenAI.timeoutMs)
     });
@@ -229,7 +233,7 @@ export function ProviderConfigDialog({
     setAgentConfig(nextConfig);
     setAgentForm({
       apiKey: "",
-      baseUrl: nextConfig.baseUrl,
+      baseUrl: nextConfig.baseUrl || queryBaseUrlSeed,
       model: nextConfig.model,
       timeoutMs: String(nextConfig.timeoutMs),
       supportsVision: nextConfig.supportsVision
@@ -869,6 +873,35 @@ export function ProviderConfigDialog({
   return createPortal(dialog, document.body);
 }
 
+function providerConfigUrl(): string {
+  if (!queryBaseUrlSeed) {
+    return "/api/provider-config";
+  }
+
+  const params = new URLSearchParams({ base_url: queryBaseUrlSeed });
+  return `/api/provider-config?${params.toString()}`;
+}
+
+function readQueryBaseUrlSeed(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return new URLSearchParams(window.location.search).get("base_url")?.trim() ?? "";
+}
+
+function seedLocalProviderBaseUrlFromQuery(): void {
+  if (typeof window === "undefined" || !queryBaseUrlSeed) {
+    return;
+  }
+
+  void fetch(providerConfigUrl(), {
+    credentials: "same-origin"
+  }).catch(() => {
+    // Ignore seed failures here; the dialog load path surfaces fetch errors.
+  });
+}
+
 function ProviderDetailHeader({
   description,
   source,
@@ -1027,10 +1060,11 @@ function providerOverviewCopy(sourceId: ProviderSourceId | undefined, t: Transla
 }
 
 function shouldSaveAgentConfig(form: AgentLlmFormState, hasSavedApiKey: boolean): boolean {
+  const baseUrl = form.baseUrl.trim();
   return Boolean(
     hasSavedApiKey ||
       form.apiKey.trim() ||
-      form.baseUrl.trim() ||
+      (baseUrl && baseUrl !== queryBaseUrlSeed) ||
       form.model.trim() ||
       form.supportsVision
   );

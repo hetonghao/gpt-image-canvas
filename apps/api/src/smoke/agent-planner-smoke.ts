@@ -1,5 +1,6 @@
 import {
   agentModelKwargsForConfig,
+  agentConfigRequiresStreamingPlanner,
   buildPlannerUserMessage,
   createDirectChatPlanner,
   createGenerationPlan,
@@ -84,6 +85,7 @@ async function main(): Promise<void> {
   await smokeDirectPlannerCancellation();
   await smokeDirectPlannerInvalidJson();
   await smokeDirectPlannerTransportError();
+  smokeAiCovePlannerCompatibility();
   smokeModelJobSizeCoercion();
   smokeModelArbitraryFinalJobCount();
   smokeModelArbitraryDefaultCount();
@@ -1104,6 +1106,23 @@ async function smokeDirectPlannerTransportError(): Promise<void> {
   expect(result.code === "agent_planner_failed", "stream transport error uses planner failed code");
   expect(!result.message.includes("super.secret.token"), "stream transport error redacts bearer token");
   expect(!result.message.includes("sk-live-secret"), "stream transport error redacts OpenAI-style key");
+}
+
+function smokeAiCovePlannerCompatibility(): void {
+  expect(
+    agentConfigRequiresStreamingPlanner({
+      baseUrl: "https://api.ai-cove.com/v1",
+      model: "gpt-5.4-mini"
+    }),
+    "ai-cove planner config uses streaming compatibility path"
+  );
+  expect(
+    !agentConfigRequiresStreamingPlanner({
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-5.4-mini"
+    }),
+    "official OpenAI config does not force streaming compatibility path"
+  );
 }
 
 function smokeModelJobSizeCoercion(): void {
