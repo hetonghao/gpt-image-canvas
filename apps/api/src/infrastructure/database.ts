@@ -210,6 +210,7 @@ ensureUserIdColumn("agent_conversations");
 ensureUserIdColumn("agent_skills");
 ensureUserIdColumn("codex_oauth_tokens");
 ensureUserIdColumn("generation_records");
+dropLegacyAgentSkillSlugIndex();
 sqlite.exec(`
 CREATE INDEX IF NOT EXISTS generation_records_user_id_idx ON generation_records(user_id);
 CREATE INDEX IF NOT EXISTS projects_user_id_idx ON projects(user_id);
@@ -293,6 +294,16 @@ function ensureColumn(tableName: string, columnName: string, definition: string)
 function ensureUserIdColumn(tableName: string): void {
   ensureColumn(tableName, "user_id", "user_id TEXT NOT NULL DEFAULT 'standalone'");
   sqlite.prepare(`UPDATE ${tableName} SET user_id = ? WHERE user_id IS NULL OR user_id = ''`).run("standalone");
+}
+
+function dropLegacyAgentSkillSlugIndex(): void {
+  const indexes = sqlite.prepare("PRAGMA index_list(agent_skills)").all() as Array<{ name?: string; unique?: number }>;
+  const legacySlugIndex = indexes.find((index) => index.name === "agent_skills_slug_idx" && index.unique === 1);
+  if (!legacySlugIndex) {
+    return;
+  }
+
+  sqlite.exec("DROP INDEX agent_skills_slug_idx");
 }
 
 function migrateStorageConfigRows(): void {
