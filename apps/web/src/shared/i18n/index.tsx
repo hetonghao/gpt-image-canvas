@@ -224,7 +224,7 @@ const zhMessages = {
   agentConfigModelPlaceholder: "例如 gpt-4.1-mini",
   agentConfigModelRequired: "请填写 Agent 大模型模型名称，或清空 Agent 字段后只保存图像服务配置。",
   agentConfigSupportsVision: "支持视觉输入",
-  agentConfigTimeoutInvalid: "Agent 大模型超时必须是正整数毫秒。",
+  agentConfigTimeoutInvalid: "Agent 大模型超时必须是正数秒。",
   agentContextResolvedPreviousOutputs: ({ count, indexes }: { count: number; indexes: string }) =>
     indexes ? `已使用上一轮 Agent 输出（${indexes}）中的 ${count} 张作为编辑源。` : `已使用上一轮 Agent 输出中的 ${count} 张作为编辑源。`,
   agentDefaultsTitle: "默认输出",
@@ -728,7 +728,7 @@ const zhMessages = {
   providerLocalApiKeyPlaceholder: "API Key",
   providerLocalModelPlaceholder: "例如 gpt-image-2",
   providerLocalApiKeySaved: ({ mask }: { mask: string }) => `已保存：${mask}`,
-  providerLocalTimeoutInvalid: "API 超时时间必须是正整数毫秒。",
+  providerLocalTimeoutInvalid: "API 超时时间必须是正数秒。",
   providerLoggedOut: "未登录",
   providerLoginCodex: "登录 Codex",
   providerLogoutCodex: "退出 Codex",
@@ -760,7 +760,7 @@ const zhMessages = {
   providerStatusLocalTitle: "自定义 OpenAI",
   providerStatusNoneCopy: "打开右上角配置，可保存 API Key 或登录 Codex。",
   providerStatusNoneTitle: "需要生成服务",
-  providerTimeoutMs: "超时（毫秒）",
+  providerTimeoutMs: "超时（秒）",
   qualityLabel: ({ quality }: { quality: ImageQuality }) => qualityLabels["zh-CN"][quality],
   readReferenceDataFailed: "无法读取参考图片数据。",
   readReferenceFailed: "无法读取当前参考图。请确认图片来自生成结果或浏览器可访问的图片数据。",
@@ -844,7 +844,7 @@ const enMessages: I18nMessages = {
   agentConfigModelPlaceholder: "For example gpt-4.1-mini",
   agentConfigModelRequired: "Enter an Agent LLM model name, or clear Agent fields to save only image service settings.",
   agentConfigSupportsVision: "Supports vision input",
-  agentConfigTimeoutInvalid: "Agent LLM timeout must be a positive integer in milliseconds.",
+  agentConfigTimeoutInvalid: "Agent LLM timeout must be a positive number of seconds.",
   agentContextResolvedPreviousOutputs: ({ count, indexes }) =>
     indexes
       ? `Using ${count} previous Agent output image(s) (${indexes}) as edit sources.`
@@ -1335,7 +1335,7 @@ const enMessages: I18nMessages = {
   providerLocalApiKeyPlaceholder: "API key",
   providerLocalModelPlaceholder: "For example gpt-image-2",
   providerLocalApiKeySaved: ({ mask }) => `Saved: ${mask}`,
-  providerLocalTimeoutInvalid: "API timeout must be a positive integer in milliseconds.",
+  providerLocalTimeoutInvalid: "API timeout must be a positive number of seconds.",
   providerLoggedOut: "Not signed in",
   providerLoginCodex: "Sign in to Codex",
   providerLogoutCodex: "Sign out of Codex",
@@ -1367,7 +1367,7 @@ const enMessages: I18nMessages = {
   providerStatusLocalTitle: "Custom OpenAI",
   providerStatusNoneCopy: "Open settings in the upper right to save an API key or sign in to Codex.",
   providerStatusNoneTitle: "Generation service needed",
-  providerTimeoutMs: "Timeout (ms)",
+  providerTimeoutMs: "Timeout (s)",
   qualityLabel: ({ quality }) => qualityLabels.en[quality],
   readReferenceDataFailed: "Unable to read reference image data.",
   readReferenceFailed: "Unable to read the current reference image. Confirm that it was generated in the app or is browser-accessible.",

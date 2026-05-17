@@ -157,6 +157,7 @@ const tldrawOptions = {
 const TLDRAW_LICENSE_KEY =
   "tldraw-2026-08-08/WyJ3dGU4bldjRyIsWyIqIl0sMTYsIjIwMjYtMDgtMDgiXQ.Xt7lTydUhMnKfHfp+g8Mrs9gtJjlB8uPyYMniFEfRfruCYdYEl9J0uZl0lMAf6o7GdDB1zXOVhWLFAipssI6Cw";
 const TLDRAW_USER_ID = "gpt-image-canvas-local-user";
+type ProviderConfigTab = "image" | "agent";
 
 function tldrawLocaleForLocale(locale: Locale): NonNullable<TLUserPreferences["locale"]> {
   return locale === "zh-CN" ? "zh-cn" : "en";
@@ -2903,6 +2904,7 @@ export function App() {
   const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
   const [isStorageDialogOpen, setIsStorageDialogOpen] = useState(false);
   const [isProviderConfigDialogOpen, setIsProviderConfigDialogOpen] = useState(false);
+  const [providerConfigInitialTab, setProviderConfigInitialTab] = useState<ProviderConfigTab>("image");
   const [isAgentSkillDialogOpen, setIsAgentSkillDialogOpen] = useState(false);
   const [storageConfig, setStorageConfig] = useState<StorageConfigResponse | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
@@ -3507,6 +3509,12 @@ export function App() {
 
   function closeProviderConfigDialog(): void {
     setIsProviderConfigDialogOpen(false);
+    setProviderConfigInitialTab("image");
+  }
+
+  function openProviderConfigDialog(tab: ProviderConfigTab = "image"): void {
+    setProviderConfigInitialTab(tab);
+    setIsProviderConfigDialogOpen(true);
   }
 
   async function startCodexLogin(): Promise<void> {
@@ -5778,7 +5786,7 @@ export function App() {
         isAiCoveMode={isAiCoveMode}
         route={route}
         onNavigate={navigateToRoute}
-        onOpenProviderConfig={() => setIsProviderConfigDialogOpen(true)}
+        onOpenProviderConfig={() => openProviderConfigDialog()}
         onPreloadGallery={preloadGalleryPage}
       />
       {route === "home" ? (
@@ -5787,7 +5795,7 @@ export function App() {
           authStatus={authStatus}
           isAuthLoading={isAuthLoading}
           isCodexStarting={codexLoginStatus === "starting"}
-          onOpenProviderConfig={() => setIsProviderConfigDialogOpen(true)}
+          onOpenProviderConfig={() => openProviderConfigDialog()}
           onOpenGallery={() => navigateToRoute("gallery")}
           onStartCodexLogin={startCodexLogin}
         />
@@ -6432,7 +6440,7 @@ export function App() {
               className="agent-model-pill"
               data-configured={isAgentConfigured}
               type="button"
-              onClick={() => setIsProviderConfigDialogOpen(true)}
+              onClick={() => openProviderConfigDialog("agent")}
             >
               <span className="agent-model-pill__icon" data-state={isAgentConfigured ? "ready" : "missing"}>
                 {isAgentConfigLoading ? (
@@ -7330,6 +7338,7 @@ export function App() {
       </main>
       {isProviderConfigDialogOpen ? (
         <ProviderConfigDialog
+          initialTab={providerConfigInitialTab}
           isAuthLoading={isAuthLoading}
           isCodexStarting={codexLoginStatus === "starting"}
           onClose={closeProviderConfigDialog}

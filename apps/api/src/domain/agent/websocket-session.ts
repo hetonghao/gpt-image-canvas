@@ -143,11 +143,12 @@ export function closeAllAgentSessions(reason = "server_shutdown"): void {
 }
 
 function createAgentSocketSession(conversationId: string | undefined, hostContext: HostContext): AgentSocketSession {
-  const contextSnapshot = getAgentConversationContext(conversationId, hostContext);
+  const resolvedConversationId = resolvedConversationSessionId(conversationId, hostContext);
+  const contextSnapshot = getAgentConversationContext(resolvedConversationId, hostContext);
   return {
     connectionId: randomUUID(),
     hostContext,
-    conversationId: normalizeConversationId(conversationId),
+    conversationId: resolvedConversationId,
     plans: new Map(),
     conversationContext: conversationContextFromSnapshot(contextSnapshot),
     pendingEvents: []
@@ -156,7 +157,30 @@ function createAgentSocketSession(conversationId: string | undefined, hostContex
 
 function normalizeConversationId(value: string | undefined): string | undefined {
   const id = value?.trim();
-  return id && /^[a-zA-Z0-9:_-]{1,120}$/u.test(id) ? id : undefined;
+  return id && /^[a-zA-Z0-9_-]{1,120}$/u.test(id) ? id : undefined;
+}
+
+function resolvedConversationSessionId(value: string | undefined, hostContext: HostContext | undefined): string | undefined {
+  const normalized = normalizeConversationId(value);
+  if (normalized) {
+    return normalized;
+  }
+
+  return legacyPublicConversationId(value, hostContext?.user.id);
+}
+
+function legacyPublicConversationId(value: string | undefined, userId: string | undefined): string | undefined {
+  if (!userId || userId === "standalone") {
+    return undefined;
+  }
+
+  const scopedPrefix = `${userId}:`;
+  const id = value?.trim();
+  if (!id?.startsWith(scopedPrefix)) {
+    return undefined;
+  }
+
+  return normalizeConversationId(id.slice(scopedPrefix.length));
 }
 
 function conversationContextFromSnapshot(snapshot: AgentConversationContextSnapshot | undefined): AgentConversationContext {
@@ -185,7 +209,7 @@ function resolveAgentSocketSession(
 
   const connectionId = requestedConnectionId?.trim();
   const runId = requestedRunId?.trim();
-  const conversationId = normalizeConversationId(requestedConversationId);
+  const conversationId = resolvedConversationSessionId(requestedConversationId, hostContext);
   if (connectionId) {
     const existingSession = sessions.get(connectionId);
     if (existingSession && existingSession.hostContext.user.id === hostContext.user.id) {

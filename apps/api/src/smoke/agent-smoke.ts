@@ -21,8 +21,14 @@ async function main(): Promise<void> {
       import("../domain/agent/websocket-session.js"),
       import("../domain/agent/conversation-store.js")
     ]);
-    const { closeAllAgentSessions, resolveImplicitAgentContextReferences } = agentSession;
-    const { getAgentConversationContext, saveAgentConversationContext } = agentConversationStore;
+    const { closeAllAgentSessions, createAgentWebSocketEvents, resolveImplicitAgentContextReferences } = agentSession;
+    const {
+      getAgentConversation,
+      getAgentConversationContext,
+      getAgentConversationSummaries,
+      saveAgentConversation,
+      saveAgentConversationContext
+    } = agentConversationStore;
 
     let server: ReturnType<typeof serve> | undefined;
     const port = await new Promise<number>((resolvePort) => {
@@ -42,7 +48,14 @@ async function main(): Promise<void> {
     try {
       smokeImplicitContextResolution(resolveImplicitAgentContextReferences);
       await smokeAgentWebSocket(port);
-      await smokeAgentConversations(app, port, { getAgentConversationContext, saveAgentConversationContext });
+      await smokeAgentConversations(app, port, {
+        getAgentConversation,
+        getAgentConversationContext,
+        getAgentConversationSummaries,
+        saveAgentConversation,
+        saveAgentConversationContext
+      });
+      smokeLegacyScopedWebSocketConversation(createAgentWebSocketEvents, saveAgentConversationContext);
       await smokeAgentConfig(app);
       await smokeAgentSkills(app);
     } finally {
@@ -179,7 +192,10 @@ async function smokeAgentConversations(
   app: RequestApp,
   port: number,
   store: {
+    getAgentConversation: typeof import("../domain/agent/conversation-store.js").getAgentConversation;
     getAgentConversationContext: typeof import("../domain/agent/conversation-store.js").getAgentConversationContext;
+    getAgentConversationSummaries: typeof import("../domain/agent/conversation-store.js").getAgentConversationSummaries;
+    saveAgentConversation: typeof import("../domain/agent/conversation-store.js").saveAgentConversation;
     saveAgentConversationContext: typeof import("../domain/agent/conversation-store.js").saveAgentConversationContext;
   }
 ): Promise<void> {
@@ -234,6 +250,65 @@ async function smokeAgentConversations(
   expect(detail.body.id === "agent-conversation-smoke", "Agent conversation detail returns requested id");
   expect(Array.isArray(detail.body.messages), "Agent conversation detail includes messages");
   expect(!JSON.stringify(detail.body).includes("data:image"), "Agent conversation detail does not expose dataUrl");
+
+  const hostContext = {
+    user: {
+      id: "user-1",
+      displayName: "Smoke User"
+    }
+  };
+  store.saveAgentConversation(
+    {
+      id: "agent-conversation-scoped-smoke",
+      title: "Scoped conversation smoke",
+      messages: [
+        {
+          id: "agent-message-scoped-user",
+          role: "user",
+          content: "Scoped message",
+          timestamp
+        }
+      ]
+    },
+    hostContext
+  );
+  const scopedSummary = store
+    .getAgentConversationSummaries(hostContext)
+    .find((conversation) => conversation.title === "Scoped conversation smoke");
+  expect(scopedSummary?.id === "agent-conversation-scoped-smoke", "Agent conversation summary exposes unscoped id");
+  expect(
+    store.getAgentConversation("agent-conversation-scoped-smoke", hostContext)?.id === "agent-conversation-scoped-smoke",
+    "Agent conversation detail resolves unscoped id"
+  );
+  expect(
+    store.getAgentConversation("user-1:agent-conversation-scoped-smoke", hostContext)?.id === "agent-conversation-scoped-smoke",
+    "Agent conversation detail tolerates already scoped id"
+  );
+  let colonIdRejected = false;
+  try {
+    store.saveAgentConversation(
+      {
+        id: "user-1:agent-conversation-scoped-smoke",
+        title: "Colon conversation should fail",
+        messages: [
+          {
+            id: "agent-message-scoped-user-colon",
+            role: "user",
+            content: "This should be rejected",
+            timestamp
+          }
+        ]
+      },
+      hostContext
+    );
+  } catch {
+    colonIdRejected = true;
+  }
+  expect(colonIdRejected, "Agent conversation save rejects new ids containing colon");
+  expect(
+    store.getAgentConversation("user-1:foo", hostContext) === undefined,
+    "Agent conversation detail does not treat arbitrary colon ids as valid new conversation ids"
+  );
 
   store.saveAgentConversationContext("agent-conversation-context-smoke", {
     previousUserText: "Make the previous image warmer.",
@@ -302,6 +377,55 @@ interface RequestApp {
 interface SecretView {
   hasSecret: boolean;
   value?: string;
+}
+
+function smokeLegacyScopedWebSocketConversation(
+  createAgentWebSocketEvents: typeof import("../domain/agent/websocket-session.js").createAgentWebSocketEvents,
+  saveAgentConversationContext: typeof import("../domain/agent/conversation-store.js").saveAgentConversationContext
+): void {
+  saveAgentConversationContext(
+    "agent-conversation-context-host-smoke",
+    {
+      previousUserText: "Restore scoped conversation context.",
+      previousOutputs: [
+        {
+          index: 1,
+          assetId: "asset-output-host-1",
+          label: "output-host-1.png",
+          width: 1024,
+          height: 1024,
+          mimeType: "image/png"
+        }
+      ]
+    },
+    {
+      user: {
+        id: "user-1",
+        displayName: "Smoke User"
+      }
+    }
+  );
+
+  const events = createAgentWebSocketEvents(undefined, undefined, "user-1:agent-conversation-context-host-smoke", {
+    user: {
+      id: "user-1",
+      displayName: "Smoke User"
+    }
+  });
+  const sent: Record<string, unknown>[] = [];
+  const fakeWs = {
+    readyState: 1,
+    send(payload: string) {
+      sent.push(JSON.parse(payload) as Record<string, unknown>);
+    }
+  } as unknown as Parameters<NonNullable<typeof events.onOpen>>[1];
+
+  events.onOpen?.({} as never, fakeWs);
+  const connected = sent[0];
+  expect(isRecord(connected), "legacy scoped WebSocket open sends connected event");
+  expectEventType(connected, "connected");
+  expect(connected.conversationId === "agent-conversation-context-host-smoke", "legacy scoped WebSocket conversationId is returned unscoped");
+  expect(connected.restoredContext === true, "legacy scoped WebSocket conversation restores context");
 }
 
 async function smokeAgentConfig(app: RequestApp): Promise<void> {

@@ -53,7 +53,7 @@ export function getAgentConversationContext(
   conversationId: string | undefined,
   hostContext?: HostContext
 ): AgentConversationContextSnapshot | undefined {
-  const id = normalizeConversationId(conversationId);
+  const id = resolvedConversationLookupId(conversationId, hostContext);
   if (!id) {
     return undefined;
   }
@@ -105,7 +105,7 @@ export function saveAgentConversation(input: {
   }
 
   return getAgentConversation(id, hostContext) ?? {
-    id: scopedConversationId(id, hostContext),
+    id,
     title,
     messages,
     createdAt,
@@ -153,16 +153,21 @@ export function saveAgentConversationContext(
 }
 
 function getAgentConversationRow(conversationId: string, hostContext?: HostContext): (typeof agentConversations.$inferSelect) | undefined {
+  const lookupId = resolvedConversationLookupId(conversationId, hostContext);
+  if (!lookupId) {
+    return undefined;
+  }
+
   return db
     .select()
     .from(agentConversations)
-    .where(and(eq(agentConversations.id, scopedConversationId(conversationId, hostContext)), eq(agentConversations.userId, hostUserId(hostContext))))
+    .where(and(eq(agentConversations.id, scopedConversationId(lookupId, hostContext)), eq(agentConversations.userId, hostUserId(hostContext))))
     .get();
 }
 
 function toAgentConversation(row: typeof agentConversations.$inferSelect): AgentConversation {
   return {
-    id: row.id,
+    id: publicConversationId(row.id, row.userId),
     title: row.title,
     messages: parseMessages(row.messagesJson),
     createdAt: row.createdAt,
@@ -173,7 +178,7 @@ function toAgentConversation(row: typeof agentConversations.$inferSelect): Agent
 function toAgentConversationSummary(row: typeof agentConversations.$inferSelect): AgentConversationSummary {
   const messages = parseMessages(row.messagesJson);
   return {
-    id: row.id,
+    id: publicConversationId(row.id, row.userId),
     title: row.title,
     messageCount: messages.length,
     lastMessagePreview: lastMessagePreview(messages),
@@ -371,7 +376,7 @@ function normalizeTitle(value: string | undefined): string | undefined {
 
 function normalizeConversationId(value: string | undefined): string | undefined {
   const id = value?.trim();
-  return id && /^[a-zA-Z0-9:_-]{1,120}$/u.test(id) ? id : undefined;
+  return id && /^[a-zA-Z0-9_-]{1,120}$/u.test(id) ? id : undefined;
 }
 
 function nowIso(): string {
@@ -413,4 +418,37 @@ function hostUserId(hostContext: HostContext | undefined): string {
 function scopedConversationId(id: string, hostContext: HostContext | undefined): string {
   const userId = hostUserId(hostContext);
   return userId === "standalone" ? id : `${userId}:${id}`;
+}
+
+function resolvedConversationLookupId(value: string | undefined, hostContext: HostContext | undefined): string | undefined {
+  const normalized = normalizeConversationId(value);
+  if (normalized) {
+    return normalized;
+  }
+
+  return legacyPublicConversationId(value, hostUserId(hostContext));
+}
+
+function publicConversationId(id: string, userId: string): string {
+  if (userId === "standalone") {
+    return id;
+  }
+
+  const scopedPrefix = `${userId}:`;
+  return id.startsWith(scopedPrefix) ? id.slice(scopedPrefix.length) : id;
+}
+
+function legacyPublicConversationId(value: string | undefined, userId: string): string | undefined {
+  if (userId === "standalone") {
+    return undefined;
+  }
+
+  const scopedPrefix = `${userId}:`;
+  const id = value?.trim();
+  if (!id?.startsWith(scopedPrefix)) {
+    return undefined;
+  }
+
+  const publicId = id.slice(scopedPrefix.length);
+  return normalizeConversationId(publicId);
 }

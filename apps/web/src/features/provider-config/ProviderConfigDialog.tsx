@@ -37,6 +37,7 @@ import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "
 import { apiFetch } from "../../shared/api/host-token";
 
 interface ProviderConfigDialogProps {
+  initialTab?: ProviderConfigTab;
   isAuthLoading: boolean;
   isCodexStarting: boolean;
   onClose: () => void;
@@ -71,26 +72,12 @@ interface DialogMessage {
   text: string;
 }
 
-const FALLBACK_IMAGE_MODELS: HostModelSummary[] = [
-  { id: "gpt-image-2" },
-  { id: "gpt-image-1.5" },
-  { id: "gpt-image-1" }
-];
-
-const FALLBACK_AGENT_MODELS: HostModelSummary[] = [
-  { id: "gpt-5.1-mini" },
-  { id: "gpt-5.4-mini" },
-  { id: "gpt-5.4" },
-  { id: "gpt-5.5" },
-  { id: "gpt-5.3-codex" }
-];
-
 const emptyLocalProviderForm: LocalProviderFormState = {
   apiKey: "",
   apiKeyId: "",
   baseUrl: "",
   model: "",
-  timeoutMs: "1200000"
+  timeoutMs: "1200"
 };
 
 const emptyAgentLlmForm: AgentLlmFormState = {
@@ -98,7 +85,7 @@ const emptyAgentLlmForm: AgentLlmFormState = {
   apiKeyId: "",
   baseUrl: "",
   model: "",
-  timeoutMs: "60000",
+  timeoutMs: "60",
   supportsVision: true
 };
 
@@ -107,6 +94,7 @@ const queryBaseUrlSeed = readQueryBaseUrlSeed();
 seedLocalProviderBaseUrlFromQuery();
 
 export function ProviderConfigDialog({
+  initialTab = "image",
   isAuthLoading,
   isCodexStarting,
   onClose,
@@ -132,7 +120,7 @@ export function ProviderConfigDialog({
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<DialogMessage | null>(null);
   const [draggingSourceId, setDraggingSourceId] = useState<ProviderSourceId | null>(null);
-  const [activeTab, setActiveTab] = useState<ProviderConfigTab>("image");
+  const [activeTab, setActiveTab] = useState<ProviderConfigTab>(initialTab);
   const isAiCoveMode = hostSession?.adapter.mode === "ai-cove";
   const gatewayBaseUrl = hostSession?.adapter.gatewayBaseUrl ?? queryBaseUrlSeed;
   const hasHostApiKeys = hostApiKeys.length > 0;
@@ -314,7 +302,7 @@ export function ProviderConfigDialog({
       apiKeyId: nextConfig.localOpenAI.apiKeyId ?? "",
       baseUrl: nextIsAiCoveMode ? context.adapter.gatewayBaseUrl : nextConfig.localOpenAI.baseUrl || queryBaseUrlSeed,
       model: nextModel,
-      timeoutMs: String(nextConfig.localOpenAI.timeoutMs)
+      timeoutMs: formatTimeoutSeconds(nextConfig.localOpenAI.timeoutMs)
     });
   }
 
@@ -328,7 +316,7 @@ export function ProviderConfigDialog({
       apiKeyId: nextConfig.apiKeyId ?? "",
       baseUrl: nextIsAiCoveMode ? context.adapter.gatewayBaseUrl : nextConfig.baseUrl || queryBaseUrlSeed,
       model: nextModel,
-      timeoutMs: String(nextConfig.timeoutMs),
+      timeoutMs: formatTimeoutSeconds(nextConfig.timeoutMs),
       supportsVision: nextSupportsVision
     });
   }
@@ -351,32 +339,34 @@ export function ProviderConfigDialog({
 
   useEffect(() => {
     if (!isAiCoveMode || !localForm.apiKeyId) {
-      setImageModels([]);
+      setImageModels(selectableCurrentModel(localForm.model, "image"));
       return;
     }
 
     const controller = new AbortController();
-    void loadHostModels(localForm.apiKeyId, setImageModels, setIsImageModelsLoading, controller.signal);
+    void loadHostModels(localForm.apiKeyId, "image", localForm.model, setImageModels, setIsImageModelsLoading, controller.signal);
     return () => {
       controller.abort();
     };
-  }, [isAiCoveMode, localForm.apiKeyId]);
+  }, [isAiCoveMode, localForm.apiKeyId, localForm.model]);
 
   useEffect(() => {
     if (!isAiCoveMode || !agentForm.apiKeyId) {
-      setAgentModels([]);
+      setAgentModels(selectableCurrentModel(agentForm.model, "agent"));
       return;
     }
 
     const controller = new AbortController();
-    void loadHostModels(agentForm.apiKeyId, setAgentModels, setIsAgentModelsLoading, controller.signal);
+    void loadHostModels(agentForm.apiKeyId, "agent", agentForm.model, setAgentModels, setIsAgentModelsLoading, controller.signal);
     return () => {
       controller.abort();
     };
-  }, [agentForm.apiKeyId, isAiCoveMode]);
+  }, [agentForm.apiKeyId, agentForm.model, isAiCoveMode]);
 
   async function loadHostModels(
     apiKeyId: string,
+    usage: ProviderConfigTab,
+    currentModelId: string,
     setModels: (models: HostModelSummary[]) => void,
     setLoading: (loading: boolean) => void,
     signal?: AbortSignal
@@ -389,22 +379,19 @@ export function ProviderConfigDialog({
         throw new Error(await readProviderConfigError(response, locale, t));
       }
 
-        const body = (await response.json()) as HostModelsResponse;
-        if (!signal?.aborted) {
-          if (body.items.length > 0) {
-            setModels(body.items);
-          } else {
-            setModels(setModels === setImageModels ? FALLBACK_IMAGE_MODELS : FALLBACK_AGENT_MODELS);
-          }
-        }
-      } catch (error) {
-        if (!signal?.aborted) {
-          setModels(setModels === setImageModels ? FALLBACK_IMAGE_MODELS : FALLBACK_AGENT_MODELS);
-        }
-      } finally {
-        if (!signal?.aborted) {
-          setLoading(false);
-        }
+      const body = (await response.json()) as HostModelsResponse;
+      if (!signal?.aborted) {
+        const filtered = body.items.filter((model) => isModelAllowedForTab(model.id, usage));
+        setModels(filtered.length > 0 ? filtered : selectableCurrentModel(currentModelId, usage));
+      }
+    } catch {
+      if (!signal?.aborted) {
+        setModels(selectableCurrentModel(currentModelId, usage));
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
   }
 
@@ -495,8 +482,8 @@ export function ProviderConfigDialog({
       return;
     }
 
-    const timeoutMs = Number.parseInt(localForm.timeoutMs, 10);
-    if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    const timeoutMs = parseTimeoutInputMs(localForm.timeoutMs);
+    if (timeoutMs === undefined) {
       setMessage({
         tone: "error",
         text: t("providerLocalTimeoutInvalid")
@@ -530,7 +517,7 @@ export function ProviderConfigDialog({
       });
       return;
     }
-    const agentTimeoutMs = Number.parseInt(agentForm.timeoutMs, 10);
+    const agentTimeoutMs = parseTimeoutInputMs(agentForm.timeoutMs);
     const agentApiKey = agentForm.apiKey.trim();
     const agentModel = agentForm.model.trim();
     if (!isAiCoveMode && shouldPersistAgentConfig && !agentApiKey && !hasSavedAgentKey) {
@@ -547,7 +534,7 @@ export function ProviderConfigDialog({
       });
       return;
     }
-    if (shouldPersistAgentConfig && (!Number.isInteger(agentTimeoutMs) || agentTimeoutMs <= 0)) {
+    if (shouldPersistAgentConfig && agentTimeoutMs === undefined) {
       setMessage({
         tone: "error",
         text: t("agentConfigTimeoutInvalid")
@@ -576,8 +563,9 @@ export function ProviderConfigDialog({
             timeoutMs
           }
     };
-    const agentBody: SaveAgentLlmConfigRequest | null = shouldPersistAgentConfig
-      ? isAiCoveMode
+    let agentBody: SaveAgentLlmConfigRequest | null = null;
+    if (shouldPersistAgentConfig && agentTimeoutMs !== undefined) {
+      agentBody = isAiCoveMode
         ? {
             apiKeyId: agentApiKeyId,
             baseUrl: gatewayBaseUrl,
@@ -592,8 +580,8 @@ export function ProviderConfigDialog({
             model: agentModel,
             timeoutMs: agentTimeoutMs,
             supportsVision: agentForm.supportsVision
-          }
-      : null;
+          };
+    }
 
     try {
       const response = await apiFetch("/api/provider-config", {
@@ -818,6 +806,7 @@ export function ProviderConfigDialog({
                           models={imageModels}
                           name="localOpenAIModel"
                           placeholder={t("providerLocalModelPlaceholder")}
+                          shouldIncludeCurrentValue={isLikelyImageModel}
                           testId="provider-local-model"
                           value={localForm.model}
                           onChange={(model) => updateLocalForm({ model })}
@@ -837,9 +826,10 @@ export function ProviderConfigDialog({
                       <input
                         className="provider-field__control"
                         data-testid="provider-local-timeout"
-                        min={1}
+                        min="0.001"
                         name="localOpenAITimeout"
                         type="number"
+                        step="0.001"
                         value={localForm.timeoutMs}
                         onChange={(event) => updateLocalForm({ timeoutMs: event.target.value })}
                       />
@@ -1052,6 +1042,7 @@ export function ProviderConfigDialog({
                           models={agentModels}
                           name="agentLlmModel"
                           placeholder={t("agentConfigModelPlaceholder")}
+                          shouldIncludeCurrentValue={isLikelyAgentLlmModel}
                           testId="provider-agent-model"
                           value={agentForm.model}
                           onChange={(model) => updateAgentForm({ model })}
@@ -1072,9 +1063,10 @@ export function ProviderConfigDialog({
                       <input
                         className="provider-field__control"
                         data-testid="provider-agent-timeout"
-                        min={1}
+                        min="0.001"
                         name="agentLlmTimeout"
                         type="number"
+                        step="0.001"
                         value={agentForm.timeoutMs}
                         onChange={(event) => updateAgentForm({ timeoutMs: event.target.value })}
                       />
@@ -1271,6 +1263,7 @@ function HostModelSelect({
   models,
   placeholder,
   name,
+  shouldIncludeCurrentValue,
   testId,
   value,
   onChange
@@ -1279,12 +1272,13 @@ function HostModelSelect({
   models: HostModelSummary[];
   placeholder?: string;
   name: string;
+  shouldIncludeCurrentValue: (modelId: string) => boolean;
   testId: string;
   value: string;
   onChange: (model: string) => void;
 }) {
   const { t } = useI18n();
-  const hasSavedUnknownModel = value && !models.some((model) => model.id === value);
+  const hasSavedUnknownModel = value && shouldIncludeCurrentValue(value) && !models.some((model) => model.id === value);
   return (
     <select
       className="provider-field__control"
@@ -1368,7 +1362,145 @@ function formatTimeout(value: number | undefined, t: Translate): string {
     return t("commonNotSet");
   }
 
-  return `${value} ms`;
+  return `${formatTimeoutSeconds(value)} s`;
+}
+
+function formatTimeoutSeconds(timeoutMs: number): string {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return "";
+  }
+
+  return stripTrailingZeros((timeoutMs / 1000).toFixed(3));
+}
+
+function parseTimeoutInputMs(value: string): number | undefined {
+  const seconds = Number(value.trim());
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return undefined;
+  }
+
+  const timeoutMs = Math.round(seconds * 1000);
+  return timeoutMs > 0 ? timeoutMs : undefined;
+}
+
+function stripTrailingZeros(value: string): string {
+  return value.replace(/(?:\.0+|(\.\d*?[1-9])0+)$/u, "$1");
+}
+
+function isModelAllowedForTab(modelId: string, tab: ProviderConfigTab): boolean {
+  return tab === "image" ? isLikelyImageModel(modelId) : isLikelyAgentLlmModel(modelId);
+}
+
+function selectableCurrentModel(modelId: string, tab: ProviderConfigTab): HostModelSummary[] {
+  const trimmed = modelId.trim();
+  return trimmed && isModelAllowedForTab(trimmed, tab) ? [{ id: trimmed }] : [];
+}
+
+function isLikelyImageModel(modelId: string): boolean {
+  const normalized = normalizeModelId(modelId);
+  if (!normalized) {
+    return false;
+  }
+
+  const canonical = canonicalModelId(normalized);
+  return (
+    canonical.startsWith("gpt-image-") ||
+    canonical.startsWith("dall-e-") ||
+    canonical.startsWith("dalle-") ||
+    canonical.startsWith("imagen-") ||
+    canonical.startsWith("flux-") ||
+    canonical.startsWith("sdxl") ||
+    canonical.startsWith("stable-diffusion-") ||
+    canonical.startsWith("stable_diffusion-") ||
+    canonical.startsWith("recraft-") ||
+    canonical.startsWith("ideogram-") ||
+    canonical.startsWith("seedream-") ||
+    canonical.startsWith("jimeng-") ||
+    canonical.startsWith("wanx-") ||
+    canonical.startsWith("kolors-") ||
+    canonical.endsWith("-image") ||
+    canonical.includes("-image-")
+  );
+}
+
+function isLikelyAgentLlmModel(modelId: string): boolean {
+  const normalized = normalizeModelId(modelId);
+  if (!normalized || isLikelyImageModel(normalized)) {
+    return false;
+  }
+
+  const canonical = canonicalModelId(normalized);
+  if (
+    [
+      "embedding",
+      "embeddings",
+      "rerank",
+      "whisper",
+      "moderation",
+      "tts",
+      "speech",
+      "transcription",
+      "audio",
+      "video"
+    ].some((token) => canonical.includes(token))
+  ) {
+    return false;
+  }
+
+  return (
+    canonical.startsWith("gpt-") ||
+    canonical.startsWith("o1") ||
+    canonical.startsWith("o3") ||
+    canonical.startsWith("o4") ||
+    canonical.startsWith("chatgpt-") ||
+    canonical.startsWith("codex-") ||
+    canonical.startsWith("claude-") ||
+    canonical.startsWith("gemini-") ||
+    canonical.startsWith("deepseek-") ||
+    canonical.startsWith("qwen") ||
+    canonical.startsWith("qwq-") ||
+    canonical.startsWith("glm-") ||
+    canonical.startsWith("chatglm_") ||
+    canonical.startsWith("moonshot-") ||
+    canonical.startsWith("kimi-") ||
+    canonical.startsWith("mistral-") ||
+    canonical.startsWith("open-mistral-") ||
+    canonical.startsWith("open-mixtral-") ||
+    canonical.startsWith("mixtral-") ||
+    canonical.startsWith("codestral-") ||
+    canonical.startsWith("llama-") ||
+    canonical.startsWith("codellama-") ||
+    canonical.startsWith("grok-") ||
+    canonical.startsWith("command-") ||
+    canonical.startsWith("c4ai-") ||
+    canonical.startsWith("yi-") ||
+    canonical.startsWith("doubao-") ||
+    canonical.startsWith("abab") ||
+    canonical.startsWith("ernie-") ||
+    canonical.startsWith("spark-") ||
+    canonical.startsWith("hunyuan-") ||
+    canonical.startsWith("sonar") ||
+    canonical.startsWith("gpt-oss-")
+  );
+}
+
+function normalizeModelId(modelId: string): string {
+  return modelId.trim().toLowerCase();
+}
+
+function canonicalModelId(modelId: string): string {
+  const normalized = normalizeModelId(modelId);
+  const segments = normalized.split("/").filter(Boolean);
+  const modelsIndex = segments.lastIndexOf("models");
+  if (modelsIndex >= 0 && modelsIndex < segments.length - 1) {
+    return segments[segments.length - 1] ?? normalized;
+  }
+
+  if (segments.length >= 2) {
+    return segments[segments.length - 1] ?? normalized;
+  }
+
+  return normalized;
 }
 
 function formatOptionalDateTime(value: string | undefined, formatDateTime: (value: string) => string, t: Translate): string {
