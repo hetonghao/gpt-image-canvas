@@ -2,6 +2,7 @@ import {
   agentModelKwargsForConfig,
   agentConfigRequiresStreamingPlanner,
   buildPlannerUserMessage,
+  createAiCoveCompatiblePlanner,
   createDirectChatPlanner,
   createGenerationPlan,
   extractReasoningFromAgentResult,
@@ -86,6 +87,7 @@ async function main(): Promise<void> {
   await smokeDirectPlannerInvalidJson();
   await smokeDirectPlannerTransportError();
   smokeAiCovePlannerCompatibility();
+  await smokeAiCovePlannerRequestBodyOmitsTemperature();
   smokeModelJobSizeCoercion();
   smokeModelArbitraryFinalJobCount();
   smokeModelArbitraryDefaultCount();
@@ -1130,6 +1132,49 @@ function smokeAiCovePlannerCompatibility(): void {
     }),
     "local ai-cove docker gateway uses streaming compatibility path"
   );
+}
+
+async function smokeAiCovePlannerRequestBodyOmitsTemperature(): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  let capturedBody: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    return new Response(
+      [
+        'data: {"choices":[{"delta":{"content":"{\\"schemaVersion\\":1}"}}]}',
+        "data: [DONE]",
+        ""
+      ].join("\n\n"),
+      {
+        status: 200,
+        headers: {
+          "content-type": "text/event-stream"
+        }
+      }
+    );
+  }) as typeof fetch;
+
+  try {
+    const planner = createAiCoveCompatiblePlanner({
+      apiKey: "test-key",
+      baseUrl: "http://host.docker.internal:8080/v1",
+      model: "gpt-5.4-mini",
+      timeoutMs: 1000
+    });
+    await planner.invoke({
+      messages: [
+        {
+          role: "user",
+          content: "Create one image."
+        }
+      ]
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  expect(capturedBody?.stream === true, "AI Cove compatible planner keeps streaming enabled");
+  expect(!("temperature" in (capturedBody ?? {})), "AI Cove compatible planner omits temperature for GPT-5 compatible routing");
 }
 
 function smokeModelJobSizeCoercion(): void {

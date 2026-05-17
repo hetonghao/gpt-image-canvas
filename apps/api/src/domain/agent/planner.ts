@@ -602,7 +602,6 @@ export function createAiCoveCompatiblePlanner(
       const body = {
         model: config.model,
         stream: true,
-        temperature: 0,
         messages: [
           {
             role: "system",
