@@ -28,7 +28,9 @@ import {
   type GalleryResponse
 } from "@gpt-image-canvas/shared";
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
+import { normalizeAssetUrl } from "../../shared/api/asset-url";
 import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
+import { apiFetch } from "../../shared/api/host-token";
 
 interface GalleryPageProps {
   onDeleted: (outputId: string) => void;
@@ -74,7 +76,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
       setError("");
 
       try {
-        const response = await fetch("/api/gallery", {
+        const response = await apiFetch("/api/gallery", {
           signal: controller.signal
         });
         if (!response.ok) {
@@ -245,7 +247,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
     setError("");
 
     try {
-      const response = await fetch("/api/gallery/export", {
+      const response = await apiFetch("/api/gallery/export", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -265,7 +267,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
       const archiveUrl = window.URL.createObjectURL(archive);
       const link = document.createElement("a");
       link.href = archiveUrl;
-      link.download = contentDispositionFileName(response.headers.get("Content-Disposition")) ?? "gpt-image-canvas-gallery.zip";
+      link.download = contentDispositionFileName(response.headers.get("Content-Disposition")) ?? "ai-cove-design-gallery.zip";
       document.body.append(link);
       link.click();
       link.remove();
@@ -308,7 +310,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
     setError("");
 
     try {
-      const response = await fetch(`/api/gallery/${encodeURIComponent(item.outputId)}`, {
+      const response = await apiFetch(`/api/gallery/${encodeURIComponent(item.outputId)}`, {
         method: "DELETE"
       });
       if (!response.ok) {
@@ -882,7 +884,7 @@ function GalleryDetailDialog({
               alt={item.prompt}
               className="gallery-modal__image"
               height={item.asset.height}
-              src={item.asset.url}
+              src={normalizeAssetUrl(item.asset.url)}
               width={item.asset.width}
             />
           </div>

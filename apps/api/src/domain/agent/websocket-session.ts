@@ -23,6 +23,7 @@ import {
 import { createGenerationPlan, type AgentPlannerConversationContext } from "./planner.js";
 import { resolvePlanningSkillLoadoutForRequest } from "./skill-store.js";
 import { getStoredAssetFile, saveReferenceImageInput } from "../generation/image-generation.js";
+import type { HostContext } from "../host/host-adapter.js";
 
 const OPEN_READY_STATE = 1;
 const AGENT_SOCKET_SERVER_HEARTBEAT_INTERVAL_MS = 10_000;
@@ -52,6 +53,7 @@ interface ActiveAgentRun {
 
 interface AgentSocketSession {
   connectionId: string;
+  hostContext: HostContext;
   conversationId?: string;
   ws?: WSContext;
   activeRun?: ActiveAgentRun;
@@ -82,8 +84,13 @@ interface MessageParseError {
 
 const sessions = new Map<string, AgentSocketSession>();
 
-export function createAgentWebSocketEvents(connectionId?: string, runId?: string, conversationId?: string): WSEvents {
-  const { resumeFailedRunId, session } = resolveAgentSocketSession(connectionId, runId, conversationId);
+export function createAgentWebSocketEvents(
+  connectionId: string | undefined,
+  runId: string | undefined,
+  conversationId: string | undefined,
+  hostContext: HostContext
+): WSEvents {
+  const { resumeFailedRunId, session } = resolveAgentSocketSession(connectionId, runId, conversationId, hostContext);
 
   return {
     onOpen(_event, ws) {
@@ -131,10 +138,11 @@ export function closeAllAgentSessions(reason = "server_shutdown"): void {
   sessions.clear();
 }
 
-function createAgentSocketSession(conversationId?: string): AgentSocketSession {
-  const contextSnapshot = getAgentConversationContext(conversationId);
+function createAgentSocketSession(conversationId: string | undefined, hostContext: HostContext): AgentSocketSession {
+  const contextSnapshot = getAgentConversationContext(conversationId, hostContext);
   return {
     connectionId: randomUUID(),
+    hostContext,
     conversationId: normalizeConversationId(conversationId),
     plans: new Map(),
     conversationContext: conversationContextFromSnapshot(contextSnapshot),
@@ -163,28 +171,35 @@ function hasConversationContext(context: AgentConversationContext): boolean {
 function resolveAgentSocketSession(
   requestedConnectionId?: string,
   requestedRunId?: string,
-  requestedConversationId?: string
+  requestedConversationId?: string,
+  hostContext?: HostContext
 ): { session: AgentSocketSession; resumeFailedRunId?: string } {
+  if (!hostContext) {
+    throw new Error("Host context is required for Agent WebSocket sessions.");
+  }
+
   const connectionId = requestedConnectionId?.trim();
   const runId = requestedRunId?.trim();
   const conversationId = normalizeConversationId(requestedConversationId);
   if (connectionId) {
     const existingSession = sessions.get(connectionId);
-    if (existingSession) {
+    if (existingSession && existingSession.hostContext.user.id === hostContext.user.id) {
       existingSession.conversationId ??= conversationId;
       return { session: existingSession };
     }
   }
 
   if (runId) {
-    const activeRunSession = [...sessions.values()].find((session) => session.activeRun?.id === runId);
+    const activeRunSession = [...sessions.values()].find(
+      (session) => session.activeRun?.id === runId && session.hostContext.user.id === hostContext.user.id
+    );
     if (activeRunSession) {
       activeRunSession.conversationId ??= conversationId;
       return { session: activeRunSession };
     }
   }
 
-  const session = createAgentSocketSession(conversationId);
+  const session = createAgentSocketSession(conversationId, hostContext);
   return {
     session,
     resumeFailedRunId: connectionId && runId ? runId : undefined
@@ -336,7 +351,7 @@ function handleAgentMessage(data: WSMessageReceive, _ws: WSContext, session: Age
   }
 
   if (AGENT_WORK_MESSAGE_TYPES.has(message.type)) {
-    handleAgentWorkMessage(message, session);
+    void handleAgentWorkMessage(message, session);
     return;
   }
 
@@ -349,8 +364,8 @@ function handleAgentMessage(data: WSMessageReceive, _ws: WSContext, session: Age
   });
 }
 
-function handleAgentWorkMessage(message: AgentClientMessage, session: AgentSocketSession): void {
-  const llmConfig = getUsableAgentLlmConfig();
+async function handleAgentWorkMessage(message: AgentClientMessage, session: AgentSocketSession): Promise<void> {
+  const llmConfig = await getUsableAgentLlmConfig(session.hostContext);
   if (!llmConfig) {
     sendSessionError(session, {
       code: "missing_agent_config",
@@ -433,7 +448,7 @@ async function handleAgentPlanMessage(
   message: Extract<AgentClientMessage, { type: "user_message" }>,
   session: AgentSocketSession,
   activeRun: ActiveAgentRun,
-  llmConfig: NonNullable<ReturnType<typeof getUsableAgentLlmConfig>>
+  llmConfig: NonNullable<Awaited<ReturnType<typeof getUsableAgentLlmConfig>>>
 ): Promise<void> {
   let result: Awaited<ReturnType<typeof createGenerationPlan>>;
   const rawClientSelectedReferences = Array.isArray(message.selectedReferences)
@@ -441,7 +456,7 @@ async function handleAgentPlanMessage(
     : [];
   let clientSelectedReferences: AgentSelectedCanvasReference[];
   try {
-    clientSelectedReferences = await persistAgentSelectedReferences(rawClientSelectedReferences);
+    clientSelectedReferences = await persistAgentSelectedReferences(rawClientSelectedReferences, session.hostContext);
   } catch (error) {
     finishAgentPlanRunWithError(
       session,
@@ -502,7 +517,7 @@ async function handleAgentPlanMessage(
       conversationContext,
       plannerOptions: message.plannerOptions,
       llmConfig,
-      skillLoadout: resolvePlanningSkillLoadoutForRequest(message.text),
+      skillLoadout: resolvePlanningSkillLoadoutForRequest(message.text, session.hostContext),
       onAssistantDelta: (delta) => {
         if (session.activeRun?.id !== activeRun.id || activeRun.cancelled) {
           return;
@@ -644,11 +659,12 @@ function contextResolvedReferenceFromOutput(output: AgentConversationOutputRefer
 }
 
 async function persistAgentSelectedReferences(
-  references: AgentSelectedCanvasReference[]
+  references: AgentSelectedCanvasReference[],
+  hostContext: HostContext
 ): Promise<AgentSelectedCanvasReference[]> {
   return Promise.all(
     references.slice(0, MAX_AGENT_SELECTED_REFERENCES).map(async (reference) => {
-      const storedAssetId = storedAssetIdForAgentReference(reference.assetId);
+      const storedAssetId = storedAssetIdForAgentReference(reference.assetId, hostContext);
       if (storedAssetId) {
         return {
           ...reference,
@@ -663,7 +679,7 @@ async function persistAgentSelectedReferences(
       const asset = await saveReferenceImageInput({
         dataUrl: reference.dataUrl,
         fileName: fileNameForSelectedReference(reference)
-      });
+      }, hostContext);
 
       return {
         ...reference,
@@ -677,9 +693,9 @@ async function persistAgentSelectedReferences(
   );
 }
 
-function storedAssetIdForAgentReference(assetId: string): string | undefined {
+function storedAssetIdForAgentReference(assetId: string, hostContext: HostContext): string | undefined {
   for (const candidate of storedAssetIdCandidates(assetId)) {
-    const stored = getStoredAssetFile(candidate);
+    const stored = getStoredAssetFile(candidate, hostContext);
     if (stored) {
       return stored.id;
     }
@@ -730,7 +746,7 @@ function storeConversationContextForSession(session: AgentSocketSession): void {
     previousUserText: session.conversationContext.previousUserText,
     previousPlan: session.conversationContext.previousPlan,
     previousOutputs: session.conversationContext.previousOutputs
-  });
+  }, session.hostContext);
 }
 
 async function handleAgentPlanExecutionMessage(
@@ -748,7 +764,8 @@ async function handleAgentPlanExecutionMessage(
       runId: activeRun.id,
       signal: activeRun.controller.signal,
       isRunActive: () => session.activeRun?.id === activeRun.id && !activeRun.cancelled,
-      sendEvent: (event) => sendAgentExecutionEvent(session, event)
+      sendEvent: (event) => sendAgentExecutionEvent(session, event),
+      hostContext: session.hostContext
     });
   } catch (error) {
     if (activeRun.controller.signal.aborted || activeRun.cancelled || session.activeRun?.id !== activeRun.id) {

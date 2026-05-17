@@ -7,14 +7,15 @@ import {
 } from "../../domain/agent/conversation-store.js";
 import { errorResponse, type ErrorResponseBody } from "../http/errors.js";
 import { readJson } from "../http/json.js";
+import { requireHostContext } from "../host-context.js";
 
 const AGENT_CONVERSATION_ROLES = new Set(["user", "assistant", "thinking", "system", "error", "question", "plan"]);
 
 export function registerAgentConversationRoutes(app: Hono): void {
-  app.get("/api/agent-conversations", (c) => c.json({ conversations: getAgentConversationSummaries() }));
+  app.get("/api/agent-conversations", (c) => c.json({ conversations: getAgentConversationSummaries(requireHostContext(c)) }));
 
   app.get("/api/agent-conversations/:id", (c) => {
-    const conversation = getAgentConversation(c.req.param("id"));
+    const conversation = getAgentConversation(c.req.param("id"), requireHostContext(c));
     if (!conversation) {
       return c.json(errorResponse("not_found", "Agent conversation not found."), 404);
     }
@@ -34,7 +35,7 @@ export function registerAgentConversationRoutes(app: Hono): void {
     }
 
     try {
-      return c.json({ conversation: saveAgentConversation({ id: c.req.param("id"), ...parsed.value }) });
+      return c.json({ conversation: saveAgentConversation({ id: c.req.param("id"), ...parsed.value }, requireHostContext(c)) });
     } catch {
       return c.json(errorResponse("invalid_agent_conversation", "Agent conversation could not be saved."), 400);
     }

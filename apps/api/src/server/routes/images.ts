@@ -10,6 +10,7 @@ import { ProviderError } from "../../infrastructure/providers/image-provider.js"
 import { errorResponse, providerErrorJson } from "../http/errors.js";
 import { readJson } from "../http/json.js";
 import { parseEditPayload, parseGeneratePayload } from "../http/validation.js";
+import { requireHostContext } from "../host-context.js";
 
 export function registerImageRoutes(app: Hono): void {
   initializeGenerationTaskManager();
@@ -26,7 +27,7 @@ export function registerImageRoutes(app: Hono): void {
     }
 
     try {
-      return c.json({ record: startTextToImageGenerationTask(parsed.value) });
+      return c.json({ record: startTextToImageGenerationTask(parsed.value, requireHostContext(c)) });
     } catch (error) {
       if (error instanceof ProviderError) {
         return providerErrorJson(c, error);
@@ -42,13 +43,14 @@ export function registerImageRoutes(app: Hono): void {
       return c.json(payload.error, 400);
     }
 
-    const parsed = parseEditPayload(payload.value);
+    const hostContext = requireHostContext(c);
+    const parsed = parseEditPayload(payload.value, hostContext);
     if (!parsed.ok) {
       return c.json(parsed.error, 400);
     }
 
     try {
-      return c.json({ record: await startReferenceImageGenerationTask(parsed.value) });
+      return c.json({ record: await startReferenceImageGenerationTask(parsed.value, hostContext) });
     } catch (error) {
       if (error instanceof ProviderError) {
         return providerErrorJson(c, error);
@@ -60,7 +62,7 @@ export function registerImageRoutes(app: Hono): void {
 
   app.get("/api/generations/:id", (c) => {
     const generationId = c.req.param("id").trim();
-    const record = generationId ? readGenerationTaskRecord(generationId) : undefined;
+    const record = generationId ? readGenerationTaskRecord(generationId, requireHostContext(c)) : undefined;
     if (!record) {
       return c.json(errorResponse("not_found", "Generation record not found."), 404);
     }
@@ -70,7 +72,7 @@ export function registerImageRoutes(app: Hono): void {
 
   app.post("/api/generations/:id/cancel", (c) => {
     const generationId = c.req.param("id").trim();
-    const record = generationId ? cancelGenerationTask(generationId) : undefined;
+    const record = generationId ? cancelGenerationTask(generationId, requireHostContext(c)) : undefined;
     if (!record) {
       return c.json(errorResponse("not_found", "Generation record not found."), 404);
     }

@@ -41,6 +41,7 @@ function isSharedMemoryOpenError(error: unknown): boolean {
 sqlite.exec(`
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'standalone',
   name TEXT NOT NULL,
   snapshot_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS projects (
 
 CREATE TABLE IF NOT EXISTS assets (
   id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'standalone',
   file_name TEXT NOT NULL,
   relative_path TEXT NOT NULL,
   mime_type TEXT NOT NULL,
@@ -70,6 +72,7 @@ CREATE TABLE IF NOT EXISTS assets (
 
 CREATE TABLE IF NOT EXISTS storage_configs (
   id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'standalone',
   provider TEXT NOT NULL,
   enabled INTEGER NOT NULL,
   secret_id TEXT,
@@ -87,8 +90,10 @@ CREATE TABLE IF NOT EXISTS storage_configs (
 
 CREATE TABLE IF NOT EXISTS provider_configs (
   id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'standalone',
   source_order_json TEXT NOT NULL,
   local_api_key TEXT,
+  local_api_key_id TEXT,
   local_base_url TEXT,
   local_model TEXT,
   local_timeout_ms INTEGER,
@@ -98,7 +103,9 @@ CREATE TABLE IF NOT EXISTS provider_configs (
 
 CREATE TABLE IF NOT EXISTS agent_llm_configs (
   id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'standalone',
   api_key TEXT,
+  api_key_id TEXT,
   base_url TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
   timeout_ms INTEGER NOT NULL DEFAULT 60000,
@@ -109,6 +116,7 @@ CREATE TABLE IF NOT EXISTS agent_llm_configs (
 
 CREATE TABLE IF NOT EXISTS agent_conversations (
   id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'standalone',
   title TEXT NOT NULL,
   messages_json TEXT NOT NULL,
   context_json TEXT NOT NULL,
@@ -118,6 +126,7 @@ CREATE TABLE IF NOT EXISTS agent_conversations (
 
 CREATE TABLE IF NOT EXISTS agent_skills (
   id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'standalone',
   slug TEXT NOT NULL,
   name TEXT NOT NULL,
   description TEXT NOT NULL,
@@ -135,6 +144,7 @@ CREATE TABLE IF NOT EXISTS agent_skills (
 
 CREATE TABLE IF NOT EXISTS codex_oauth_tokens (
   id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'standalone',
   access_token TEXT,
   refresh_token TEXT,
   id_token TEXT,
@@ -150,6 +160,7 @@ CREATE TABLE IF NOT EXISTS codex_oauth_tokens (
 
 CREATE TABLE IF NOT EXISTS generation_records (
   id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'standalone',
   mode TEXT NOT NULL,
   prompt TEXT NOT NULL,
   effective_prompt TEXT NOT NULL,
@@ -188,9 +199,29 @@ CREATE INDEX IF NOT EXISTS generation_outputs_asset_id_idx ON generation_outputs
 CREATE INDEX IF NOT EXISTS generation_reference_assets_generation_id_idx ON generation_reference_assets(generation_id);
 CREATE INDEX IF NOT EXISTS generation_reference_assets_asset_id_idx ON generation_reference_assets(asset_id);
 CREATE INDEX IF NOT EXISTS agent_conversations_updated_at_idx ON agent_conversations(updated_at);
-CREATE UNIQUE INDEX IF NOT EXISTS agent_skills_slug_idx ON agent_skills(slug);
 `);
 
+ensureUserIdColumn("projects");
+ensureUserIdColumn("assets");
+ensureUserIdColumn("storage_configs");
+ensureUserIdColumn("provider_configs");
+ensureUserIdColumn("agent_llm_configs");
+ensureUserIdColumn("agent_conversations");
+ensureUserIdColumn("agent_skills");
+ensureUserIdColumn("codex_oauth_tokens");
+ensureUserIdColumn("generation_records");
+sqlite.exec(`
+CREATE INDEX IF NOT EXISTS generation_records_user_id_idx ON generation_records(user_id);
+CREATE INDEX IF NOT EXISTS projects_user_id_idx ON projects(user_id);
+CREATE INDEX IF NOT EXISTS assets_user_id_idx ON assets(user_id);
+CREATE INDEX IF NOT EXISTS storage_configs_user_id_idx ON storage_configs(user_id);
+CREATE INDEX IF NOT EXISTS provider_configs_user_id_idx ON provider_configs(user_id);
+CREATE INDEX IF NOT EXISTS agent_llm_configs_user_id_idx ON agent_llm_configs(user_id);
+CREATE INDEX IF NOT EXISTS agent_conversations_user_id_idx ON agent_conversations(user_id);
+CREATE INDEX IF NOT EXISTS agent_skills_user_id_idx ON agent_skills(user_id);
+CREATE INDEX IF NOT EXISTS codex_oauth_tokens_user_id_idx ON codex_oauth_tokens(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS agent_skills_user_slug_idx ON agent_skills(user_id, slug);
+`);
 ensureColumn("assets", "cloud_provider", "cloud_provider TEXT");
 ensureColumn("assets", "cloud_bucket", "cloud_bucket TEXT");
 ensureColumn("assets", "cloud_region", "cloud_region TEXT");
@@ -217,10 +248,12 @@ ensureColumn("codex_oauth_tokens", "unavailable_at", "unavailable_at TEXT");
 ensureColumn("codex_oauth_tokens", "unavailable_reason", "unavailable_reason TEXT");
 ensureColumn("provider_configs", "source_order_json", "source_order_json TEXT NOT NULL DEFAULT '[\"env-openai\",\"local-openai\",\"codex\"]'");
 ensureColumn("provider_configs", "local_api_key", "local_api_key TEXT");
+ensureColumn("provider_configs", "local_api_key_id", "local_api_key_id TEXT");
 ensureColumn("provider_configs", "local_base_url", "local_base_url TEXT");
 ensureColumn("provider_configs", "local_model", "local_model TEXT");
 ensureColumn("provider_configs", "local_timeout_ms", "local_timeout_ms INTEGER");
 ensureColumn("agent_llm_configs", "api_key", "api_key TEXT");
+ensureColumn("agent_llm_configs", "api_key_id", "api_key_id TEXT");
 ensureColumn("agent_llm_configs", "base_url", "base_url TEXT NOT NULL DEFAULT ''");
 ensureColumn("agent_llm_configs", "model", "model TEXT NOT NULL DEFAULT ''");
 ensureColumn("agent_llm_configs", "timeout_ms", "timeout_ms INTEGER NOT NULL DEFAULT 60000");
@@ -255,6 +288,11 @@ function ensureColumn(tableName: string, columnName: string, definition: string)
   }
 
   sqlite.exec(`ALTER TABLE ${tableName} ADD COLUMN ${definition}`);
+}
+
+function ensureUserIdColumn(tableName: string): void {
+  ensureColumn(tableName, "user_id", "user_id TEXT NOT NULL DEFAULT 'standalone'");
+  sqlite.prepare(`UPDATE ${tableName} SET user_id = ? WHERE user_id IS NULL OR user_id = ''`).run("standalone");
 }
 
 function migrateStorageConfigRows(): void {

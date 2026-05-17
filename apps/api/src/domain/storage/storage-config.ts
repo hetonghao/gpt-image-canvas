@@ -10,6 +10,7 @@ import {
   type S3StorageAdapterConfig
 } from "../../infrastructure/storage/asset-storage.js";
 import { storageConfigs } from "../../infrastructure/schema.js";
+import type { HostContext } from "../host/host-adapter.js";
 
 const DEFAULT_COS_BUCKET = process.env.COS_DEFAULT_BUCKET?.trim() || "source-1253253332";
 const DEFAULT_COS_REGION = process.env.COS_DEFAULT_REGION?.trim() || "ap-nanjing";
@@ -39,12 +40,12 @@ export type ActiveCloudStorageConfig =
       config: S3StorageAdapterConfig;
     };
 
-export function getStorageConfig(): StorageConfigResponse {
-  return toStorageConfigResponse();
+export function getStorageConfig(hostContext?: HostContext): StorageConfigResponse {
+  return toStorageConfigResponse(hostContext);
 }
 
-export function getActiveCloudStorageConfig(): ActiveCloudStorageConfig | undefined {
-  const row = getPreferredStorageConfigRow();
+export function getActiveCloudStorageConfig(hostContext?: HostContext): ActiveCloudStorageConfig | undefined {
+  const row = getPreferredStorageConfigRow(hostContext);
   if (!row || row.enabled !== 1 || !isStorageProvider(row.provider)) {
     return undefined;
   }
@@ -58,7 +59,7 @@ export function getActiveCloudStorageConfig(): ActiveCloudStorageConfig | undefi
   return config ? { provider: "s3", config } : undefined;
 }
 
-export async function saveStorageConfig(input: SaveStorageConfigRequest): Promise<StorageConfigResponse> {
+export async function saveStorageConfig(input: SaveStorageConfigRequest, hostContext?: HostContext): Promise<StorageConfigResponse> {
   const now = new Date().toISOString();
   const provider = input.provider;
 
@@ -67,20 +68,21 @@ export async function saveStorageConfig(input: SaveStorageConfigRequest): Promis
   }
 
   if (!input.enabled) {
-    const existing = getStorageConfigRow(provider);
+    const existing = getStorageConfigRow(provider, hostContext);
     upsertStorageConfig({
-      ...defaultRowForProvider(provider, now),
+      ...defaultRowForProvider(provider, now, hostContext),
       ...existing,
-      id: provider,
+      id: scopedStorageId(provider, hostContext),
+      userId: hostUserId(hostContext),
       provider,
       enabled: 0,
       updatedAt: now
     });
-    disableOtherStorageProviders(provider, now);
-    return getStorageConfig();
+    disableOtherStorageProviders(provider, now, hostContext);
+    return getStorageConfig(hostContext);
   }
 
-  const existing = getStorageConfigRow(provider);
+  const existing = getStorageConfigRow(provider, hostContext);
   const parsed = provider === "cos" ? resolveCosConfigForSave(input, existing) : resolveS3ConfigForSave(input, existing);
 
   if (provider === "cos") {
@@ -90,18 +92,18 @@ export async function saveStorageConfig(input: SaveStorageConfigRequest): Promis
   }
 
   upsertStorageConfig({
-    ...rowForParsedConfig(provider, parsed, existing, now),
+    ...rowForParsedConfig(provider, parsed, existing, now, hostContext),
     enabled: 1
   });
-  disableOtherStorageProviders(provider, now);
+  disableOtherStorageProviders(provider, now, hostContext);
 
-  return getStorageConfig();
+  return getStorageConfig(hostContext);
 }
 
-export async function testStorageConfig(input: SaveStorageConfigRequest): Promise<StorageTestResult> {
+export async function testStorageConfig(input: SaveStorageConfigRequest, hostContext?: HostContext): Promise<StorageTestResult> {
   try {
     if (input.provider === "cos") {
-      const parsed = resolveCosConfigForSave(input, getStorageConfigRow("cos"));
+      const parsed = resolveCosConfigForSave(input, getStorageConfigRow("cos", hostContext));
       await new CosAssetStorageAdapter(parsed).testConfig();
       return {
         ok: true,
@@ -110,7 +112,7 @@ export async function testStorageConfig(input: SaveStorageConfigRequest): Promis
     }
 
     if (input.provider === "s3") {
-      const parsed = resolveS3ConfigForSave(input, getStorageConfigRow("s3"));
+      const parsed = resolveS3ConfigForSave(input, getStorageConfigRow("s3", hostContext));
       await new S3CompatibleAssetStorageAdapter(parsed).testConfig();
       return {
         ok: true,
@@ -127,12 +129,17 @@ export async function testStorageConfig(input: SaveStorageConfigRequest): Promis
   }
 }
 
-function getStorageConfigRow(provider: CloudStorageProvider): StorageConfigRow | undefined {
-  return db.select().from(storageConfigs).where(eq(storageConfigs.id, provider)).get();
+function getStorageConfigRow(provider: CloudStorageProvider, hostContext?: HostContext): StorageConfigRow | undefined {
+  return db.select().from(storageConfigs).where(eq(storageConfigs.id, scopedStorageId(provider, hostContext))).get();
 }
 
-function getPreferredStorageConfigRow(): StorageConfigRow | undefined {
-  const rows = db.select().from(storageConfigs).all().filter((row) => isStorageProvider(row.provider));
+function getPreferredStorageConfigRow(hostContext?: HostContext): StorageConfigRow | undefined {
+  const rows = db
+    .select()
+    .from(storageConfigs)
+    .where(eq(storageConfigs.userId, hostUserId(hostContext)))
+    .all()
+    .filter((row) => isStorageProvider(row.provider));
   const enabled = rows.find((row) => row.enabled === 1);
   if (enabled) {
     return enabled;
@@ -164,13 +171,13 @@ function upsertStorageConfig(row: StorageConfigRow): void {
     .run();
 }
 
-function disableOtherStorageProviders(activeProvider: CloudStorageProvider, updatedAt: string): void {
+function disableOtherStorageProviders(activeProvider: CloudStorageProvider, updatedAt: string, hostContext?: HostContext): void {
   for (const provider of STORAGE_PROVIDERS) {
     if (provider === activeProvider) {
       continue;
     }
 
-    const row = getStorageConfigRow(provider);
+    const row = getStorageConfigRow(provider, hostContext);
     if (!row || row.enabled !== 1) {
       continue;
     }
@@ -282,12 +289,14 @@ function rowForParsedConfig(
   provider: CloudStorageProvider,
   parsed: CosStorageAdapterConfig | ResolvedS3StorageAdapterConfig,
   existing: StorageConfigRow | undefined,
-  now: string
+  now: string,
+  hostContext?: HostContext
 ): StorageConfigRow {
   if (provider === "cos") {
     const config = parsed as CosStorageAdapterConfig;
     return {
-      id: provider,
+      id: scopedStorageId(provider, hostContext),
+      userId: hostUserId(hostContext),
       provider,
       enabled: 1,
       secretId: config.secretId,
@@ -306,7 +315,8 @@ function rowForParsedConfig(
 
   const config = parsed as ResolvedS3StorageAdapterConfig;
   return {
-    id: provider,
+    id: scopedStorageId(provider, hostContext),
+    userId: hostUserId(hostContext),
     provider,
     enabled: 1,
     secretId: config.accessKeyId,
@@ -323,10 +333,11 @@ function rowForParsedConfig(
   };
 }
 
-function defaultRowForProvider(provider: CloudStorageProvider, now: string): StorageConfigRow {
+function defaultRowForProvider(provider: CloudStorageProvider, now: string, hostContext?: HostContext): StorageConfigRow {
   if (provider === "cos") {
     return {
-      id: "cos",
+      id: scopedStorageId("cos", hostContext),
+      userId: hostUserId(hostContext),
       provider: "cos",
       enabled: 0,
       secretId: null,
@@ -344,7 +355,8 @@ function defaultRowForProvider(provider: CloudStorageProvider, now: string): Sto
   }
 
   return {
-    id: "s3",
+    id: scopedStorageId("s3", hostContext),
+    userId: hostUserId(hostContext),
     provider: "s3",
     enabled: 0,
     secretId: null,
@@ -361,12 +373,12 @@ function defaultRowForProvider(provider: CloudStorageProvider, now: string): Sto
   };
 }
 
-function toStorageConfigResponse(): StorageConfigResponse {
+function toStorageConfigResponse(hostContext?: HostContext): StorageConfigResponse {
   const now = new Date().toISOString();
-  const preferred = getPreferredStorageConfigRow();
+  const preferred = getPreferredStorageConfigRow(hostContext);
   const provider = isStorageProvider(preferred?.provider) ? preferred.provider : "cos";
-  const cosRow = getStorageConfigRow("cos") ?? defaultRowForProvider("cos", now);
-  const s3Row = getStorageConfigRow("s3") ?? defaultRowForProvider("s3", now);
+  const cosRow = getStorageConfigRow("cos", hostContext) ?? defaultRowForProvider("cos", now, hostContext);
+  const s3Row = getStorageConfigRow("s3", hostContext) ?? defaultRowForProvider("s3", now, hostContext);
 
   return {
     enabled: preferred?.enabled === 1,
@@ -453,4 +465,13 @@ function maskSecret(value: string): string {
   }
 
   return `${value.slice(0, 4)}${"*".repeat(Math.min(8, Math.max(4, value.length - 8)))}${value.slice(-4)}`;
+}
+
+function hostUserId(hostContext: HostContext | undefined): string {
+  return hostContext?.user.id ?? "standalone";
+}
+
+function scopedStorageId(provider: CloudStorageProvider, hostContext: HostContext | undefined): string {
+  const userId = hostUserId(hostContext);
+  return userId === "standalone" ? provider : `${userId}:${provider}`;
 }

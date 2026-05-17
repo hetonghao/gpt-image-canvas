@@ -13,6 +13,7 @@ import type {
 } from "../contracts.js";
 import { db } from "../../infrastructure/database.js";
 import { assets, generationOutputs, generationRecords, generationReferenceAssets, projects } from "../../infrastructure/schema.js";
+import type { HostContext } from "../host/host-adapter.js";
 
 export const DEFAULT_PROJECT_ID = "default";
 const DEFAULT_PROJECT_NAME = "Default Project";
@@ -38,33 +39,32 @@ function parseSnapshot(snapshotJson: string): unknown | null {
   return JSON.parse(snapshotJson) as unknown;
 }
 
-export function ensureDefaultProject(): void {
-  const existing = getDefaultProjectRow();
+export function ensureDefaultProject(hostContext?: HostContext): void {
+  const existing = getDefaultProjectRow(hostContext);
 
   if (existing) {
-    return;
-  }
-  if (defaultProjectRowExists()) {
     return;
   }
 
   const createdAt = nowIso();
   db.insert(projects)
     .values({
-      id: DEFAULT_PROJECT_ID,
+      id: scopedSingletonId(DEFAULT_PROJECT_ID, hostContext),
+      userId: hostUserId(hostContext),
       name: DEFAULT_PROJECT_NAME,
       snapshotJson: "null",
       createdAt,
       updatedAt: createdAt
     })
+    .onConflictDoNothing()
     .run();
 }
 
-export function saveProjectSnapshot(input: ProjectSnapshotInput): ProjectState {
-  ensureDefaultProject();
+export function saveProjectSnapshot(input: ProjectSnapshotInput, hostContext?: HostContext): ProjectState {
+  ensureDefaultProject(hostContext);
 
   const updatedAt = nowIso();
-  const current = getDefaultProjectRow();
+  const current = getDefaultProjectRow(hostContext);
 
   db.update(projects)
     .set({
@@ -72,23 +72,23 @@ export function saveProjectSnapshot(input: ProjectSnapshotInput): ProjectState {
       snapshotJson: input.snapshotJson,
       updatedAt
     })
-    .where(eq(projects.id, DEFAULT_PROJECT_ID))
+    .where(and(eq(projects.id, scopedSingletonId(DEFAULT_PROJECT_ID, hostContext)), eq(projects.userId, hostUserId(hostContext))))
     .run();
 
-  return getProjectState();
+  return getProjectState(hostContext);
 }
 
-export function getProjectState(): ProjectState {
-  ensureDefaultProject();
+export function getProjectState(hostContext?: HostContext): ProjectState {
+  ensureDefaultProject(hostContext);
 
-  const project = getDefaultProjectRow();
+  const project = getDefaultProjectRow(hostContext);
 
   if (!project) {
     return {
-      id: DEFAULT_PROJECT_ID,
+      id: scopedSingletonId(DEFAULT_PROJECT_ID, hostContext),
       name: DEFAULT_PROJECT_NAME,
       snapshot: null,
-      history: getGenerationHistory(),
+      history: getGenerationHistory(hostContext),
       updatedAt: nowIso()
     };
   }
@@ -97,12 +97,12 @@ export function getProjectState(): ProjectState {
     id: project.id,
     name: project.name,
     snapshot: parseSnapshot(project.snapshotJson),
-    history: getGenerationHistory(),
+    history: getGenerationHistory(hostContext),
     updatedAt: project.updatedAt
   };
 }
 
-export function getGalleryImages(): GalleryResponse {
+export function getGalleryImages(hostContext?: HostContext): GalleryResponse {
   const rows = db
     .select({
       output: generationOutputs,
@@ -112,7 +112,7 @@ export function getGalleryImages(): GalleryResponse {
     .from(generationOutputs)
     .innerJoin(generationRecords, eq(generationOutputs.generationId, generationRecords.id))
     .innerJoin(assets, eq(generationOutputs.assetId, assets.id))
-    .where(eq(generationOutputs.status, "succeeded"))
+    .where(and(eq(generationOutputs.status, "succeeded"), eq(generationRecords.userId, hostUserId(hostContext)), eq(assets.userId, hostUserId(hostContext))))
     .orderBy(desc(generationOutputs.createdAt))
     .all();
 
@@ -136,12 +136,22 @@ export function getGalleryImages(): GalleryResponse {
   };
 }
 
-export function deleteGalleryOutput(outputId: string): boolean {
+export function deleteGalleryOutput(outputId: string, hostContext?: HostContext): boolean {
+  const owned = db
+    .select({ id: generationOutputs.id })
+    .from(generationOutputs)
+    .innerJoin(generationRecords, eq(generationOutputs.generationId, generationRecords.id))
+    .where(and(eq(generationOutputs.id, outputId), eq(generationRecords.userId, hostUserId(hostContext))))
+    .get();
+  if (!owned) {
+    return false;
+  }
+
   const result = db.delete(generationOutputs).where(eq(generationOutputs.id, outputId)).run();
   return result.changes > 0;
 }
 
-export function getGalleryExportAssets(outputIds: string[]): GalleryExportAsset[] {
+export function getGalleryExportAssets(outputIds: string[], hostContext?: HostContext): GalleryExportAsset[] {
   if (outputIds.length === 0) {
     return [];
   }
@@ -154,8 +164,16 @@ export function getGalleryExportAssets(outputIds: string[]): GalleryExportAsset[
       mimeType: assets.mimeType
     })
     .from(generationOutputs)
+    .innerJoin(generationRecords, eq(generationOutputs.generationId, generationRecords.id))
     .innerJoin(assets, eq(generationOutputs.assetId, assets.id))
-    .where(and(inArray(generationOutputs.id, outputIds), eq(generationOutputs.status, "succeeded")))
+    .where(
+      and(
+        inArray(generationOutputs.id, outputIds),
+        eq(generationOutputs.status, "succeeded"),
+        eq(generationRecords.userId, hostUserId(hostContext)),
+        eq(assets.userId, hostUserId(hostContext))
+      )
+    )
     .all();
 
   const rowByOutputId = new Map(rows.map((row) => [row.outputId, row]));
@@ -165,9 +183,13 @@ export function getGalleryExportAssets(outputIds: string[]): GalleryExportAsset[
   });
 }
 
-function getDefaultProjectRow(): (typeof projects.$inferSelect) | undefined {
+function getDefaultProjectRow(hostContext?: HostContext): (typeof projects.$inferSelect) | undefined {
   try {
-    return db.select().from(projects).where(eq(projects.id, DEFAULT_PROJECT_ID)).get();
+    return db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.id, scopedSingletonId(DEFAULT_PROJECT_ID, hostContext)), eq(projects.userId, hostUserId(hostContext))))
+      .get();
   } catch (error) {
     warnOnce(
       "project-read-fallback",
@@ -177,18 +199,9 @@ function getDefaultProjectRow(): (typeof projects.$inferSelect) | undefined {
   }
 }
 
-function defaultProjectRowExists(): boolean {
+function getGenerationHistory(hostContext?: HostContext): ApiGenerationRecord[] {
   try {
-    const row = db.select({ id: projects.id }).from(projects).where(eq(projects.id, DEFAULT_PROJECT_ID)).get();
-    return Boolean(row);
-  } catch {
-    return true;
-  }
-}
-
-function getGenerationHistory(): ApiGenerationRecord[] {
-  try {
-    return readGenerationHistory();
+    return readGenerationHistory(hostContext);
   } catch (error) {
     warnOnce(
       "history-read-fallback",
@@ -217,8 +230,14 @@ function formatErrorSummary(error: unknown): string {
   return String(error);
 }
 
-function readGenerationHistory(): ApiGenerationRecord[] {
-  const records = db.select().from(generationRecords).orderBy(desc(generationRecords.createdAt)).limit(20).all();
+function readGenerationHistory(hostContext?: HostContext): ApiGenerationRecord[] {
+  const records = db
+    .select()
+    .from(generationRecords)
+    .where(eq(generationRecords.userId, hostUserId(hostContext)))
+    .orderBy(desc(generationRecords.createdAt))
+    .limit(20)
+    .all();
   if (records.length === 0) {
     return [];
   }
@@ -243,7 +262,9 @@ function readGenerationHistory(): ApiGenerationRecord[] {
 
   const assetIds = outputs.flatMap((output) => (output.assetId ? [output.assetId] : []));
   const assetRows =
-    assetIds.length > 0 ? db.select().from(assets).where(inArray(assets.id, assetIds)).all() : [];
+    assetIds.length > 0
+      ? db.select().from(assets).where(and(inArray(assets.id, assetIds), eq(assets.userId, hostUserId(hostContext)))).all()
+      : [];
   const assetById = new Map(assetRows.map((asset) => [asset.id, asset]));
 
   const outputsByGenerationId = new Map<string, typeof outputs>();
@@ -312,4 +333,13 @@ function toGeneratedAsset(asset: (typeof assets.$inferSelect) | undefined): Gene
           }
         : undefined
   };
+}
+
+function hostUserId(hostContext: HostContext | undefined): string {
+  return hostContext?.user.id ?? "standalone";
+}
+
+function scopedSingletonId(id: string, hostContext: HostContext | undefined): string {
+  const userId = hostUserId(hostContext);
+  return userId === "standalone" ? id : `${userId}:${id}`;
 }

@@ -3,9 +3,10 @@ import { getStorageConfig, saveStorageConfig, testStorageConfig } from "../../do
 import { errorResponse, errorToMessage } from "../http/errors.js";
 import { readJson } from "../http/json.js";
 import { parseStorageConfigPayload } from "../http/validation.js";
+import { requireHostContext } from "../host-context.js";
 
 export function registerStorageRoutes(app: Hono): void {
-  app.get("/api/storage/config", (c) => c.json(getStorageConfig()));
+  app.get("/api/storage/config", (c) => c.json(getStorageConfig(requireHostContext(c))));
 
   app.put("/api/storage/config", async (c) => {
     const payload = await readJson(c.req.raw);
@@ -19,7 +20,7 @@ export function registerStorageRoutes(app: Hono): void {
     }
 
     try {
-      return c.json(await saveStorageConfig(parsed.value));
+      return c.json(await saveStorageConfig(parsed.value, requireHostContext(c)));
     } catch (error) {
       return c.json(errorResponse("storage_config_error", errorToMessage(error)), 400);
     }
@@ -36,6 +37,6 @@ export function registerStorageRoutes(app: Hono): void {
       return c.json(parsed.error, 400);
     }
 
-    return c.json(await testStorageConfig(parsed.value));
+    return c.json(await testStorageConfig(parsed.value, requireHostContext(c)));
   });
 }

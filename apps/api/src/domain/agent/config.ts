@@ -2,6 +2,8 @@ import { eq } from "drizzle-orm";
 import type { AgentLlmConfigView, MaskedSecret, SaveAgentLlmConfigRequest } from "../contracts.js";
 import { db } from "../../infrastructure/database.js";
 import { agentLlmConfigs } from "../../infrastructure/schema.js";
+import { hostAdapterConfig } from "../../infrastructure/runtime.js";
+import { hostGatewayBaseUrl, hostGatewayRuntimeBaseUrl, resolveHostApiKey, type HostContext } from "../host/host-adapter.js";
 
 const ACTIVE_AGENT_LLM_CONFIG_ID = "active";
 export const DEFAULT_AGENT_LLM_TIMEOUT_MS = 60000;
@@ -16,13 +18,16 @@ export interface UsableAgentLlmConfig {
   supportsVision: boolean;
 }
 
-export function getAgentLlmConfig(): AgentLlmConfigView {
-  return toAgentLlmConfigView(getAgentLlmConfigRow());
+export function getAgentLlmConfig(hostContext?: HostContext): AgentLlmConfigView {
+  return toAgentLlmConfigView(getAgentLlmConfigRow(hostContext));
 }
 
-export function getUsableAgentLlmConfig(): UsableAgentLlmConfig | undefined {
-  const row = getAgentLlmConfigRow();
-  const apiKey = trimToUndefined(row?.apiKey);
+export async function getUsableAgentLlmConfig(hostContext?: HostContext, signal?: AbortSignal): Promise<UsableAgentLlmConfig | undefined> {
+  const row = getAgentLlmConfigRow(hostContext);
+  const apiKey =
+    hostAdapterConfig.mode === "ai-cove" && row?.apiKeyId
+      ? await resolveHostApiKey(requireHostContextForAiCove(hostContext), row.apiKeyId, signal)
+      : trimToUndefined(row?.apiKey);
   const model = trimToUndefined(row?.model);
   const timeoutMs = validTimeoutMs(row?.timeoutMs);
 
@@ -32,28 +37,41 @@ export function getUsableAgentLlmConfig(): UsableAgentLlmConfig | undefined {
 
   return {
     apiKey,
-    baseUrl: trimToUndefined(row?.baseUrl),
+    baseUrl: hostAdapterConfig.mode === "ai-cove" ? hostGatewayRuntimeBaseUrl() : trimToUndefined(row?.baseUrl),
     model,
     timeoutMs,
     supportsVision: row?.supportsVision === 1
   };
 }
 
-export function saveAgentLlmConfig(input: SaveAgentLlmConfigRequest): AgentLlmConfigView {
+export async function saveAgentLlmConfig(
+  input: SaveAgentLlmConfigRequest,
+  hostContext?: HostContext,
+  signal?: AbortSignal
+): Promise<AgentLlmConfigView> {
   const now = new Date().toISOString();
-  const existing = getAgentLlmConfigRow();
-  const apiKey = resolveApiKeyForSave(input, existing);
-  const baseUrl = input.baseUrl.trim();
+  const existing = getAgentLlmConfigRow(hostContext);
+  const apiKey = hostAdapterConfig.mode === "ai-cove" ? null : resolveApiKeyForSave(input, existing);
+  const apiKeyId = hostAdapterConfig.mode === "ai-cove" ? requiredTrimmedString(input.apiKeyId ?? existing?.apiKeyId ?? "", "Agent LLM API key") : (existing?.apiKeyId ?? null);
+  const baseUrl = hostAdapterConfig.mode === "ai-cove" ? hostGatewayRuntimeBaseUrl() : input.baseUrl.trim();
   const model = requiredTrimmedString(input.model, "Agent LLM model");
   const timeoutMs = requiredPositiveInteger(input.timeoutMs, "Agent LLM timeout");
 
-  if (!apiKey) {
+  if (hostAdapterConfig.mode !== "ai-cove" && !apiKey) {
     throw new Error("Agent LLM API key is required.");
+  }
+  if (hostAdapterConfig.mode === "ai-cove") {
+    const selectedApiKeyId = requiredTrimmedString(apiKeyId ?? "", "Agent LLM API key");
+    if (!(await resolveHostApiKey(requireHostContextForAiCove(hostContext), selectedApiKeyId, signal))) {
+      throw new Error("Selected AI Cove API key is unavailable for the current user.");
+    }
   }
 
   const row: AgentLlmConfigRow = {
-    id: ACTIVE_AGENT_LLM_CONFIG_ID,
+    id: scopedSingletonId(ACTIVE_AGENT_LLM_CONFIG_ID, hostContext),
+    userId: hostUserId(hostContext),
     apiKey,
+    apiKeyId,
     baseUrl,
     model,
     timeoutMs,
@@ -68,6 +86,7 @@ export function saveAgentLlmConfig(input: SaveAgentLlmConfigRequest): AgentLlmCo
       target: agentLlmConfigs.id,
       set: {
         apiKey: row.apiKey,
+        apiKeyId: row.apiKeyId,
         baseUrl: row.baseUrl,
         model: row.model,
         timeoutMs: row.timeoutMs,
@@ -77,11 +96,11 @@ export function saveAgentLlmConfig(input: SaveAgentLlmConfigRequest): AgentLlmCo
     })
     .run();
 
-  return getAgentLlmConfig();
+  return getAgentLlmConfig(hostContext);
 }
 
-function getAgentLlmConfigRow(): AgentLlmConfigRow | undefined {
-  return db.select().from(agentLlmConfigs).where(eq(agentLlmConfigs.id, ACTIVE_AGENT_LLM_CONFIG_ID)).get();
+function getAgentLlmConfigRow(hostContext?: HostContext): AgentLlmConfigRow | undefined {
+  return db.select().from(agentLlmConfigs).where(eq(agentLlmConfigs.id, scopedSingletonId(ACTIVE_AGENT_LLM_CONFIG_ID, hostContext))).get();
 }
 
 function toAgentLlmConfigView(row: AgentLlmConfigRow | undefined): AgentLlmConfigView {
@@ -90,9 +109,10 @@ function toAgentLlmConfigView(row: AgentLlmConfigRow | undefined): AgentLlmConfi
   const model = row?.model?.trim() ?? "";
 
   return {
-    configured: Boolean(apiKey && model),
-    apiKey: maskedSecret(apiKey),
-    baseUrl: row?.baseUrl?.trim() ?? "",
+    configured: Boolean((hostAdapterConfig.mode === "ai-cove" ? row?.apiKeyId : apiKey) && model),
+    apiKey: hostAdapterConfig.mode === "ai-cove" ? { hasSecret: Boolean(row?.apiKeyId) } : maskedSecret(apiKey),
+    apiKeyId: row?.apiKeyId ?? undefined,
+    baseUrl: hostAdapterConfig.mode === "ai-cove" ? hostGatewayBaseUrl() : (row?.baseUrl?.trim() ?? ""),
     model,
     timeoutMs,
     supportsVision: row?.supportsVision === 1,
@@ -160,4 +180,21 @@ function trimToUndefined(value: string | null | undefined): string | undefined {
 
 function validTimeoutMs(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function hostUserId(hostContext: HostContext | undefined): string {
+  return hostContext?.user.id ?? "standalone";
+}
+
+function scopedSingletonId(id: string, hostContext: HostContext | undefined): string {
+  const userId = hostUserId(hostContext);
+  return userId === "standalone" ? id : `${userId}:${id}`;
+}
+
+function requireHostContextForAiCove(hostContext: HostContext | undefined): HostContext {
+  if (!hostContext) {
+    throw new Error("Host context is required in AI Cove mode.");
+  }
+
+  return hostContext;
 }

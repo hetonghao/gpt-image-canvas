@@ -16,6 +16,7 @@ import { db } from "../../infrastructure/database.js";
 import { ProviderError } from "../../infrastructure/providers/image-provider.js";
 import { getProviderConfig } from "./provider-config.js";
 import { codexOAuthTokens } from "../../infrastructure/schema.js";
+import type { HostContext } from "../host/host-adapter.js";
 
 const CODEX_TOKEN_ROW_ID = "default";
 const DEFAULT_CODEX_ISSUER = "https://auth.openai.com";
@@ -32,9 +33,9 @@ export interface CodexAccessSession {
   expiresAt?: string;
 }
 
-export function getAuthStatus(): AuthStatusResponse {
-  const providerConfig = getProviderConfig();
-  const codex = providerConfig.sources.find((source) => source.id === "codex")?.details.codex ?? codexSessionView(getCodexTokenRow());
+export async function getAuthStatus(hostContext?: HostContext, signal?: AbortSignal): Promise<AuthStatusResponse> {
+  const providerConfig = await getProviderConfig(hostContext, signal);
+  const codex = providerConfig.sources.find((source) => source.id === "codex")?.details.codex ?? codexSessionView(getCodexTokenRow(hostContext));
   const openaiConfigured = providerConfig.sources.some(
     (source) => (source.id === "env-openai" || source.id === "local-openai") && source.available
   );
@@ -83,7 +84,8 @@ export async function pollCodexDeviceLogin(
     deviceAuthId: string;
     userCode: string;
   },
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  hostContext?: HostContext
 ): Promise<CodexDevicePollResponse> {
   const issuer = getCodexIssuer();
   const timeout = timeoutSignal(signal, authTimeoutMs());
@@ -129,30 +131,30 @@ export async function pollCodexDeviceLogin(
   }
 
   const tokens = await exchangeAuthorizationCodeForTokens(issuer, parsed.exchange.authorizationCode, parsed.exchange.codeVerifier, signal);
-  storeCodexTokens(tokens);
+  storeCodexTokens(tokens, undefined, hostContext);
 
   return {
     status: "authorized",
-    auth: getAuthStatus()
+    auth: await getAuthStatus(hostContext, signal)
   };
 }
 
-export function logoutCodex(): CodexLogoutResponse {
-  db.delete(codexOAuthTokens).where(eq(codexOAuthTokens.id, CODEX_TOKEN_ROW_ID)).run();
+export async function logoutCodex(hostContext?: HostContext, signal?: AbortSignal): Promise<CodexLogoutResponse> {
+  db.delete(codexOAuthTokens).where(eq(codexOAuthTokens.id, scopedSingletonId(CODEX_TOKEN_ROW_ID, hostContext))).run();
 
   return {
     ok: true,
-    auth: getAuthStatus()
+    auth: await getAuthStatus(hostContext, signal)
   };
 }
 
-export async function getValidCodexSession(signal?: AbortSignal): Promise<CodexAccessSession | undefined> {
-  const row = getCodexTokenRow();
+export async function getValidCodexSession(signal?: AbortSignal, hostContext?: HostContext): Promise<CodexAccessSession | undefined> {
+  const row = getCodexTokenRow(hostContext);
   if (!hasUsableTokenMaterial(row)) {
     return undefined;
   }
 
-  const sessionRow = shouldRefreshCodexToken(row) ? await refreshCodexToken(row, signal) : row;
+  const sessionRow = shouldRefreshCodexToken(row) ? await refreshCodexToken(row, signal, hostContext) : row;
   if (!hasUsableTokenMaterial(sessionRow)) {
     return undefined;
   }
@@ -164,11 +166,11 @@ export async function getValidCodexSession(signal?: AbortSignal): Promise<CodexA
   };
 }
 
-function getCodexTokenRow(): CodexTokenRow | undefined {
-  return db.select().from(codexOAuthTokens).where(eq(codexOAuthTokens.id, CODEX_TOKEN_ROW_ID)).get();
+function getCodexTokenRow(hostContext?: HostContext): CodexTokenRow | undefined {
+  return db.select().from(codexOAuthTokens).where(eq(codexOAuthTokens.id, scopedSingletonId(CODEX_TOKEN_ROW_ID, hostContext))).get();
 }
 
-function storeCodexTokens(payload: unknown, fallback?: CodexTokenRow): CodexTokenRow {
+function storeCodexTokens(payload: unknown, fallback?: CodexTokenRow, hostContext?: HostContext): CodexTokenRow {
   const now = new Date();
   const parsed = parseCodexTokenPayload(payload, {
     now,
@@ -190,7 +192,8 @@ function storeCodexTokens(payload: unknown, fallback?: CodexTokenRow): CodexToke
 
   const createdAt = fallback?.createdAt ?? now.toISOString();
   const row: CodexTokenRow = {
-    id: CODEX_TOKEN_ROW_ID,
+    id: scopedSingletonId(CODEX_TOKEN_ROW_ID, hostContext),
+    userId: hostUserId(hostContext),
     accessToken: parsed.accessToken,
     refreshToken: parsed.refreshToken,
     idToken: parsed.idToken,
@@ -226,9 +229,9 @@ function storeCodexTokens(payload: unknown, fallback?: CodexTokenRow): CodexToke
   return row;
 }
 
-async function refreshCodexToken(row: CodexTokenRow, signal?: AbortSignal): Promise<CodexTokenRow | undefined> {
+async function refreshCodexToken(row: CodexTokenRow, signal?: AbortSignal, hostContext?: HostContext): Promise<CodexTokenRow | undefined> {
   if (!row.refreshToken) {
-    markCodexSessionUnavailable("missing_refresh_token");
+    markCodexSessionUnavailable("missing_refresh_token", hostContext);
     return undefined;
   }
 
@@ -253,7 +256,7 @@ async function refreshCodexToken(row: CodexTokenRow, signal?: AbortSignal): Prom
   if (!response.ok) {
     const body = await response.text().catch(() => "");
     if (classifyCodexRefreshFailure(response.status, body) === "permanent") {
-      markCodexSessionUnavailable("refresh_rejected");
+      markCodexSessionUnavailable("refresh_rejected", hostContext);
       return undefined;
     }
 
@@ -261,7 +264,7 @@ async function refreshCodexToken(row: CodexTokenRow, signal?: AbortSignal): Prom
   }
 
   const payload = await response.json().catch(() => undefined);
-  return storeCodexTokens(payload, row);
+  return storeCodexTokens(payload, row, hostContext);
 }
 
 async function exchangeAuthorizationCodeForTokens(
@@ -332,7 +335,7 @@ async function readResponseBody(response: Response): Promise<unknown> {
   return response.text().catch(() => "");
 }
 
-function markCodexSessionUnavailable(reason: string): void {
+function markCodexSessionUnavailable(reason: string, hostContext?: HostContext): void {
   const now = new Date().toISOString();
   db.update(codexOAuthTokens)
     .set({
@@ -343,7 +346,7 @@ function markCodexSessionUnavailable(reason: string): void {
       unavailableReason: reason,
       updatedAt: now
     })
-    .where(eq(codexOAuthTokens.id, CODEX_TOKEN_ROW_ID))
+    .where(eq(codexOAuthTokens.id, scopedSingletonId(CODEX_TOKEN_ROW_ID, hostContext)))
     .run();
 }
 
@@ -436,4 +439,13 @@ function timeoutSignal(signal: AbortSignal | undefined, timeoutMs: number): { si
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
+}
+
+function hostUserId(hostContext: HostContext | undefined): string {
+  return hostContext?.user.id ?? "standalone";
+}
+
+function scopedSingletonId(id: string, hostContext: HostContext | undefined): string {
+  const userId = hostUserId(hostContext);
+  return userId === "standalone" ? id : `${userId}:${id}`;
 }

@@ -4,9 +4,10 @@ import { createZipStream, prepareZipFiles, type ZipFileInput } from "../../domai
 import { getStoredAssetFile } from "../../domain/generation/image-generation.js";
 import { deleteGalleryOutput, getGalleryExportAssets, getGalleryImages } from "../../domain/project/project-store.js";
 import { downloadFileName, errorResponse } from "../http/errors.js";
+import { requireHostContext } from "../host-context.js";
 
 export function registerGalleryRoutes(app: Hono): void {
-  app.get("/api/gallery", (c) => c.json(getGalleryImages()));
+  app.get("/api/gallery", (c) => c.json(getGalleryImages(requireHostContext(c))));
 
   app.post("/api/gallery/export", async (c) => {
     const parsed = await parseGalleryExportRequest(c.req.raw);
@@ -14,14 +15,15 @@ export function registerGalleryRoutes(app: Hono): void {
       return c.json(errorResponse(parsed.code, parsed.message), 400);
     }
 
-    const exportAssets = getGalleryExportAssets(parsed.outputIds);
+    const hostContext = requireHostContext(c);
+    const exportAssets = getGalleryExportAssets(parsed.outputIds, hostContext);
     if (exportAssets.length !== parsed.outputIds.length) {
       return c.json(errorResponse("gallery_export_not_found", "One or more Gallery images were not found."), 404);
     }
 
     const zipInputs: ZipFileInput[] = [];
     for (const [index, exportAsset] of exportAssets.entries()) {
-      const file = getStoredAssetFile(exportAsset.assetId);
+      const file = getStoredAssetFile(exportAsset.assetId, hostContext);
       if (!file) {
         return c.json(errorResponse("gallery_export_asset_unavailable", "One or more Gallery assets are unavailable."), 404);
       }
@@ -48,7 +50,7 @@ export function registerGalleryRoutes(app: Hono): void {
   });
 
   app.delete("/api/gallery/:outputId", (c) => {
-    const deleted = deleteGalleryOutput(c.req.param("outputId"));
+    const deleted = deleteGalleryOutput(c.req.param("outputId"), requireHostContext(c));
     if (!deleted) {
       return c.json(errorResponse("not_found", "Gallery image record not found."), 404);
     }

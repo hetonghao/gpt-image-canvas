@@ -417,6 +417,10 @@
   grid-template-columns: 1fr;
 }
 
+.provider-workspace--condensed {
+  grid-template-columns: 1fr;
+}
+
 .provider-workspace__main,
 .provider-workspace__side,
 .provider-source-mini-grid,
@@ -667,6 +671,24 @@
   width: auto;
 }
 
+.provider-workspace--condensed .provider-detail-card,
+.provider-workspace--agent .provider-detail-card {
+  max-width: none;
+}
+
+.provider-workspace--condensed .provider-form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.provider-workspace--condensed .provider-field--span,
+.provider-workspace--condensed .provider-toggle-field {
+  grid-column: 1 / -1;
+}
+
+.provider-field--compact {
+  grid-column: span 1;
+}
+
 .provider-detail-card__header {
   display: grid;
   min-width: 0;
@@ -867,10 +889,23 @@
   opacity: 1;
 }
 
+.provider-field__control:disabled {
+  cursor: not-allowed;
+  background: #f1ece4;
+  color: var(--muted-ink);
+}
+
 .provider-field__control:focus {
   border-color: var(--focus);
   outline: none;
   box-shadow: 0 0 0 3px var(--focus-soft);
+}
+
+.provider-field small {
+  color: var(--muted-ink);
+  font-size: 0.76rem;
+  font-weight: 650;
+  line-height: 1.45;
 }
 
 .provider-toggle-field {
@@ -918,7 +953,7 @@
 @media (min-width: 1180px) {
   .provider-config-dialog {
     width: min(68rem, calc(100vw - 3rem));
-    height: min(41rem, calc(100dvh - 1rem));
+    max-height: min(36rem, calc(100dvh - 1rem));
   }
 
   .provider-config-dialog__body {
@@ -1057,9 +1092,32 @@
     grid-template-columns: 1fr;
   }
 
+  .provider-workspace--condensed .provider-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .provider-workspace--condensed .provider-field--span,
+  .provider-workspace--condensed .provider-toggle-field {
+    grid-column: 1 / -1;
+  }
+
+  .provider-workspace--condensed .provider-field--span {
+    width: 100%;
+  }
+
+  .provider-workspace--condensed .provider-field:not(.provider-field--span),
+  .provider-field--compact {
+    grid-column: span 1;
+  }
+
   .provider-detail-card--local,
   .provider-detail-card--agent {
     min-height: 0;
+  }
+
+  .provider-workspace--condensed .provider-detail-card {
+    padding-bottom: 0.82rem;
   }
 
   .provider-config-priority,

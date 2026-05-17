@@ -10,12 +10,13 @@ import {
 import type { SaveAgentSkillRequest } from "../../domain/contracts.js";
 import { errorResponse, errorToMessage } from "../http/errors.js";
 import { readJson } from "../http/json.js";
+import { requireHostContext } from "../host-context.js";
 
 export function registerAgentSkillRoutes(app: Hono): void {
-  app.get("/api/agent-skills", (c) => c.json(listAgentSkills()));
+  app.get("/api/agent-skills", (c) => c.json(listAgentSkills(requireHostContext(c))));
 
   app.get("/api/agent-skills/:id", (c) => {
-    const skill = getAgentSkill(c.req.param("id"));
+    const skill = getAgentSkill(c.req.param("id"), requireHostContext(c));
     if (!skill) {
       return c.json(errorResponse("agent_skill_not_found", "Agent skill was not found."), 404);
     }
@@ -30,7 +31,7 @@ export function registerAgentSkillRoutes(app: Hono): void {
     }
 
     try {
-      return c.json(createAgentSkill(payload.value as SaveAgentSkillRequest), 201);
+      return c.json(createAgentSkill(payload.value as SaveAgentSkillRequest, requireHostContext(c)), 201);
     } catch (error) {
       return agentSkillErrorJson(error);
     }
@@ -43,7 +44,7 @@ export function registerAgentSkillRoutes(app: Hono): void {
     }
 
     try {
-      return c.json(saveAgentSkill(c.req.param("id"), payload.value as SaveAgentSkillRequest));
+      return c.json(saveAgentSkill(c.req.param("id"), payload.value as SaveAgentSkillRequest, requireHostContext(c)));
     } catch (error) {
       return agentSkillErrorJson(error);
     }
@@ -74,7 +75,7 @@ export function registerAgentSkillRoutes(app: Hono): void {
           fileName: file.name,
           mediaType: file.type,
           bytes
-        }),
+        }, requireHostContext(c)),
         201
       );
     } catch (error) {

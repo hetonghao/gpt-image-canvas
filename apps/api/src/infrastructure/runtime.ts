@@ -19,6 +19,27 @@ function parsePort(value: string | undefined): number {
   return parsed;
 }
 
+const hostAdapterModes = ["standalone", "ai-cove"] as const;
+export type HostAdapterMode = (typeof hostAdapterModes)[number];
+
+function parseHostAdapterMode(value: string | undefined): HostAdapterMode {
+  const normalized = value?.trim();
+  return hostAdapterModes.includes(normalized as HostAdapterMode) ? (normalized as HostAdapterMode) : "standalone";
+}
+
+function normalizeBaseUrl(value: string | undefined, fallback: string): string {
+  const raw = value?.trim() || fallback;
+  try {
+    const url = new URL(raw);
+    url.pathname = url.pathname.replace(/\/+$/u, "");
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/u, "");
+  } catch {
+    return fallback;
+  }
+}
+
 function resolveFromRepo(value: string): string {
   return isAbsolute(value) ? value : resolve(repoRoot, value);
 }
@@ -67,6 +88,12 @@ export const serverConfig = {
 export const sqliteConfig = {
   journalMode: parseSqliteJournalMode(process.env.SQLITE_JOURNAL_MODE),
   lockingMode: parseSqliteLockingMode(process.env.SQLITE_LOCKING_MODE)
+};
+
+export const hostAdapterConfig = {
+  mode: parseHostAdapterMode(process.env.HOST_ADAPTER),
+  aiCoveApiBaseUrl: normalizeBaseUrl(process.env.AI_COVE_API_BASE_URL, "http://127.0.0.1:8080"),
+  aiCovePublicBaseUrl: normalizeBaseUrl(process.env.AI_COVE_PUBLIC_BASE_URL, process.env.AI_COVE_API_BASE_URL?.trim() || "http://127.0.0.1:8080")
 };
 
 export function ensureRuntimeStorage(): void {

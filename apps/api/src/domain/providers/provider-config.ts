@@ -21,6 +21,15 @@ import {
   type OpenAIImageProviderConfig
 } from "../../infrastructure/providers/image-provider.js";
 import { codexOAuthTokens, providerConfigs } from "../../infrastructure/schema.js";
+import { hostAdapterConfig } from "../../infrastructure/runtime.js";
+import {
+  hostGatewayBaseUrl,
+  hostGatewayRuntimeBaseUrl,
+  listHostApiKeys,
+  resolveHostApiKey,
+  type HostApiKeyRecord,
+  type HostContext
+} from "../host/host-adapter.js";
 
 const ACTIVE_PROVIDER_CONFIG_ID = "active";
 const CODEX_TOKEN_ROW_ID = "default";
@@ -32,42 +41,62 @@ type CodexTokenRow = typeof codexOAuthTokens.$inferSelect;
 
 interface ResolvedLocalConfig {
   localApiKey: string | null;
+  localApiKeyId: string | null;
   localBaseUrl: string | null;
   localModel: string | null;
   localTimeoutMs: number | null;
 }
 
-export function getProviderConfig(): ProviderConfigResponse {
-  return getProviderConfigWithSeed();
+export async function getProviderConfig(hostContext?: HostContext, signal?: AbortSignal): Promise<ProviderConfigResponse> {
+  if (hostAdapterConfig.mode === "ai-cove") {
+    return getProviderConfigWithSeed(undefined, hostContext, signal);
+  }
+
+  return getProviderConfigWithSeed(undefined, hostContext);
 }
 
-export function getProviderConfigWithSeed(baseUrlSeed?: string): ProviderConfigResponse {
-  const row = getProviderConfigRowWithSeed(baseUrlSeed);
+export async function getProviderConfigWithSeed(
+  baseUrlSeed?: string,
+  hostContext?: HostContext,
+  signal?: AbortSignal
+): Promise<ProviderConfigResponse> {
+  const row = getProviderConfigRowWithSeed(baseUrlSeed, hostContext);
+  const hostApiKeys = await hostApiKeysForConfig(hostContext, signal);
   const sourceOrder = readSavedSourceOrder(row?.sourceOrderJson);
-  const sourcesById = new Map(providerSources(row).map((source) => [source.id, source]));
+  const sourcesById = new Map(providerSources(row, hostContext, hostApiKeys).map((source) => [source.id, source]));
   const sources = sourceOrder.map((sourceId) => sourcesById.get(sourceId)).filter(isDefined);
   const activeSource = sources.find((source) => source.available);
 
   return {
     sourceOrder,
     sources,
-    localOpenAI: localOpenAIConfigView(row),
+    localOpenAI: localOpenAIConfigView(row, hostApiKeys),
     activeSource: activeSource ? providerSourceSummary(activeSource) : undefined
   };
 }
 
-export function saveProviderConfig(input: SaveProviderConfigRequest): ProviderConfigResponse {
+export async function saveProviderConfig(
+  input: SaveProviderConfigRequest,
+  hostContext?: HostContext,
+  signal?: AbortSignal
+): Promise<ProviderConfigResponse> {
   if (!isProviderSourceOrder(input.sourceOrder)) {
     throw new Error("Provider source order is invalid.");
   }
 
   const now = new Date().toISOString();
-  const existing = getProviderConfigRow();
+  const existing = getProviderConfigRow(hostContext);
   const local = resolveLocalConfigForSave(input.localOpenAI, existing);
+  if (hostAdapterConfig.mode === "ai-cove" && local.localApiKeyId) {
+    await assertHostApiKeyAvailable(hostContext, local.localApiKeyId, signal);
+  }
+
   const row: ProviderConfigRow = {
-    id: ACTIVE_PROVIDER_CONFIG_ID,
+    id: scopedSingletonId(ACTIVE_PROVIDER_CONFIG_ID, hostContext),
+    userId: hostUserId(hostContext),
     sourceOrderJson: JSON.stringify(input.sourceOrder),
     localApiKey: local.localApiKey,
+    localApiKeyId: local.localApiKeyId,
     localBaseUrl: local.localBaseUrl,
     localModel: local.localModel,
     localTimeoutMs: local.localTimeoutMs,
@@ -82,6 +111,7 @@ export function saveProviderConfig(input: SaveProviderConfigRequest): ProviderCo
       set: {
         sourceOrderJson: row.sourceOrderJson,
         localApiKey: row.localApiKey,
+        localApiKeyId: row.localApiKeyId,
         localBaseUrl: row.localBaseUrl,
         localModel: row.localModel,
         localTimeoutMs: row.localTimeoutMs,
@@ -90,11 +120,11 @@ export function saveProviderConfig(input: SaveProviderConfigRequest): ProviderCo
     })
     .run();
 
-  return getProviderConfig();
+  return getProviderConfig(hostContext, signal);
 }
 
-export function getProviderSourceOrder(): ProviderSourceId[] {
-  return readSavedSourceOrder(getProviderConfigRow()?.sourceOrderJson);
+export function getProviderSourceOrder(hostContext?: HostContext): ProviderSourceId[] {
+  return readSavedSourceOrder(getProviderConfigRow(hostContext)?.sourceOrderJson);
 }
 
 export function getEnvironmentOpenAIImageProviderConfig(): OpenAIImageProviderConfig | undefined {
@@ -112,16 +142,22 @@ export function getEnvironmentOpenAIImageProviderConfig(): OpenAIImageProviderCo
   };
 }
 
-export function getLocalOpenAIImageProviderConfig(): OpenAIImageProviderConfig | undefined {
-  const row = getProviderConfigRow();
-  const apiKey = trimToUndefined(row?.localApiKey);
+export async function getLocalOpenAIImageProviderConfig(
+  hostContext?: HostContext,
+  signal?: AbortSignal
+): Promise<OpenAIImageProviderConfig | undefined> {
+  const row = getProviderConfigRow(hostContext);
+  const apiKey =
+    hostAdapterConfig.mode === "ai-cove" && row?.localApiKeyId
+      ? await resolveHostApiKey(requireHostContextForAiCove(hostContext), row.localApiKeyId, signal)
+      : trimToUndefined(row?.localApiKey);
   if (!apiKey) {
     return undefined;
   }
 
   return {
     apiKey,
-    baseURL: trimToUndefined(row?.localBaseUrl),
+    baseURL: hostAdapterConfig.mode === "ai-cove" ? hostGatewayRuntimeBaseUrl() : trimToUndefined(row?.localBaseUrl),
     model: trimToUndefined(row?.localModel) ?? IMAGE_MODEL,
     timeoutMs: validTimeoutMs(row?.localTimeoutMs) ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS
   };
@@ -135,12 +171,16 @@ export function isProviderSourceId(value: unknown): value is ProviderSourceId {
   return typeof value === "string" && (PROVIDER_SOURCE_IDS as readonly string[]).includes(value);
 }
 
-function getProviderConfigRow(): ProviderConfigRow | undefined {
-  return db.select().from(providerConfigs).where(eq(providerConfigs.id, ACTIVE_PROVIDER_CONFIG_ID)).get();
+function getProviderConfigRow(hostContext?: HostContext): ProviderConfigRow | undefined {
+  return db.select().from(providerConfigs).where(eq(providerConfigs.id, scopedSingletonId(ACTIVE_PROVIDER_CONFIG_ID, hostContext))).get();
 }
 
-function getProviderConfigRowWithSeed(baseUrlSeed?: string): ProviderConfigRow | undefined {
-  const row = getProviderConfigRow();
+function getProviderConfigRowWithSeed(baseUrlSeed?: string, hostContext?: HostContext): ProviderConfigRow | undefined {
+  const row = getProviderConfigRow(hostContext);
+  if (hostAdapterConfig.mode === "ai-cove") {
+    return row;
+  }
+
   const normalizedBaseUrlSeed = normalizeProviderBaseUrlSeed(baseUrlSeed);
   const rawLocalBaseUrl = trimToUndefined(row?.localBaseUrl);
   const currentLocalBaseUrl = normalizeProviderBaseUrlSeed(rawLocalBaseUrl);
@@ -153,8 +193,10 @@ function getProviderConfigRowWithSeed(baseUrlSeed?: string): ProviderConfigRow |
   if (!row) {
     const seededRow: ProviderConfigRow = {
       id: ACTIVE_PROVIDER_CONFIG_ID,
+      userId: hostUserId(hostContext),
       sourceOrderJson: JSON.stringify(DEFAULT_PROVIDER_SOURCE_ORDER),
       localApiKey: null,
+      localApiKeyId: null,
       localBaseUrl: normalizedBaseUrlSeed,
       localModel: null,
       localTimeoutMs: null,
@@ -162,7 +204,7 @@ function getProviderConfigRowWithSeed(baseUrlSeed?: string): ProviderConfigRow |
       updatedAt: now
     };
     db.insert(providerConfigs).values(seededRow).onConflictDoNothing().run();
-    return getProviderConfigRow();
+    return getProviderConfigRow(hostContext);
   }
 
   if (rawLocalBaseUrl && currentLocalBaseUrl === normalizedBaseUrlSeed && rawLocalBaseUrl !== currentLocalBaseUrl) {
@@ -173,12 +215,12 @@ function getProviderConfigRowWithSeed(baseUrlSeed?: string): ProviderConfigRow |
       })
       .where(
         and(
-          eq(providerConfigs.id, ACTIVE_PROVIDER_CONFIG_ID),
+          eq(providerConfigs.id, scopedSingletonId(ACTIVE_PROVIDER_CONFIG_ID, hostContext)),
           eq(providerConfigs.localBaseUrl, rawLocalBaseUrl)
         )
       )
       .run();
-    return getProviderConfigRow();
+    return getProviderConfigRow(hostContext);
   }
 
   if (currentLocalBaseUrl) {
@@ -192,12 +234,12 @@ function getProviderConfigRowWithSeed(baseUrlSeed?: string): ProviderConfigRow |
     })
     .where(
       and(
-        eq(providerConfigs.id, ACTIVE_PROVIDER_CONFIG_ID),
+      eq(providerConfigs.id, scopedSingletonId(ACTIVE_PROVIDER_CONFIG_ID, hostContext)),
         or(isNull(providerConfigs.localBaseUrl), eq(providerConfigs.localBaseUrl, ""))
       )
     )
     .run();
-  return getProviderConfigRow();
+  return getProviderConfigRow(hostContext);
 }
 
 function normalizeProviderBaseUrlSeed(value: string | null | undefined): string | undefined {
@@ -218,10 +260,17 @@ function normalizeProviderBaseUrlSeed(value: string | null | undefined): string 
   }
 }
 
-function providerSources(row: ProviderConfigRow | undefined): ProviderSourceView[] {
+function providerSources(
+  row: ProviderConfigRow | undefined,
+  hostContext: HostContext | undefined,
+  hostApiKeys: HostApiKeyRecord[] | undefined
+): ProviderSourceView[] {
   const envConfig = getEnvironmentOpenAIImageProviderConfig();
-  const localConfig = getLocalOpenAIImageProviderConfig();
-  const codex = codexSessionView(getCodexTokenRow());
+  const hasLocalConfig =
+    hostAdapterConfig.mode === "ai-cove"
+      ? Boolean(findHostApiKeyRecord(row?.localApiKeyId, hostApiKeys))
+      : Boolean(trimToUndefined(row?.localApiKey));
+  const codex = codexSessionView(getCodexTokenRow(hostContext));
 
   return [
     {
@@ -241,14 +290,14 @@ function providerSources(row: ProviderConfigRow | undefined): ProviderSourceView
       id: "local-openai",
       kind: "local",
       label: "Custom OpenAI-compatible API",
-      available: Boolean(localConfig),
-      status: localConfig ? "available" : "missing_api_key",
+      available: hasLocalConfig,
+      status: hasLocalConfig ? "available" : "missing_api_key",
       details: {
-        baseUrl: row?.localBaseUrl ?? "",
+        baseUrl: hostAdapterConfig.mode === "ai-cove" ? hostGatewayBaseUrl() : (row?.localBaseUrl ?? ""),
         model: trimToUndefined(row?.localModel) ?? IMAGE_MODEL,
         timeoutMs: validTimeoutMs(row?.localTimeoutMs) ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS
       },
-      secret: maskedSecret(row?.localApiKey)
+      secret: hostAdapterConfig.mode === "ai-cove" ? { hasSecret: Boolean(row?.localApiKeyId) } : maskedSecret(row?.localApiKey)
     },
     {
       id: "codex",
@@ -266,10 +315,12 @@ function providerSources(row: ProviderConfigRow | undefined): ProviderSourceView
   ];
 }
 
-function localOpenAIConfigView(row: ProviderConfigRow | undefined): LocalOpenAIProviderConfigView {
+function localOpenAIConfigView(row: ProviderConfigRow | undefined, hostApiKeys: HostApiKeyRecord[] | undefined): LocalOpenAIProviderConfigView {
+  const hasHostApiKey = Boolean(findHostApiKeyRecord(row?.localApiKeyId, hostApiKeys));
   return {
-    apiKey: maskedSecret(row?.localApiKey),
-    baseUrl: row?.localBaseUrl ?? "",
+    apiKey: hostAdapterConfig.mode === "ai-cove" ? { hasSecret: hasHostApiKey } : maskedSecret(row?.localApiKey),
+    apiKeyId: row?.localApiKeyId ?? undefined,
+    baseUrl: hostAdapterConfig.mode === "ai-cove" ? hostGatewayBaseUrl() : (row?.localBaseUrl ?? ""),
     model: trimToUndefined(row?.localModel) ?? IMAGE_MODEL,
     timeoutMs: validTimeoutMs(row?.localTimeoutMs) ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS
   };
@@ -301,6 +352,7 @@ function resolveLocalConfigForSave(
   if (!input) {
     return {
       localApiKey: existing?.localApiKey ?? null,
+      localApiKeyId: existing?.localApiKeyId ?? null,
       localBaseUrl: existing?.localBaseUrl ?? null,
       localModel: existing?.localModel ?? null,
       localTimeoutMs: existing?.localTimeoutMs ?? null
@@ -308,8 +360,9 @@ function resolveLocalConfigForSave(
   }
 
   return {
-    localApiKey: resolveLocalApiKey(input, existing),
-    localBaseUrl: Object.hasOwn(input, "baseUrl") ? trimToNull(input.baseUrl) : (existing?.localBaseUrl ?? null),
+    localApiKey: hostAdapterConfig.mode === "ai-cove" ? null : resolveLocalApiKey(input, existing),
+    localApiKeyId: hostAdapterConfig.mode === "ai-cove" ? (trimToNull(input.apiKeyId) ?? existing?.localApiKeyId ?? null) : (existing?.localApiKeyId ?? null),
+    localBaseUrl: hostAdapterConfig.mode === "ai-cove" ? hostGatewayRuntimeBaseUrl() : Object.hasOwn(input, "baseUrl") ? trimToNull(input.baseUrl) : (existing?.localBaseUrl ?? null),
     localModel: Object.hasOwn(input, "model") ? trimToNull(input.model) : (existing?.localModel ?? null),
     localTimeoutMs: Object.hasOwn(input, "timeoutMs")
       ? requiredPositiveInteger(input.timeoutMs, "Custom OpenAI timeout")
@@ -371,8 +424,8 @@ function parseProviderSourceOrder(value: unknown): ProviderSourceId[] | undefine
   return PROVIDER_SOURCE_IDS.every((sourceId) => unique.has(sourceId)) ? [...value] : undefined;
 }
 
-function getCodexTokenRow(): CodexTokenRow | undefined {
-  return db.select().from(codexOAuthTokens).where(eq(codexOAuthTokens.id, CODEX_TOKEN_ROW_ID)).get();
+function getCodexTokenRow(hostContext?: HostContext): CodexTokenRow | undefined {
+  return db.select().from(codexOAuthTokens).where(eq(codexOAuthTokens.id, scopedSingletonId(CODEX_TOKEN_ROW_ID, hostContext))).get();
 }
 
 function codexSessionView(row: CodexTokenRow | undefined): CodexAuthSessionView {
@@ -425,4 +478,41 @@ function validTimeoutMs(value: number | null | undefined): number | undefined {
 
 function isDefined<T>(value: T | undefined): value is T {
   return value !== undefined;
+}
+
+async function hostApiKeysForConfig(hostContext: HostContext | undefined, signal?: AbortSignal): Promise<HostApiKeyRecord[] | undefined> {
+  if (hostAdapterConfig.mode !== "ai-cove") {
+    return undefined;
+  }
+
+  return listHostApiKeys(requireHostContextForAiCove(hostContext), signal);
+}
+
+async function assertHostApiKeyAvailable(hostContext: HostContext | undefined, apiKeyId: string, signal?: AbortSignal): Promise<void> {
+  const key = await resolveHostApiKey(requireHostContextForAiCove(hostContext), apiKeyId, signal);
+  if (!key) {
+    throw new Error("Selected AI Cove API key is unavailable for the current user.");
+  }
+}
+
+function findHostApiKeyRecord(apiKeyId: string | null | undefined, hostApiKeys: HostApiKeyRecord[] | undefined): HostApiKeyRecord | undefined {
+  const id = apiKeyId?.trim();
+  return id ? hostApiKeys?.find((record) => record.summary.id === id && Boolean(record.key)) : undefined;
+}
+
+function hostUserId(hostContext: HostContext | undefined): string {
+  return hostContext?.user.id ?? "standalone";
+}
+
+function scopedSingletonId(id: string, hostContext: HostContext | undefined): string {
+  const userId = hostUserId(hostContext);
+  return userId === "standalone" ? id : `${userId}:${id}`;
+}
+
+function requireHostContextForAiCove(hostContext: HostContext | undefined): HostContext {
+  if (!hostContext) {
+    throw new Error("Host context is required in AI Cove mode.");
+  }
+
+  return hostContext;
 }

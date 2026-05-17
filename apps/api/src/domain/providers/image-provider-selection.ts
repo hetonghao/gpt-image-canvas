@@ -17,6 +17,7 @@ import {
   getProviderSourceOrder
 } from "./provider-config.js";
 import type { ProviderSourceId, RuntimeImageProvider } from "../contracts.js";
+import type { HostContext } from "../host/host-adapter.js";
 
 export interface ConfiguredImageProviderSelection {
   sourceId: ProviderSourceId;
@@ -25,8 +26,8 @@ export interface ConfiguredImageProviderSelection {
   codexSession?: CodexAccessSession;
 }
 
-export async function createConfiguredImageProvider(signal?: AbortSignal): Promise<ImageProvider> {
-  const selection = await selectConfiguredImageProviderSource(signal);
+export async function createConfiguredImageProvider(signal?: AbortSignal, hostContext?: HostContext): Promise<ImageProvider> {
+  const selection = await selectConfiguredImageProviderSource(signal, hostContext);
 
   if (selection?.openAIConfig) {
     return createOpenAIImageProvider(selection.openAIConfig);
@@ -37,7 +38,7 @@ export async function createConfiguredImageProvider(signal?: AbortSignal): Promi
       baseURL: getCodexResponsesBaseURL(),
       model: getConfiguredImageModel(),
       timeoutMs: getCodexImageProviderTimeoutMs(),
-      getSession: async (requestSignal?: AbortSignal) => selection.codexSession ?? getValidCodexSession(requestSignal)
+      getSession: async (requestSignal?: AbortSignal) => selection.codexSession ?? getValidCodexSession(requestSignal, hostContext)
     });
   }
 
@@ -49,9 +50,10 @@ export async function createConfiguredImageProvider(signal?: AbortSignal): Promi
 }
 
 export async function selectConfiguredImageProviderSource(
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  hostContext?: HostContext
 ): Promise<ConfiguredImageProviderSelection | undefined> {
-  for (const sourceId of getProviderSourceOrder()) {
+  for (const sourceId of getProviderSourceOrder(hostContext)) {
     if (sourceId === "env-openai") {
       const openAIConfig = getEnvironmentOpenAIImageProviderConfig();
       if (openAIConfig) {
@@ -65,7 +67,7 @@ export async function selectConfiguredImageProviderSource(
     }
 
     if (sourceId === "local-openai") {
-      const openAIConfig = getLocalOpenAIImageProviderConfig();
+      const openAIConfig = await getLocalOpenAIImageProviderConfig(hostContext, signal);
       if (openAIConfig) {
         return {
           sourceId,
@@ -76,7 +78,7 @@ export async function selectConfiguredImageProviderSource(
       continue;
     }
 
-    const codexSession = await getValidCodexSession(signal);
+    const codexSession = await getValidCodexSession(signal, hostContext);
     if (codexSession) {
       return {
         sourceId,

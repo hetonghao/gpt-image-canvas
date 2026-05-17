@@ -10,6 +10,7 @@ import type { MaskedSecret } from "./provider-config.js";
 export interface AgentLlmConfigView {
   configured: boolean;
   apiKey: MaskedSecret;
+  apiKeyId?: string;
   baseUrl: string;
   model: string;
   timeoutMs: number;
@@ -20,6 +21,7 @@ export interface AgentLlmConfigView {
 
 export interface SaveAgentLlmConfigRequest {
   apiKey?: string;
+  apiKeyId?: string;
   preserveApiKey?: boolean;
   baseUrl: string;
   model: string;

@@ -1123,6 +1123,13 @@ function smokeAiCovePlannerCompatibility(): void {
     }),
     "official OpenAI config does not force streaming compatibility path"
   );
+  expect(
+    agentConfigRequiresStreamingPlanner({
+      baseUrl: "http://host.docker.internal:8080/v1",
+      model: "gpt-5.4-mini"
+    }),
+    "local ai-cove docker gateway uses streaming compatibility path"
+  );
 }
 
 function smokeModelJobSizeCoercion(): void {

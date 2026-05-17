@@ -124,7 +124,9 @@ import {
   type StylePresetId
 } from "@gpt-image-canvas/shared";
 import { LOCALES, localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
+import { normalizeAssetUrl } from "../../shared/api/asset-url";
 import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
+import { apiFetch, appendHostTokenParam } from "../../shared/api/host-token";
 
 const AUTOSAVE_DEBOUNCE_MS = 1200;
 const GENERATION_POLL_INTERVAL_MS = 1500;
@@ -392,7 +394,7 @@ function conversationMessagesFromAgentChat(messages: AgentChatMessage[]): AgentC
       outputId: preview.outputId,
       planId: preview.planId,
       shapeId: preview.shapeId,
-      url: preview.url
+      url: normalizeAssetUrl(preview.url)
     }))
   }));
 }
@@ -419,7 +421,7 @@ function agentChatMessagesFromConversation(messages: AgentConversationMessage[])
           outputId: preview.outputId,
           planId: preview.planId,
           shapeId: preview.shapeId as TLShapeId | undefined,
-          url: preview.url
+          url: normalizeAssetUrl(preview.url)
         }))
       }
     ];
@@ -612,12 +614,21 @@ function imageSizeValidationMessage(reason: ImageSizeValidationReason | undefine
   }
 }
 
-function routeFromLocation(): AppRoute {
+function isAiCoveEmbeddedRuntime(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  return params.get("ui_mode") === "embedded" && Boolean(params.get("token")?.trim()) && Boolean(params.get("base_url")?.trim());
+}
+
+function routeFromLocation(defaultRoute: AppRoute = "home"): AppRoute {
   if (window.location.pathname === "/canvas") {
     return "canvas";
   }
 
-  return window.location.pathname === "/gallery" ? "gallery" : "home";
+  return window.location.pathname === "/gallery" ? "gallery" : defaultRoute;
 }
 
 function pathForRoute(route: AppRoute): string {
@@ -1060,7 +1071,7 @@ function createImageAsset(asset: GeneratedAsset): TLAsset {
     typeName: "asset",
     type: "image",
     props: {
-      src: asset.url,
+      src: normalizeAssetUrl(asset.url),
       w: asset.width,
       h: asset.height,
       name: asset.fileName,
@@ -1089,7 +1100,7 @@ function createImageShape(
       assetId,
       w: placement.width,
       h: placement.height,
-      url: asset.url,
+      url: normalizeAssetUrl(asset.url),
       playing: true,
       crop: null,
       flipX: false,
@@ -1819,7 +1830,7 @@ async function fetchAssetMetadata(assetId: string): Promise<ImageSize | undefine
     return existingRequest;
   }
 
-  const request = fetch(`/api/assets/${encodeURIComponent(assetId)}/metadata`)
+  const request = apiFetch(`/api/assets/${encodeURIComponent(assetId)}/metadata`)
     .then(async (response) => {
       if (!response.ok) {
         return undefined;
@@ -1932,7 +1943,7 @@ async function readReferenceImage(selection: ReferenceSelectionItem, signal: Abo
   let response: Response;
 
   try {
-    response = await fetch(selection.sourceUrl, { signal });
+    response = await apiFetch(selection.sourceUrl, { signal });
   } catch {
     throw new Error(t("readReferenceFailed"));
   }
@@ -1957,7 +1968,7 @@ async function readReferenceImage(selection: ReferenceSelectionItem, signal: Abo
 }
 
 async function readStoredReferenceImage(assetId: string, signal: AbortSignal, t: Translate): Promise<ReferenceImageInput> {
-  const response = await fetch(`/api/assets/${encodeURIComponent(assetId)}`, { signal });
+  const response = await apiFetch(`/api/assets/${encodeURIComponent(assetId)}`, { signal });
   if (!response.ok) {
     throw new Error(t("readStoredReferenceFailed"));
   }
@@ -1988,7 +1999,7 @@ function agentWebSocketUrl(connectionId?: string | null, runId?: string | null, 
   if (conversationId) {
     url.searchParams.set("conversationId", conversationId);
   }
-  return url.toString();
+  return appendHostTokenParam(url).toString();
 }
 
 function agentReferenceAssetId(reference: ReferenceSelectionItem, index: number): string {
@@ -2566,22 +2577,24 @@ function BrandMark({ className = "" }: { className?: string }) {
 
 function BrandName() {
   return (
-    <p className="brand-name" title="gpt-image-canvas">
-      <span className="brand-name__prefix">gpt</span>
+    <p className="brand-name" title="AI-Cove-Design">
+      <span className="brand-name__prefix">AI</span>
       <span className="brand-name__dash">-</span>
-      <span className="brand-name__image">image</span>
+      <span className="brand-name__image">Cove</span>
       <span className="brand-name__dash">-</span>
-      <span className="brand-name__canvas">canvas</span>
+      <span className="brand-name__canvas">Design</span>
     </p>
   );
 }
 
 function TopNavigation({
+  isAiCoveMode,
   onOpenProviderConfig,
   route,
   onNavigate,
   onPreloadGallery
 }: {
+  isAiCoveMode: boolean;
   onOpenProviderConfig: () => void;
   route: AppRoute;
   onNavigate: (route: AppRoute) => void;
@@ -2601,20 +2614,22 @@ function TopNavigation({
         </div>
         <div className="top-navigation__actions">
           <nav aria-label={t("navMainAria")} className="top-navigation__links">
-            <a
-              aria-current={route === "home" ? "page" : undefined}
-              className="top-navigation__link"
-              data-active={route === "home"}
-              data-testid="nav-home"
-              href="/"
-              onClick={(event) => {
-                event.preventDefault();
-                onNavigate("home");
-              }}
-            >
-              <Sparkles className="size-4" aria-hidden="true" />
-              {t("navHome")}
-            </a>
+            {isAiCoveMode ? null : (
+              <a
+                aria-current={route === "home" ? "page" : undefined}
+                className="top-navigation__link"
+                data-active={route === "home"}
+                data-testid="nav-home"
+                href="/"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onNavigate("home");
+                }}
+              >
+                <Sparkles className="size-4" aria-hidden="true" />
+                {t("navHome")}
+              </a>
+            )}
             <a
               aria-current={route === "canvas" ? "page" : undefined}
               className="top-navigation__link"
@@ -2859,7 +2874,8 @@ export function App() {
     userPreferences: tldrawUserPreferences,
     setUserPreferences: syncTldrawUserPreferences
   });
-  const [route, setRoute] = useState<AppRoute>(() => routeFromLocation());
+  const [isAiCoveMode, setIsAiCoveMode] = useState(() => isAiCoveEmbeddedRuntime());
+  const [route, setRoute] = useState<AppRoute>(() => routeFromLocation(isAiCoveEmbeddedRuntime() ? "canvas" : "home"));
   const shouldAutoOpenCanvasRef = useRef(route !== "gallery");
   const [panelTab, setPanelTab] = useState<PanelTab>("manual");
   const [generationMode, setGenerationMode] = useState<GenerationMode>("text");
@@ -2912,6 +2928,8 @@ export function App() {
   const [agentConfig, setAgentConfig] = useState<AgentLlmConfigView | null>(null);
   const [isAgentConfigLoading, setIsAgentConfigLoading] = useState(true);
   const [agentConfigError, setAgentConfigError] = useState("");
+  const [isHostSessionChecked, setIsHostSessionChecked] = useState(false);
+  const [hostSessionError, setHostSessionError] = useState("");
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
   const [currentAgentConversationId, setCurrentAgentConversationId] = useState<string | null>(null);
   const [isAgentHistoryOpen, setIsAgentHistoryOpen] = useState(false);
@@ -3020,6 +3038,7 @@ export function App() {
   const validationMessage = promptValidationMessage || dimensionValidationMessage || referenceValidationMessage;
   const shouldShowValidation = Boolean(validationMessage);
   const canGenerate = !validationMessage;
+  const isHostSessionBlocked = Boolean(hostSessionError);
   const tldrawComponents = useMemo(
     () =>
       ({
@@ -3063,7 +3082,7 @@ export function App() {
     setAgentConfigError("");
 
     try {
-      const response = await fetch("/api/agent-config", { signal });
+      const response = await apiFetch("/api/agent-config", { signal });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, locale, t));
       }
@@ -3089,7 +3108,7 @@ export function App() {
     setAuthError("");
 
     try {
-      const response = await fetch("/api/auth/status", { signal });
+      const response = await apiFetch("/api/auth/status", { signal });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, locale, t));
       }
@@ -3112,13 +3131,17 @@ export function App() {
   }, [locale, t]);
 
   const saveProjectSnapshot = useCallback(async (editor: Editor): Promise<void> => {
+    if (isHostSessionBlocked) {
+      return;
+    }
+
     const requestId = saveRequestRef.current + 1;
     saveRequestRef.current = requestId;
     setSaveStatus("saving");
     setSaveError("");
 
     try {
-      const response = await fetch("/api/project", {
+      const response = await apiFetch("/api/project", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json"
@@ -3141,7 +3164,7 @@ export function App() {
         setSaveError(t("autosaveFailed"));
       }
     }
-  }, [t]);
+  }, [isHostSessionBlocked, t]);
 
   const panelStatus = useMemo<PanelStatus | null>(() => {
     if (isGenerating) {
@@ -3198,14 +3221,14 @@ export function App() {
 
   useEffect(() => {
     const updateRoute = (): void => {
-      setRoute(routeFromLocation());
+      setRoute(routeFromLocation(isAiCoveMode ? "canvas" : "home"));
     };
 
     window.addEventListener("popstate", updateRoute);
     return () => {
       window.removeEventListener("popstate", updateRoute);
     };
-  }, []);
+  }, [isAiCoveMode]);
 
   useEffect(() => {
     return () => {
@@ -3236,16 +3259,78 @@ export function App() {
   useEffect(() => {
     const controller = new AbortController();
 
+    async function loadHostSession(): Promise<void> {
+      try {
+        const response = await apiFetch("/api/host/session", { signal: controller.signal });
+        if (!response.ok) {
+          const message = response.status === 401 ? await readErrorMessage(response, locale, t) : t("hostSessionLoadFailed");
+          setHostSessionError(message);
+          setSaveStatus("error");
+          setSaveError(message);
+          setAuthError(message);
+          setAgentConfigError(message);
+          setIsProjectLoaded(true);
+          setIsAuthLoading(false);
+          setIsAgentConfigLoading(false);
+          return;
+        }
+
+        const session = (await response.json()) as { adapter?: { mode?: string } };
+        if (!controller.signal.aborted && session.adapter?.mode === "ai-cove") {
+          setIsAiCoveMode(true);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          const message = error instanceof Error ? error.message : t("hostSessionLoadFailed");
+          setHostSessionError(message);
+          setSaveStatus("error");
+          setSaveError(message);
+          setAuthError(message);
+          setAgentConfigError(message);
+          setIsProjectLoaded(true);
+          setIsAuthLoading(false);
+          setIsAgentConfigLoading(false);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsHostSessionChecked(true);
+        }
+      }
+    }
+
+    void loadHostSession();
+
+    return () => {
+      controller.abort();
+    };
+  }, [locale, t]);
+
+  useEffect(() => {
+    if (!isHostSessionChecked || isHostSessionBlocked) {
+      return;
+    }
+
+    const controller = new AbortController();
+
     async function loadProject(): Promise<void> {
       setSaveStatus("loading");
       setSaveError("");
 
+      let hostAuthError = "";
       try {
-        const response = await fetch("/api/project", {
+        const response = await apiFetch("/api/project", {
           signal: controller.signal
         });
 
         if (!response.ok) {
+          if (response.status === 401) {
+            hostAuthError = await readErrorMessage(response, locale, t);
+            setHostSessionError(hostAuthError);
+            setAuthError(hostAuthError);
+            setAgentConfigError(hostAuthError);
+            setIsAuthLoading(false);
+            setIsAgentConfigLoading(false);
+          }
           throw new Error(`Project load failed with ${response.status}`);
         }
 
@@ -3262,7 +3347,7 @@ export function App() {
         }
 
         setSaveStatus("error");
-        setSaveError(t("projectLoadFailed"));
+        setSaveError(hostAuthError || t("projectLoadFailed"));
       } finally {
         if (!controller.signal.aborted) {
           setIsProjectLoaded(true);
@@ -3275,9 +3360,13 @@ export function App() {
     return () => {
       controller.abort();
     };
-  }, []);
+  }, [isHostSessionBlocked, isHostSessionChecked, locale, t]);
 
   useEffect(() => {
+    if (!isHostSessionChecked || isHostSessionBlocked) {
+      return;
+    }
+
     const controller = new AbortController();
 
     void loadAuthStatus(controller.signal);
@@ -3285,9 +3374,13 @@ export function App() {
     return () => {
       controller.abort();
     };
-  }, [loadAuthStatus]);
+  }, [isHostSessionBlocked, isHostSessionChecked, loadAuthStatus]);
 
   useEffect(() => {
+    if (!isHostSessionChecked || isHostSessionBlocked) {
+      return;
+    }
+
     const controller = new AbortController();
 
     void loadAgentConfig(controller.signal);
@@ -3295,7 +3388,7 @@ export function App() {
     return () => {
       controller.abort();
     };
-  }, [loadAgentConfig]);
+  }, [isHostSessionBlocked, isHostSessionChecked, loadAgentConfig]);
 
   useEffect(() => {
     const transcript = agentTranscriptRef.current;
@@ -3324,27 +3417,31 @@ export function App() {
   }, [agentMessages, currentAgentConversationId]);
 
   useEffect(() => {
-    if (isAuthLoading || !authStatus || route === "gallery") {
+    if (route === "gallery") {
+      return;
+    }
+
+    if (isAiCoveMode && route === "home") {
+      navigateToRoute("canvas", { replace: true });
+      return;
+    }
+
+    if (isAuthLoading || !authStatus) {
       return;
     }
 
     if (route === "home" && hasGenerationProvider && shouldAutoOpenCanvasRef.current) {
       shouldAutoOpenCanvasRef.current = false;
       navigateToRoute("canvas", { replace: true });
-      return;
     }
-
-    if (route === "canvas" && !hasGenerationProvider) {
-      navigateToRoute("home", { replace: true });
-    }
-  }, [authStatus, hasGenerationProvider, isAuthLoading, navigateToRoute, route]);
+  }, [authStatus, hasGenerationProvider, isAiCoveMode, isAuthLoading, navigateToRoute, route]);
 
   useEffect(() => {
     const controller = new AbortController();
 
     async function loadStorageConfig(): Promise<void> {
       try {
-        const response = await fetch("/api/storage/config", {
+        const response = await apiFetch("/api/storage/config", {
           signal: controller.signal
         });
         if (!response.ok) {
@@ -3421,7 +3518,7 @@ export function App() {
     setAuthError("");
 
     try {
-      const response = await fetch("/api/auth/codex/device/start", {
+      const response = await apiFetch("/api/auth/codex/device/start", {
         method: "POST"
       });
       if (!response.ok) {
@@ -3443,7 +3540,7 @@ export function App() {
 
   async function pollCodexLogin(device: CodexDeviceStartResponse): Promise<void> {
     try {
-      const response = await fetch("/api/auth/codex/device/poll", {
+      const response = await apiFetch("/api/auth/codex/device/poll", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -3510,7 +3607,7 @@ export function App() {
     setAuthError("");
 
     try {
-      const response = await fetch("/api/auth/codex/logout", {
+      const response = await apiFetch("/api/auth/codex/logout", {
         method: "POST"
       });
       if (!response.ok) {
@@ -3585,7 +3682,7 @@ export function App() {
     setStorageMessage("");
 
     try {
-      const response = await fetch("/api/storage/config/test", {
+      const response = await apiFetch("/api/storage/config/test", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -3622,7 +3719,7 @@ export function App() {
     setStorageMessage("");
 
     try {
-      const response = await fetch("/api/storage/config", {
+      const response = await apiFetch("/api/storage/config", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json"
@@ -3742,6 +3839,10 @@ export function App() {
 
     const removeListener = editor.store.listen(
       () => {
+        if (isHostSessionBlocked) {
+          return;
+        }
+
         window.clearTimeout(saveTimerRef.current);
         setSaveStatus((status) => (status === "pending" ? status : "pending"));
         setSaveError((error) => (error ? "" : error));
@@ -3775,7 +3876,7 @@ export function App() {
       removeReferenceStoreListener();
       removeListener();
     };
-  }, [saveProjectSnapshot, t]);
+  }, [isHostSessionBlocked, saveProjectSnapshot, t]);
 
   function selectScenePreset(nextPresetId: string): void {
     if (nextPresetId === CUSTOM_SIZE_PRESET_ID) {
@@ -3822,7 +3923,7 @@ export function App() {
   }
 
   async function fetchGenerationRecord(recordId: string, signal: AbortSignal): Promise<GenerationRecord> {
-    const response = await fetch(`/api/generations/${encodeURIComponent(recordId)}`, {
+    const response = await apiFetch(`/api/generations/${encodeURIComponent(recordId)}`, {
       signal
     });
 
@@ -4020,7 +4121,7 @@ export function App() {
         }
       }
 
-      const response = await fetch(requestMode === "reference" ? "/api/images/edit" : "/api/images/generate", {
+      const response = await apiFetch(requestMode === "reference" ? "/api/images/edit" : "/api/images/generate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -4309,7 +4410,7 @@ export function App() {
     setGenerationWarning("");
 
     try {
-      const response = await fetch(`/api/generations/${encodeURIComponent(requestId)}/cancel`, {
+      const response = await apiFetch(`/api/generations/${encodeURIComponent(requestId)}/cancel`, {
         method: "POST"
       });
 
@@ -4359,7 +4460,7 @@ export function App() {
     agentHistorySaveRequestRef.current = requestId;
 
     try {
-      const response = await fetch(`/api/agent-conversations/${encodeURIComponent(conversationId)}`, {
+      const response = await apiFetch(`/api/agent-conversations/${encodeURIComponent(conversationId)}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json"
@@ -4389,7 +4490,7 @@ export function App() {
     setAgentHistoryError("");
 
     try {
-      const response = await fetch("/api/agent-conversations", { signal });
+      const response = await apiFetch("/api/agent-conversations", { signal });
       if (!response.ok) {
         throw new Error(`Agent history load failed with ${response.status}`);
       }
@@ -4426,7 +4527,7 @@ export function App() {
     setAgentHistoryError("");
 
     try {
-      const response = await fetch(`/api/agent-conversations/${encodeURIComponent(conversationId)}`, { signal });
+      const response = await apiFetch(`/api/agent-conversations/${encodeURIComponent(conversationId)}`, { signal });
       if (!response.ok) {
         throw new Error(`Agent conversation load failed with ${response.status}`);
       }
@@ -4974,7 +5075,7 @@ export function App() {
       outputId: event.outputId,
       planId: event.planId,
       shapeId,
-      url: event.url
+      url: normalizeAssetUrl(event.url)
     };
 
     setAgentMessages((messages) => {
@@ -5672,6 +5773,7 @@ export function App() {
   return (
     <div className="app-root" data-canvas-theme={route !== "home" && isCanvasDarkMode ? "dark" : "light"}>
       <TopNavigation
+        isAiCoveMode={isAiCoveMode}
         route={route}
         onNavigate={navigateToRoute}
         onOpenProviderConfig={() => setIsProviderConfigDialogOpen(true)}
@@ -5696,7 +5798,15 @@ export function App() {
         ref={canvasShellRef}
         tabIndex={-1}
       >
-        {isProjectLoaded ? (
+        {isHostSessionBlocked ? (
+          <div className="canvas-loading-state canvas-host-session-state" role="alert">
+            <AlertTriangle className="size-5 text-amber-600" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-neutral-800">{t("hostSessionRequired")}</p>
+              <p className="mt-1 text-xs text-neutral-500">{hostSessionError}</p>
+            </div>
+          </div>
+        ) : isProjectLoaded ? (
           <Tldraw
             assets={canvasAssetStore}
             components={tldrawComponents}

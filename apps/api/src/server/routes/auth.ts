@@ -4,9 +4,10 @@ import { ProviderError } from "../../infrastructure/providers/image-provider.js"
 import { providerErrorJson } from "../http/errors.js";
 import { readJson } from "../http/json.js";
 import { parseCodexPollPayload } from "../http/validation.js";
+import { requireHostContext } from "../host-context.js";
 
 export function registerAuthRoutes(app: Hono): void {
-  app.get("/api/auth/status", (c) => c.json(getAuthStatus()));
+  app.get("/api/auth/status", async (c) => c.json(await getAuthStatus(requireHostContext(c), c.req.raw.signal)));
 
   app.post("/api/auth/codex/device/start", async (c) => {
     try {
@@ -32,7 +33,7 @@ export function registerAuthRoutes(app: Hono): void {
     }
 
     try {
-      return c.json(await pollCodexDeviceLogin(parsed.value, c.req.raw.signal));
+      return c.json(await pollCodexDeviceLogin(parsed.value, c.req.raw.signal, requireHostContext(c)));
     } catch (error) {
       if (error instanceof ProviderError) {
         return providerErrorJson(c, error);
@@ -42,5 +43,5 @@ export function registerAuthRoutes(app: Hono): void {
     }
   });
 
-  app.post("/api/auth/codex/logout", (c) => c.json(logoutCodex()));
+  app.post("/api/auth/codex/logout", async (c) => c.json(await logoutCodex(requireHostContext(c), c.req.raw.signal)));
 }

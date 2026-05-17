@@ -47,6 +47,7 @@ export interface ProviderSourceSummary {
 
 export interface LocalOpenAIProviderConfigView {
   apiKey: MaskedSecret;
+  apiKeyId?: string;
   baseUrl: string;
   model: string;
   timeoutMs: number;
@@ -61,6 +62,7 @@ export interface ProviderConfigResponse {
 
 export interface SaveLocalOpenAIProviderConfig {
   apiKey?: string;
+  apiKeyId?: string;
   preserveApiKey?: boolean;
   baseUrl?: string;
   model?: string;

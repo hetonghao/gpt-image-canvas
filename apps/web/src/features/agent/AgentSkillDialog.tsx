@@ -26,6 +26,7 @@ import type {
   SaveAgentSkillResponse
 } from "@gpt-image-canvas/shared";
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
+import { apiFetch } from "../../shared/api/host-token";
 
 interface AgentSkillDialogProps {
   onClose: () => void;
@@ -175,7 +176,7 @@ export function AgentSkillDialog({ onClose }: AgentSkillDialogProps) {
     setMessage(null);
     try {
       const body = skillRequestFromForm(form);
-      const response = await fetch(mode === "create" ? "/api/agent-skills" : `/api/agent-skills/${encodeURIComponent(form.id ?? "")}`, {
+      const response = await apiFetch(mode === "create" ? "/api/agent-skills" : `/api/agent-skills/${encodeURIComponent(form.id ?? "")}`, {
         method: mode === "create" ? "POST" : "PUT",
         headers: {
           "Content-Type": "application/json"
@@ -209,7 +210,7 @@ export function AgentSkillDialog({ onClose }: AgentSkillDialogProps) {
 
       setMessage(null);
       try {
-        const response = await fetch(`/api/agent-skills/${encodeURIComponent(skill.id)}`, {
+        const response = await apiFetch(`/api/agent-skills/${encodeURIComponent(skill.id)}`, {
           method: "PUT",
           headers: {
             "Content-Type": "application/json"
@@ -244,7 +245,7 @@ export function AgentSkillDialog({ onClose }: AgentSkillDialogProps) {
       try {
         const body = new FormData();
         body.set("file", file);
-        const response = await fetch("/api/agent-skills/import", {
+        const response = await apiFetch("/api/agent-skills/import", {
           method: "POST",
           body
         });
@@ -275,7 +276,7 @@ export function AgentSkillDialog({ onClose }: AgentSkillDialogProps) {
     setIsSaving(true);
     setMessage(null);
     try {
-      const response = await fetch(`/api/agent-skills/${encodeURIComponent(selectedSkill.id)}`, {
+      const response = await apiFetch(`/api/agent-skills/${encodeURIComponent(selectedSkill.id)}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json"
@@ -675,7 +676,7 @@ function triggerStatusLabel(skill: AgentSkillSummary, t: Translate): string {
 }
 
 async function fetchAgentSkillList(locale: Locale, t: Translate): Promise<AgentSkillSummary[]> {
-  const response = await fetch("/api/agent-skills");
+  const response = await apiFetch("/api/agent-skills");
   if (!response.ok) {
     throw new Error(await readAgentSkillError(response, locale, t));
   }
@@ -685,7 +686,7 @@ async function fetchAgentSkillList(locale: Locale, t: Translate): Promise<AgentS
 }
 
 async function fetchAgentSkillDetail(id: string, locale: Locale, t: Translate): Promise<AgentSkillDetail> {
-  const response = await fetch(`/api/agent-skills/${encodeURIComponent(id)}`);
+  const response = await apiFetch(`/api/agent-skills/${encodeURIComponent(id)}`);
   if (!response.ok) {
     throw new Error(await readAgentSkillError(response, locale, t));
   }

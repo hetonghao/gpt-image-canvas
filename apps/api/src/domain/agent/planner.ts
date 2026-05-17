@@ -520,7 +520,7 @@ export function agentConfigRequiresStreamingPlanner(
   config: Pick<UsableAgentLlmConfig, "baseUrl" | "model">
 ): boolean {
   const baseUrl = config.baseUrl?.trim().toLowerCase() ?? "";
-  return baseUrl.includes("api.ai-cove.com");
+  return baseUrl.includes("api.ai-cove.com") || baseUrl.includes("host.docker.internal:8080") || baseUrl.includes("127.0.0.1:8080");
 }
 
 function createAgentChatModel(

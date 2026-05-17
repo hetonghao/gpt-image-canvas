@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import sharp from "sharp";
 import { readStoredAsset } from "../generation/image-generation.js";
 import { runtimePaths } from "../../infrastructure/runtime.js";
+import type { HostContext } from "../host/host-adapter.js";
 
 const PREVIEW_WIDTHS = [256, 512, 1024, 2048] as const;
 const MAX_PREVIEW_WIDTH = PREVIEW_WIDTHS[PREVIEW_WIDTHS.length - 1];
@@ -56,8 +57,12 @@ export function parsePreviewWidth(value: string | undefined): PreviewWidthResult
   };
 }
 
-export async function readStoredAssetPreview(assetId: string, width: number): Promise<StoredAssetPreview | undefined> {
-  const asset = await readStoredAsset(assetId);
+export async function readStoredAssetPreview(
+  assetId: string,
+  width: number,
+  hostContext?: HostContext
+): Promise<StoredAssetPreview | undefined> {
+  const asset = await readStoredAsset(assetId, hostContext);
   if (!asset) {
     return undefined;
   }

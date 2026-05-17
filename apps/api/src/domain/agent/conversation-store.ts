@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import {
   MAX_AGENT_SELECTED_REFERENCES,
   type AgentConversation,
@@ -10,6 +10,7 @@ import {
 } from "../contracts.js";
 import { db } from "../../infrastructure/database.js";
 import { agentConversations } from "../../infrastructure/schema.js";
+import type { HostContext } from "../host/host-adapter.js";
 
 const AGENT_CONVERSATION_HISTORY_LIMIT = 20;
 const AGENT_CONVERSATION_QUERY_LIMIT = 50;
@@ -30,10 +31,11 @@ const emptyContext: AgentConversationContextSnapshot = {
   previousOutputs: []
 };
 
-export function getAgentConversationSummaries(): AgentConversationSummary[] {
+export function getAgentConversationSummaries(hostContext?: HostContext): AgentConversationSummary[] {
   return db
     .select()
     .from(agentConversations)
+    .where(eq(agentConversations.userId, hostUserId(hostContext)))
     .orderBy(desc(agentConversations.updatedAt))
     .limit(AGENT_CONVERSATION_QUERY_LIMIT)
     .all()
@@ -42,18 +44,21 @@ export function getAgentConversationSummaries(): AgentConversationSummary[] {
     .slice(0, AGENT_CONVERSATION_HISTORY_LIMIT);
 }
 
-export function getAgentConversation(conversationId: string): AgentConversation | undefined {
-  const row = getAgentConversationRow(conversationId);
+export function getAgentConversation(conversationId: string, hostContext?: HostContext): AgentConversation | undefined {
+  const row = getAgentConversationRow(conversationId, hostContext);
   return row ? toAgentConversation(row) : undefined;
 }
 
-export function getAgentConversationContext(conversationId: string | undefined): AgentConversationContextSnapshot | undefined {
+export function getAgentConversationContext(
+  conversationId: string | undefined,
+  hostContext?: HostContext
+): AgentConversationContextSnapshot | undefined {
   const id = normalizeConversationId(conversationId);
   if (!id) {
     return undefined;
   }
 
-  const row = getAgentConversationRow(id);
+  const row = getAgentConversationRow(id, hostContext);
   return row ? parseContext(row.contextJson) : undefined;
 }
 
@@ -61,13 +66,13 @@ export function saveAgentConversation(input: {
   id: string;
   title?: string;
   messages: AgentConversationMessage[];
-}): AgentConversation {
+}, hostContext?: HostContext): AgentConversation {
   const id = normalizeConversationId(input.id);
   if (!id) {
     throw new Error("Agent conversation id is required.");
   }
 
-  const existing = getAgentConversationRow(id);
+  const existing = getAgentConversationRow(id, hostContext);
   const createdAt = existing?.createdAt ?? nowIso();
   const updatedAt = nowIso();
   const messages = sanitizeMessages(input.messages);
@@ -83,12 +88,13 @@ export function saveAgentConversation(input: {
         contextJson,
         updatedAt
       })
-      .where(eq(agentConversations.id, id))
+      .where(and(eq(agentConversations.id, scopedConversationId(id, hostContext)), eq(agentConversations.userId, hostUserId(hostContext))))
       .run();
   } else {
     db.insert(agentConversations)
       .values({
-        id,
+        id: scopedConversationId(id, hostContext),
+        userId: hostUserId(hostContext),
         title,
         messagesJson,
         contextJson,
@@ -98,8 +104,8 @@ export function saveAgentConversation(input: {
       .run();
   }
 
-  return getAgentConversation(id) ?? {
-    id,
+  return getAgentConversation(id, hostContext) ?? {
+    id: scopedConversationId(id, hostContext),
     title,
     messages,
     createdAt,
@@ -109,14 +115,15 @@ export function saveAgentConversation(input: {
 
 export function saveAgentConversationContext(
   conversationId: string | undefined,
-  context: AgentConversationContextSnapshot | undefined
+  context: AgentConversationContextSnapshot | undefined,
+  hostContext?: HostContext
 ): void {
   const id = normalizeConversationId(conversationId);
   if (!id || !context) {
     return;
   }
 
-  const existing = getAgentConversationRow(id);
+  const existing = getAgentConversationRow(id, hostContext);
   const createdAt = existing?.createdAt ?? nowIso();
   const updatedAt = nowIso();
   const contextJson = JSON.stringify(sanitizeContext(context));
@@ -127,14 +134,15 @@ export function saveAgentConversationContext(
         contextJson,
         updatedAt
       })
-      .where(eq(agentConversations.id, id))
+      .where(and(eq(agentConversations.id, scopedConversationId(id, hostContext)), eq(agentConversations.userId, hostUserId(hostContext))))
       .run();
     return;
   }
 
   db.insert(agentConversations)
     .values({
-      id,
+      id: scopedConversationId(id, hostContext),
+      userId: hostUserId(hostContext),
       title: "Agent conversation",
       messagesJson: "[]",
       contextJson,
@@ -144,8 +152,12 @@ export function saveAgentConversationContext(
     .run();
 }
 
-function getAgentConversationRow(conversationId: string): (typeof agentConversations.$inferSelect) | undefined {
-  return db.select().from(agentConversations).where(eq(agentConversations.id, conversationId)).get();
+function getAgentConversationRow(conversationId: string, hostContext?: HostContext): (typeof agentConversations.$inferSelect) | undefined {
+  return db
+    .select()
+    .from(agentConversations)
+    .where(and(eq(agentConversations.id, scopedConversationId(conversationId, hostContext)), eq(agentConversations.userId, hostUserId(hostContext))))
+    .get();
 }
 
 function toAgentConversation(row: typeof agentConversations.$inferSelect): AgentConversation {
@@ -380,4 +392,13 @@ function positiveIntegerValue(value: unknown): number | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hostUserId(hostContext: HostContext | undefined): string {
+  return hostContext?.user.id ?? "standalone";
+}
+
+function scopedConversationId(id: string, hostContext: HostContext | undefined): string {
+  const userId = hostUserId(hostContext);
+  return userId === "standalone" ? id : `${userId}:${id}`;
 }

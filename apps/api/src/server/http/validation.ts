@@ -21,6 +21,7 @@ import {
   type StylePresetId
 } from "../../domain/contracts.js";
 import { getStoredAssetFile } from "../../domain/generation/image-generation.js";
+import type { HostContext } from "../../domain/host/host-adapter.js";
 import { isProviderSourceOrder } from "../../domain/providers/provider-config.js";
 import type { EditImageProviderInput, ImageProviderInput } from "../../infrastructure/providers/image-provider.js";
 import { errorResponse, type ErrorResponseBody, type ParseResult } from "./errors.js";
@@ -96,7 +97,7 @@ export function parseCodexPollPayload(input: unknown): ParseResult<{ deviceAuthI
   };
 }
 
-export function parseEditPayload(input: unknown): ParseResult<EditImageProviderInput> {
+export function parseEditPayload(input: unknown, hostContext?: HostContext): ParseResult<EditImageProviderInput> {
   const base = parseBaseImagePayload(input);
   if (!base.ok) {
     return base;
@@ -120,7 +121,7 @@ export function parseEditPayload(input: unknown): ParseResult<EditImageProviderI
   }
 
   for (const referenceAssetId of referenceAssetIds.value) {
-    if (!getStoredAssetFile(referenceAssetId)) {
+    if (!getStoredAssetFile(referenceAssetId, hostContext)) {
       return {
         ok: false,
         error: errorResponse("invalid_request", "找不到可记录的参考图像资源。")
@@ -333,6 +334,13 @@ export function parseAgentLlmConfigPayload(input: unknown): ParseResult<SaveAgen
     };
   }
 
+  if (Object.hasOwn(input, "apiKeyId") && typeof input.apiKeyId !== "string") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_agent_config", "Agent LLM API key id must be a string.")
+    };
+  }
+
   if (typeof input.baseUrl !== "string") {
     return {
       ok: false,
@@ -365,6 +373,7 @@ export function parseAgentLlmConfigPayload(input: unknown): ParseResult<SaveAgen
     ok: true,
     value: {
       apiKey: stringValue(input.apiKey),
+      apiKeyId: stringValue(input.apiKeyId),
       preserveApiKey: input.preserveApiKey === true,
       baseUrl: input.baseUrl,
       model: input.model,
@@ -454,6 +463,16 @@ function parseLocalOpenAIProviderConfig(input: unknown): ParseResult<SaveLocalOp
       };
     }
     config.apiKey = input.apiKey;
+  }
+
+  if (Object.hasOwn(input, "apiKeyId")) {
+    if (typeof input.apiKeyId !== "string") {
+      return {
+        ok: false,
+        error: errorResponse("invalid_provider_config", "Custom OpenAI API key id must be a string.")
+      };
+    }
+    config.apiKeyId = stringValue(input.apiKeyId);
   }
 
   if (Object.hasOwn(input, "baseUrl")) {

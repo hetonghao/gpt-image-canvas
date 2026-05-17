@@ -1,11 +1,12 @@
 import type { Hono } from "hono";
 import { getAgentLlmConfig, saveAgentLlmConfig } from "../../domain/agent/config.js";
+import { requireHostContext } from "../host-context.js";
 import { errorResponse, errorToMessage } from "../http/errors.js";
 import { readJson } from "../http/json.js";
 import { parseAgentLlmConfigPayload } from "../http/validation.js";
 
 export function registerAgentConfigRoutes(app: Hono): void {
-  app.get("/api/agent-config", (c) => c.json(getAgentLlmConfig()));
+  app.get("/api/agent-config", (c) => c.json(getAgentLlmConfig(requireHostContext(c))));
 
   app.put("/api/agent-config", async (c) => {
     const payload = await readJson(c.req.raw);
@@ -19,7 +20,7 @@ export function registerAgentConfigRoutes(app: Hono): void {
     }
 
     try {
-      return c.json(saveAgentLlmConfig(parsed.value));
+      return c.json(await saveAgentLlmConfig(parsed.value, requireHostContext(c), c.req.raw.signal));
     } catch (error) {
       return c.json(errorResponse("agent_config_error", errorToMessage(error)), 400);
     }

@@ -2,9 +2,10 @@ import type { Hono } from "hono";
 import { getProjectState, saveProjectSnapshot } from "../../domain/project/project-store.js";
 import { readJson } from "../http/json.js";
 import { logProjectSaveRejected, parseProjectPayload } from "../http/validation.js";
+import { requireHostContext } from "../host-context.js";
 
 export function registerProjectRoutes(app: Hono): void {
-  app.get("/api/project", (c) => c.json(getProjectState()));
+  app.get("/api/project", (c) => c.json(getProjectState(requireHostContext(c))));
 
   app.put("/api/project", async (c) => {
     const payload = await readJson(c.req.raw);
@@ -19,6 +20,6 @@ export function registerProjectRoutes(app: Hono): void {
       return c.json(parsed.error, 400);
     }
 
-    return c.json(saveProjectSnapshot(parsed.value));
+    return c.json(saveProjectSnapshot(parsed.value, requireHostContext(c)));
   });
 }

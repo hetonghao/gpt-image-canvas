@@ -14,6 +14,7 @@ import type {
   OutputStatus
 } from "@gpt-image-canvas/shared";
 import { useI18n, type Locale } from "../../shared/i18n";
+import { normalizeAssetUrl } from "../../shared/api/asset-url";
 
 export const AGENT_PLAN_NODE_TYPE = "agent-plan-node" as const;
 export const AGENT_PLAN_NODE_ACTION_EVENT = "gpt-image-canvas:agent-plan-node-action" as const;
@@ -515,7 +516,7 @@ function AgentPlanThumbnailSlots({ job, locale }: { job: GenerationJob; locale: 
         if (output?.asset?.url) {
           return (
             <div className="agent-plan-node__thumbnail" data-state="filled" key={`${job.id}-thumb-${output.id || index}`}>
-              <img src={output.asset.url} alt={`${job.id} ${index + 1}`} />
+              <img src={normalizeAssetUrl(output.asset.url)} alt={`${job.id} ${index + 1}`} />
             </div>
           );
         }
@@ -578,7 +579,7 @@ function AgentPlanDetailOutputSlots({ job, locale }: { job: GenerationJob; local
           <figure className="agent-plan-node__detail-output" data-state={state} key={`${job.id}-detail-output-${output?.id ?? index}`}>
             <span className="agent-plan-node__detail-output-thumb">
               {output?.asset?.url ? (
-                <img src={output.asset.url} alt={`${copy.outputSlot(index + 1)} ${description}`} />
+                <img src={normalizeAssetUrl(output.asset.url)} alt={`${copy.outputSlot(index + 1)} ${description}`} />
               ) : state === "failed" ? (
                 <XCircle aria-hidden="true" />
               ) : (

@@ -1,11 +1,14 @@
 import type { Hono } from "hono";
 import { getProviderConfigWithSeed, saveProviderConfig } from "../../domain/providers/provider-config.js";
+import { requireHostContext } from "../host-context.js";
 import { errorResponse, errorToMessage } from "../http/errors.js";
 import { readJson } from "../http/json.js";
 import { parseProviderConfigPayload } from "../http/validation.js";
 
 export function registerProviderConfigRoutes(app: Hono): void {
-  app.get("/api/provider-config", (c) => c.json(getProviderConfigWithSeed(c.req.query("base_url"))));
+  app.get("/api/provider-config", async (c) =>
+    c.json(await getProviderConfigWithSeed(c.req.query("base_url"), requireHostContext(c), c.req.raw.signal))
+  );
 
   app.put("/api/provider-config", async (c) => {
     const payload = await readJson(c.req.raw);
@@ -19,7 +22,7 @@ export function registerProviderConfigRoutes(app: Hono): void {
     }
 
     try {
-      return c.json(saveProviderConfig(parsed.value));
+      return c.json(await saveProviderConfig(parsed.value, requireHostContext(c), c.req.raw.signal));
     } catch (error) {
       return c.json(errorResponse("provider_config_error", errorToMessage(error)), 400);
     }

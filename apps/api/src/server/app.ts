@@ -12,10 +12,12 @@ import { registerAssetRoutes } from "./routes/assets.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCoreRoutes } from "./routes/core.js";
 import { registerGalleryRoutes } from "./routes/gallery.js";
+import { registerHostRoutes } from "./routes/host.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerProjectRoutes } from "./routes/project.js";
 import { registerProviderConfigRoutes } from "./routes/provider-config.js";
 import { registerStorageRoutes } from "./routes/storage.js";
+import { hostContextMiddleware } from "./host-context.js";
 
 export const agentWebSocketServer = new WebSocketServer({ noServer: true });
 export const app = createApp();
@@ -28,7 +30,10 @@ export function createApp(): Hono {
     return c.json(errorResponse("internal_error", "Internal server error."), 500);
   });
 
+  app.use("/api/*", hostContextMiddleware);
+
   registerCoreRoutes(app);
+  registerHostRoutes(app);
   registerAuthRoutes(app);
   registerProviderConfigRoutes(app);
   registerAgentConfigRoutes(app);

@@ -19,6 +19,7 @@ import {
 import { readStoredAsset, runReferenceImageGeneration, runTextToImageGeneration } from "../generation/image-generation.js";
 import { createConfiguredImageProvider } from "../providers/image-provider-selection.js";
 import type { ImageProvider, ImageProviderInput } from "../../infrastructure/providers/image-provider.js";
+import type { HostContext } from "../host/host-adapter.js";
 
 export const AGENT_EXECUTION_TOOL_ALLOWLIST = ["generate_canvas_image_job"] as const;
 
@@ -35,6 +36,7 @@ export interface AgentPlanExecutionInput extends StoredAgentGenerationPlan {
   requestId?: string;
   runId: string;
   signal: AbortSignal;
+  hostContext?: HostContext;
   sendEvent: (event: AgentServerEvent) => void;
   isRunActive: () => boolean;
 }
@@ -84,7 +86,7 @@ export async function executeGenerationPlan(input: AgentPlanExecutionInput): Pro
   let provider: ImageProvider;
   try {
     throwIfAborted(input.signal);
-    provider = input.provider ?? (await createConfiguredImageProvider(input.signal));
+    provider = input.provider ?? (await createConfiguredImageProvider(input.signal, input.hostContext));
   } catch (error) {
     if (isAbortError(error, input.signal)) {
       markPlanCancelled(plan);
@@ -201,7 +203,7 @@ async function executeGenerationJob(input: AgentPlanExecutionInput & {
 
   try {
     throwIfAborted(input.signal);
-    const references = await resolveJobReferences(input.plan, input.job, input.selectedReferencesByKey);
+    const references = await resolveJobReferences(input.plan, input.job, input.selectedReferencesByKey, input.hostContext);
     throwIfAborted(input.signal);
 
     const request = createJobImageProviderInput(input.plan, input.job);
@@ -215,9 +217,10 @@ async function executeGenerationJob(input: AgentPlanExecutionInput & {
               referenceAssetId: references.referenceAssetIds[0]
             },
             input.provider,
-            input.signal
+            input.signal,
+            input.hostContext
           )
-        : await runTextToImageGeneration(request, input.provider, input.signal);
+        : await runTextToImageGeneration(request, input.provider, input.signal, input.hostContext);
     throwIfAborted(input.signal);
 
     input.job.outputs = response.record.outputs;
@@ -281,13 +284,14 @@ function createJobImageProviderInput(plan: GenerationPlan, job: GenerationJob): 
 async function resolveJobReferences(
   plan: GenerationPlan,
   job: GenerationJob,
-  selectedReferencesByKey: Map<string, AgentSelectedCanvasReference>
+  selectedReferencesByKey: Map<string, AgentSelectedCanvasReference>,
+  hostContext?: HostContext
 ): Promise<ResolvedJobReferences> {
   const referenceImages: ReferenceImageInput[] = [];
   const referenceAssetIds: string[] = [];
 
   for (const reference of job.references.slice(0, 3)) {
-    const resolved = await resolveGenerationReference(plan, reference, selectedReferencesByKey);
+    const resolved = await resolveGenerationReference(plan, reference, selectedReferencesByKey, hostContext);
     referenceImages.push(resolved.referenceImage);
     if (resolved.assetId) {
       referenceAssetIds.push(resolved.assetId);
@@ -303,7 +307,8 @@ async function resolveJobReferences(
 async function resolveGenerationReference(
   plan: GenerationPlan,
   reference: GenerationReference,
-  selectedReferencesByKey: Map<string, AgentSelectedCanvasReference>
+  selectedReferencesByKey: Map<string, AgentSelectedCanvasReference>,
+  hostContext?: HostContext
 ): Promise<{ referenceImage: ReferenceImageInput; assetId?: string }> {
   if (reference.kind === "selected_canvas_image") {
     const selected = selectedReferenceFor(reference, selectedReferencesByKey);
@@ -319,7 +324,7 @@ async function resolveGenerationReference(
 
     const assetId = selected?.assetId ?? reference.assetId;
     if (assetId) {
-      const stored = await storedAssetReference(assetId);
+      const stored = await storedAssetReference(assetId, hostContext);
       if (stored) {
         return stored;
       }
@@ -339,7 +344,7 @@ async function resolveGenerationReference(
     throw new Error(`Generated reference "${reference.jobId ?? "unknown"}" has no available output.`);
   }
 
-  const stored = await storedAssetReference(assetId);
+  const stored = await storedAssetReference(assetId, hostContext);
   if (!stored) {
     throw new Error(`Generated reference asset "${assetId}" is not available.`);
   }
@@ -347,9 +352,9 @@ async function resolveGenerationReference(
   return stored;
 }
 
-async function storedAssetReference(assetId: string): Promise<{ referenceImage: ReferenceImageInput; assetId: string } | undefined> {
+async function storedAssetReference(assetId: string, hostContext?: HostContext): Promise<{ referenceImage: ReferenceImageInput; assetId: string } | undefined> {
   for (const candidateAssetId of storedAssetIdCandidates(assetId)) {
-    const stored = await readStoredAsset(candidateAssetId);
+    const stored = await readStoredAsset(candidateAssetId, hostContext);
     if (!stored) {
       continue;
     }

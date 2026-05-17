@@ -308,7 +308,7 @@ function parseImagesResponseLike(value: unknown): ImagesResponse | undefined {
 
 function isAiCoveCompatibleBaseUrl(baseURL: string | undefined): boolean {
   const normalized = baseURL?.trim().toLowerCase() ?? "";
-  return normalized.includes("api.ai-cove.com");
+  return normalized.includes("api.ai-cove.com") || normalized.includes("host.docker.internal:8080") || normalized.includes("127.0.0.1:8080");
 }
 
 function trimmedBaseUrl(baseURL: string | undefined): string {
@@ -316,6 +316,10 @@ function trimmedBaseUrl(baseURL: string | undefined): string {
 }
 
 function providerHttpErrorFromJson(status: number, parsed: ImagesResponse | undefined): ProviderError {
+  if (status === 403 && !parsed) {
+    return new ProviderError("upstream_failure", "AI Cove 网关拒绝了图像请求（HTTP 403）。请检查该 API Key 的额度、分组图片权限或可用性。", 403);
+  }
+
   const fallbackMessage = `OpenAI 图像服务请求失败（HTTP ${status}）。`;
   if (!parsed || typeof parsed !== "object") {
     return new ProviderError("upstream_failure", fallbackMessage, providerHttpStatus(status));

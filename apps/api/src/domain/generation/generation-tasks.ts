@@ -1,6 +1,7 @@
 import type { GenerationRecord } from "../contracts.js";
 import { createConfiguredImageProvider } from "../providers/image-provider-selection.js";
 import type { EditImageProviderInput, ImageProviderInput } from "../../infrastructure/providers/image-provider.js";
+import type { HostContext } from "../host/host-adapter.js";
 import {
   cancelGenerationRecord,
   createRunningReferenceImageGeneration,
@@ -23,41 +24,41 @@ export function initializeGenerationTaskManager(): void {
   markInterruptedGenerationRecordsFailed();
 }
 
-export function startTextToImageGenerationTask(input: ImageProviderInput): GenerationRecord {
-  const record = createRunningTextToImageGeneration(input);
+export function startTextToImageGenerationTask(input: ImageProviderInput, hostContext?: HostContext): GenerationRecord {
+  const record = createRunningTextToImageGeneration(input, hostContext);
   if (isTerminalGenerationStatus(record.status) || activeGenerationTasks.has(record.id)) {
     return record;
   }
 
   startBackgroundGenerationTask(record.id, async (signal) => {
-    const provider = await createConfiguredImageProvider(signal);
-    await finishTextToImageGeneration(record.id, input, provider, signal);
+    const provider = await createConfiguredImageProvider(signal, hostContext);
+    await finishTextToImageGeneration(record.id, input, provider, signal, hostContext);
   });
 
   return record;
 }
 
-export async function startReferenceImageGenerationTask(input: EditImageProviderInput): Promise<GenerationRecord> {
-  const running = await createRunningReferenceImageGeneration(input);
+export async function startReferenceImageGenerationTask(input: EditImageProviderInput, hostContext?: HostContext): Promise<GenerationRecord> {
+  const running = await createRunningReferenceImageGeneration(input, hostContext);
   if (isTerminalGenerationStatus(running.record.status) || activeGenerationTasks.has(running.record.id)) {
     return running.record;
   }
 
   startBackgroundGenerationTask(running.record.id, async (signal) => {
-    const provider = await createConfiguredImageProvider(signal);
-    await finishReferenceImageGeneration(running.record.id, running.input, provider, signal);
+    const provider = await createConfiguredImageProvider(signal, hostContext);
+    await finishReferenceImageGeneration(running.record.id, running.input, provider, signal, hostContext);
   });
 
   return running.record;
 }
 
-export function readGenerationTaskRecord(generationId: string): GenerationRecord | undefined {
-  return getGenerationRecord(generationId);
+export function readGenerationTaskRecord(generationId: string, hostContext?: HostContext): GenerationRecord | undefined {
+  return getGenerationRecord(generationId, hostContext);
 }
 
-export function cancelGenerationTask(generationId: string): GenerationRecord | undefined {
+export function cancelGenerationTask(generationId: string, hostContext?: HostContext): GenerationRecord | undefined {
   activeGenerationTasks.get(generationId)?.controller.abort();
-  return cancelGenerationRecord(generationId);
+  return cancelGenerationRecord(generationId, hostContext);
 }
 
 function startBackgroundGenerationTask(generationId: string, run: (signal: AbortSignal) => Promise<void>): void {

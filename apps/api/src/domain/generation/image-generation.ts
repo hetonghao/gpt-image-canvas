@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve } from "node:path";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import sharp from "sharp";
 import type {
   AssetMetadataResponse,
@@ -37,6 +37,7 @@ import {
 import { runtimePaths } from "../../infrastructure/runtime.js";
 import { assets, generationOutputs, generationRecords, generationReferenceAssets } from "../../infrastructure/schema.js";
 import { getActiveCloudStorageConfig } from "../storage/storage-config.js";
+import type { HostContext } from "../host/host-adapter.js";
 
 const BATCH_CONCURRENCY = 2;
 const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
@@ -100,11 +101,16 @@ const mimeTypes: Record<OutputFormat, string> = {
   webp: "image/webp"
 };
 
-export async function runTextToImageGeneration(input: ImageProviderInput, provider: ImageProvider, signal?: AbortSignal): Promise<GenerationResponse> {
+export async function runTextToImageGeneration(
+  input: ImageProviderInput,
+  provider: ImageProvider,
+  signal?: AbortSignal,
+  hostContext?: HostContext
+): Promise<GenerationResponse> {
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
-    async () => generateSingleOutput(input, provider, signal)
+    async () => generateSingleOutput(input, provider, signal, hostContext)
   );
 
   const record = saveCompletedGenerationRecord(
@@ -113,7 +119,8 @@ export async function runTextToImageGeneration(input: ImageProviderInput, provid
       ...input,
       mode: "generate"
     },
-    outputs
+    outputs,
+    hostContext
   );
 
   return {
@@ -124,9 +131,10 @@ export async function runTextToImageGeneration(input: ImageProviderInput, provid
 export async function runReferenceImageGeneration(
   input: EditImageProviderInput,
   provider: ImageProvider,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  hostContext?: HostContext
 ): Promise<GenerationResponse> {
-  const referenceAssetIds = await ensureReferenceAssetIds(input);
+  const referenceAssetIds = await ensureReferenceAssetIds(input, hostContext);
   const inputWithReferenceAssets: EditImageProviderInput = {
     ...input,
     referenceAssetIds,
@@ -136,7 +144,7 @@ export async function runReferenceImageGeneration(
   const outputs = await mapWithConcurrency(
     Array.from({ length: inputWithReferenceAssets.count }, (_, index) => index),
     BATCH_CONCURRENCY,
-    async () => editSingleOutput(inputWithReferenceAssets, provider, signal)
+    async () => editSingleOutput(inputWithReferenceAssets, provider, signal, hostContext)
   );
 
   const record = saveCompletedGenerationRecord(
@@ -145,7 +153,8 @@ export async function runReferenceImageGeneration(
       ...inputWithReferenceAssets,
       mode: "edit"
     },
-    outputs
+    outputs,
+    hostContext
   );
 
   return {
@@ -153,17 +162,18 @@ export async function runReferenceImageGeneration(
   };
 }
 
-export function createRunningTextToImageGeneration(input: ImageProviderInput): GenerationRecord {
+export function createRunningTextToImageGeneration(input: ImageProviderInput, hostContext?: HostContext): GenerationRecord {
   return createRunningGenerationRecord({
     ...input,
     mode: "generate"
-  });
+  }, hostContext);
 }
 
 export async function createRunningReferenceImageGeneration(
-  input: EditImageProviderInput
+  input: EditImageProviderInput,
+  hostContext?: HostContext
 ): Promise<{ record: GenerationRecord; input: EditImageProviderInput }> {
-  const referenceAssetIds = await ensureReferenceAssetIds(input);
+  const referenceAssetIds = await ensureReferenceAssetIds(input, hostContext);
   const inputWithReferenceAssets: EditImageProviderInput = {
     ...input,
     referenceAssetIds,
@@ -174,7 +184,7 @@ export async function createRunningReferenceImageGeneration(
     record: createRunningGenerationRecord({
       ...inputWithReferenceAssets,
       mode: "edit"
-    }),
+    }, hostContext),
     input: inputWithReferenceAssets
   };
 }
@@ -183,12 +193,13 @@ export async function finishTextToImageGeneration(
   generationId: string,
   input: ImageProviderInput,
   provider: ImageProvider,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  hostContext?: HostContext
 ): Promise<GenerationRecord> {
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
-    async () => generateSingleOutput(input, provider, signal)
+    async () => generateSingleOutput(input, provider, signal, hostContext)
   );
   throwIfAborted(signal);
 
@@ -198,7 +209,8 @@ export async function finishTextToImageGeneration(
       ...input,
       mode: "generate"
     },
-    outputs
+    outputs,
+    hostContext
   );
 }
 
@@ -206,12 +218,13 @@ export async function finishReferenceImageGeneration(
   generationId: string,
   input: EditImageProviderInput,
   provider: ImageProvider,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  hostContext?: HostContext
 ): Promise<GenerationRecord> {
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
-    async () => editSingleOutput(input, provider, signal)
+    async () => editSingleOutput(input, provider, signal, hostContext)
   );
   throwIfAborted(signal);
 
@@ -221,20 +234,21 @@ export async function finishReferenceImageGeneration(
       ...input,
       mode: "edit"
     },
-    outputs
+    outputs,
+    hostContext
   );
 }
 
-export function getGenerationRecord(generationId: string): GenerationRecord | undefined {
-  return readGenerationRecord(generationId);
+export function getGenerationRecord(generationId: string, hostContext?: HostContext): GenerationRecord | undefined {
+  return readGenerationRecord(generationId, hostContext);
 }
 
-export function cancelGenerationRecord(generationId: string): GenerationRecord | undefined {
-  return updateGenerationRecordStatus(generationId, "cancelled", CANCELLED_GENERATION_ERROR);
+export function cancelGenerationRecord(generationId: string, hostContext?: HostContext): GenerationRecord | undefined {
+  return updateGenerationRecordStatus(generationId, "cancelled", CANCELLED_GENERATION_ERROR, hostContext);
 }
 
-export function failGenerationRecord(generationId: string, error: string): GenerationRecord | undefined {
-  return updateGenerationRecordStatus(generationId, "failed", sanitizeGenerationErrorMessage(error));
+export function failGenerationRecord(generationId: string, error: string, hostContext?: HostContext): GenerationRecord | undefined {
+  return updateGenerationRecordStatus(generationId, "failed", sanitizeGenerationErrorMessage(error), hostContext);
 }
 
 export function markInterruptedGenerationRecordsFailed(): void {
@@ -247,27 +261,31 @@ export function markInterruptedGenerationRecordsFailed(): void {
     .run();
 }
 
-async function ensureReferenceAssetIds(input: EditImageProviderInput): Promise<string[]> {
+async function ensureReferenceAssetIds(input: EditImageProviderInput, hostContext?: HostContext): Promise<string[]> {
   return Promise.all(
     input.referenceImages.map(async (referenceImage, index) => {
-      const existingAssetId = persistedReferenceAssetId(input.referenceAssetIds?.[index]);
+      const existingAssetId = persistedReferenceAssetId(input.referenceAssetIds?.[index], hostContext);
       if (existingAssetId) {
         return existingAssetId;
       }
 
-      const savedReferenceAsset = await saveReferenceImageInput(referenceImage);
+      const savedReferenceAsset = await saveReferenceImageInput(referenceImage, hostContext);
       return savedReferenceAsset.id;
     })
   );
 }
 
-function persistedReferenceAssetId(assetId: string | undefined): string | undefined {
+function persistedReferenceAssetId(assetId: string | undefined, hostContext?: HostContext): string | undefined {
   if (!assetId) {
     return undefined;
   }
 
   for (const candidateAssetId of persistedReferenceAssetIdCandidates(assetId)) {
-    const asset = db.select({ id: assets.id }).from(assets).where(eq(assets.id, candidateAssetId)).get();
+    const asset = db
+      .select({ id: assets.id })
+      .from(assets)
+      .where(and(eq(assets.id, candidateAssetId), eq(assets.userId, hostUserId(hostContext))))
+      .get();
     if (asset?.id) {
       return asset.id;
     }
@@ -287,7 +305,7 @@ function persistedReferenceAssetIdCandidates(assetId: string): string[] {
   return candidates.filter((candidate, index, values) => candidate && values.indexOf(candidate) === index);
 }
 
-export async function saveReferenceImageInput(input: ReferenceImageInput): Promise<GeneratedAsset> {
+export async function saveReferenceImageInput(input: ReferenceImageInput, hostContext?: HostContext): Promise<GeneratedAsset> {
   const parsed = referenceDataUrlToBytes(input);
   const imageSize = await readImageSize(parsed.bytes);
   if (!imageSize) {
@@ -305,6 +323,7 @@ export async function saveReferenceImageInput(input: ReferenceImageInput): Promi
   db.insert(assets)
     .values({
       id: assetId,
+      userId: hostUserId(hostContext),
       fileName,
       relativePath,
       mimeType: parsed.mimeType,
@@ -350,8 +369,8 @@ function extensionForMimeType(mimeType: string): string {
   return mimeType === "image/jpeg" ? "jpg" : mimeType.split("/")[1] || "png";
 }
 
-export function getStoredAssetFile(assetId: string): StoredAssetFile | undefined {
-  const asset = db.select().from(assets).where(eq(assets.id, assetId)).get();
+export function getStoredAssetFile(assetId: string, hostContext?: HostContext): StoredAssetFile | undefined {
+  const asset = db.select().from(assets).where(and(eq(assets.id, assetId), eq(assets.userId, hostUserId(hostContext)))).get();
   if (!asset) {
     return undefined;
   }
@@ -370,8 +389,8 @@ export function getStoredAssetFile(assetId: string): StoredAssetFile | undefined
   };
 }
 
-export async function readStoredAsset(assetId: string): Promise<{ file: StoredAssetFile; bytes: Buffer } | undefined> {
-  const file = getStoredAssetFile(assetId);
+export async function readStoredAsset(assetId: string, hostContext?: HostContext): Promise<{ file: StoredAssetFile; bytes: Buffer } | undefined> {
+  const file = getStoredAssetFile(assetId, hostContext);
   if (!file) {
     return undefined;
   }
@@ -382,7 +401,7 @@ export async function readStoredAsset(assetId: string): Promise<{ file: StoredAs
       bytes: await localAssetStorage.getObject({ filePath: file.filePath })
     };
   } catch {
-    const bytes = await readCloudAsset(file.cloud);
+    const bytes = await readCloudAsset(file.cloud, hostContext);
     if (!bytes) {
       return undefined;
     }
@@ -395,8 +414,8 @@ export async function readStoredAsset(assetId: string): Promise<{ file: StoredAs
   }
 }
 
-export async function readStoredAssetMetadata(assetId: string): Promise<AssetMetadataResponse | undefined> {
-  const asset = await readStoredAsset(assetId);
+export async function readStoredAssetMetadata(assetId: string, hostContext?: HostContext): Promise<AssetMetadataResponse | undefined> {
+  const asset = await readStoredAsset(assetId, hostContext);
   if (!asset) {
     return undefined;
   }
@@ -413,7 +432,12 @@ export async function readStoredAssetMetadata(assetId: string): Promise<AssetMet
   };
 }
 
-async function generateSingleOutput(input: ImageProviderInput, provider: ImageProvider, signal?: AbortSignal): Promise<BatchOutputResult> {
+async function generateSingleOutput(
+  input: ImageProviderInput,
+  provider: ImageProvider,
+  signal?: AbortSignal,
+  hostContext?: HostContext
+): Promise<BatchOutputResult> {
   const outputId = randomUUID();
 
   try {
@@ -432,7 +456,7 @@ async function generateSingleOutput(input: ImageProviderInput, provider: ImagePr
       throw new ProviderError("unsupported_provider_behavior", "上游图像服务没有返回图像结果。", 502);
     }
 
-    const saved = await saveProviderImage(providerImage, input, signal);
+    const saved = await saveProviderImage(providerImage, input, signal, hostContext);
 
     return {
       id: outputId,
@@ -453,7 +477,12 @@ async function generateSingleOutput(input: ImageProviderInput, provider: ImagePr
   }
 }
 
-async function editSingleOutput(input: EditImageProviderInput, provider: ImageProvider, signal?: AbortSignal): Promise<BatchOutputResult> {
+async function editSingleOutput(
+  input: EditImageProviderInput,
+  provider: ImageProvider,
+  signal?: AbortSignal,
+  hostContext?: HostContext
+): Promise<BatchOutputResult> {
   const outputId = randomUUID();
 
   try {
@@ -472,7 +501,7 @@ async function editSingleOutput(input: EditImageProviderInput, provider: ImagePr
       throw new ProviderError("unsupported_provider_behavior", "上游图像服务没有返回图像结果。", 502);
     }
 
-    const saved = await saveProviderImage(providerImage, input, signal);
+    const saved = await saveProviderImage(providerImage, input, signal, hostContext);
 
     return {
       id: outputId,
@@ -493,7 +522,12 @@ async function editSingleOutput(input: EditImageProviderInput, provider: ImagePr
   }
 }
 
-async function saveProviderImage(image: ProviderImage, input: ImageProviderInput, _signal?: AbortSignal): Promise<SavedProviderImage> {
+async function saveProviderImage(
+  image: ProviderImage,
+  input: ImageProviderInput,
+  _signal?: AbortSignal,
+  hostContext?: HostContext
+): Promise<SavedProviderImage> {
   const assetId = randomUUID();
   const fileName = `${assetId}.${input.outputFormat === "jpeg" ? "jpg" : input.outputFormat}`;
   const relativePath = `assets/${fileName}`;
@@ -507,12 +541,15 @@ async function saveProviderImage(image: ProviderImage, input: ImageProviderInput
   }
 
   await localAssetStorage.putObject({ filePath, bytes });
-  const cloudStorage = await saveAssetToConfiguredCloud({
-    fileName,
-    bytes,
-    mimeType,
-    createdAt: new Date().toISOString()
-  });
+  const cloudStorage = await saveAssetToConfiguredCloud(
+    {
+      fileName,
+      bytes,
+      mimeType,
+      createdAt: new Date().toISOString()
+    },
+    hostContext
+  );
 
   return {
     asset: {
@@ -544,10 +581,10 @@ async function readImageSize(bytes: Buffer): Promise<ImageSize | undefined> {
   }
 }
 
-function createRunningGenerationRecord(input: PersistedGenerationInput): GenerationRecord {
+function createRunningGenerationRecord(input: PersistedGenerationInput, hostContext?: HostContext): GenerationRecord {
   const createdAt = new Date().toISOString();
   const generationId = input.clientRequestId || randomUUID();
-  const existing = readGenerationRecord(generationId);
+  const existing = readGenerationRecord(generationId, hostContext);
   if (existing) {
     return existing;
   }
@@ -558,6 +595,7 @@ function createRunningGenerationRecord(input: PersistedGenerationInput): Generat
   db.insert(generationRecords)
     .values({
       id: generationId,
+      userId: hostUserId(hostContext),
       mode: input.mode,
       prompt: input.originalPrompt,
       effectivePrompt: input.prompt,
@@ -603,8 +641,13 @@ function createRunningGenerationRecord(input: PersistedGenerationInput): Generat
   };
 }
 
-function completeGenerationRecord(generationId: string, input: PersistedGenerationInput, outputs: BatchOutputResult[]): GenerationRecord {
-  const existing = readGenerationRecord(generationId);
+function completeGenerationRecord(
+  generationId: string,
+  input: PersistedGenerationInput,
+  outputs: BatchOutputResult[],
+  hostContext?: HostContext
+): GenerationRecord {
+  const existing = readGenerationRecord(generationId, hostContext);
   if (existing && isTerminalGenerationStatus(existing.status)) {
     return existing;
   }
@@ -622,14 +665,14 @@ function completeGenerationRecord(generationId: string, input: PersistedGenerati
       error: error ?? null,
       referenceAssetId: primaryReferenceAssetId ?? null
     })
-    .where(eq(generationRecords.id, generationId))
+    .where(and(eq(generationRecords.id, generationId), eq(generationRecords.userId, hostUserId(hostContext))))
     .run();
 
   db.delete(generationOutputs).where(eq(generationOutputs.generationId, generationId)).run();
 
-  insertGenerationOutputs(generationId, outputs);
+  insertGenerationOutputs(generationId, outputs, hostContext);
 
-  return readGenerationRecord(generationId) ?? {
+  return readGenerationRecord(generationId, hostContext) ?? {
     id: generationId,
     mode: input.mode,
     prompt: input.originalPrompt,
@@ -648,7 +691,12 @@ function completeGenerationRecord(generationId: string, input: PersistedGenerati
   };
 }
 
-function saveCompletedGenerationRecord(generationId: string, input: PersistedGenerationInput, outputs: BatchOutputResult[]): GenerationRecord {
+function saveCompletedGenerationRecord(
+  generationId: string,
+  input: PersistedGenerationInput,
+  outputs: BatchOutputResult[],
+  hostContext?: HostContext
+): GenerationRecord {
   const createdAt = new Date().toISOString();
   const successCount = outputs.filter((output) => output.status === "succeeded").length;
   const failureCount = outputs.length - successCount;
@@ -661,6 +709,7 @@ function saveCompletedGenerationRecord(generationId: string, input: PersistedGen
   db.insert(generationRecords)
     .values({
       id: generationId,
+      userId: hostUserId(hostContext),
       mode: input.mode,
       prompt: input.originalPrompt,
       effectivePrompt: input.prompt,
@@ -693,6 +742,7 @@ function saveCompletedGenerationRecord(generationId: string, input: PersistedGen
       db.insert(assets)
         .values({
           id: output.asset.id,
+          userId: hostUserId(hostContext),
           fileName: output.asset.fileName,
           relativePath: `assets/${output.asset.fileName}`,
           mimeType: output.asset.mimeType,
@@ -745,7 +795,7 @@ function saveCompletedGenerationRecord(generationId: string, input: PersistedGen
   };
 }
 
-function insertGenerationOutputs(generationId: string, outputs: BatchOutputResult[]): void {
+function insertGenerationOutputs(generationId: string, outputs: BatchOutputResult[], hostContext?: HostContext): void {
   const createdAt = new Date().toISOString();
 
   for (const output of outputs) {
@@ -753,6 +803,7 @@ function insertGenerationOutputs(generationId: string, outputs: BatchOutputResul
       db.insert(assets)
         .values({
           id: output.asset.id,
+          userId: hostUserId(hostContext),
           fileName: output.asset.fileName,
           relativePath: `assets/${output.asset.fileName}`,
           mimeType: output.asset.mimeType,
@@ -790,9 +841,10 @@ function insertGenerationOutputs(generationId: string, outputs: BatchOutputResul
 function updateGenerationRecordStatus(
   generationId: string,
   status: Extract<GenerationStatus, "cancelled" | "failed">,
-  error: string
+  error: string,
+  hostContext?: HostContext
 ): GenerationRecord | undefined {
-  const existing = readGenerationRecord(generationId);
+  const existing = readGenerationRecord(generationId, hostContext);
   if (!existing) {
     return undefined;
   }
@@ -806,18 +858,22 @@ function updateGenerationRecordStatus(
       status,
       error
     })
-    .where(eq(generationRecords.id, generationId))
+    .where(and(eq(generationRecords.id, generationId), eq(generationRecords.userId, hostUserId(hostContext))))
     .run();
 
-  return readGenerationRecord(generationId);
+  return readGenerationRecord(generationId, hostContext);
 }
 
 function isTerminalGenerationStatus(status: GenerationStatus): boolean {
   return status === "succeeded" || status === "partial" || status === "failed" || status === "cancelled";
 }
 
-function readGenerationRecord(generationId: string): GenerationRecord | undefined {
-  const record = db.select().from(generationRecords).where(eq(generationRecords.id, generationId)).get();
+function readGenerationRecord(generationId: string, hostContext?: HostContext): GenerationRecord | undefined {
+  const record = db
+    .select()
+    .from(generationRecords)
+    .where(and(eq(generationRecords.id, generationId), eq(generationRecords.userId, hostUserId(hostContext))))
+    .get();
   if (!record) {
     return undefined;
   }
@@ -835,7 +891,10 @@ function readGenerationRecord(generationId: string): GenerationRecord | undefine
     .all()
     .sort((left, right) => left.position - right.position);
   const assetIds = outputRows.flatMap((output) => (output.assetId ? [output.assetId] : []));
-  const assetRows = assetIds.length > 0 ? db.select().from(assets).where(inArray(assets.id, assetIds)).all() : [];
+  const assetRows =
+    assetIds.length > 0
+      ? db.select().from(assets).where(and(inArray(assets.id, assetIds), eq(assets.userId, hostUserId(hostContext)))).all()
+      : [];
   const assetById = new Map(assetRows.map((asset) => [asset.id, asset]));
   const referenceAssetIds = referenceRows.map((referenceRow) => referenceRow.assetId);
 
@@ -914,8 +973,8 @@ async function saveAssetToConfiguredCloud(input: {
   bytes: Buffer;
   mimeType: string;
   createdAt: string;
-}): Promise<AssetCloudStorageRecord | undefined> {
-  const active = getActiveCloudStorageConfig();
+}, hostContext?: HostContext): Promise<AssetCloudStorageRecord | undefined> {
+  const active = getActiveCloudStorageConfig(hostContext);
   if (!active) {
     return undefined;
   }
@@ -962,8 +1021,8 @@ async function saveAssetToConfiguredCloud(input: {
   }
 }
 
-async function readCloudAsset(location: StoredCloudAssetLocation | undefined): Promise<Buffer | undefined> {
-  const active = getActiveCloudStorageConfig();
+async function readCloudAsset(location: StoredCloudAssetLocation | undefined, hostContext?: HostContext): Promise<Buffer | undefined> {
+  const active = getActiveCloudStorageConfig(hostContext);
   if (!location || !active || location.provider !== active.provider) {
     return undefined;
   }
@@ -1034,6 +1093,10 @@ function toGeneratedAssetCloud(cloudStorage: AssetCloudStorageRecord | undefined
     lastError: cloudStorage.error,
     uploadedAt: cloudStorage.uploadedAt
   };
+}
+
+function hostUserId(hostContext: HostContext | undefined): string {
+  return hostContext?.user.id ?? "standalone";
 }
 
 async function mapWithConcurrency<T, TResult>(

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { asc, desc, eq, ne } from "drizzle-orm";
+import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { strFromU8, unzipSync } from "fflate";
 import {
   createCorePlanningSkill,
@@ -21,6 +21,7 @@ import type {
 } from "../contracts.js";
 import { db } from "../../infrastructure/database.js";
 import { agentSkills } from "../../infrastructure/schema.js";
+import type { HostContext } from "../host/host-adapter.js";
 
 const MAX_SKILL_UPLOAD_BYTES = 2 * 1024 * 1024;
 const MAX_SKILL_TOTAL_TEXT_BYTES = 768 * 1024;
@@ -67,33 +68,35 @@ export class AgentSkillError extends Error {
   }
 }
 
-export function listAgentSkills(): AgentSkillListResponse {
-  ensureBuiltInAgentSkills();
+export function listAgentSkills(hostContext?: HostContext): AgentSkillListResponse {
+  ensureBuiltInAgentSkills(hostContext);
   return {
     skills: db
       .select()
       .from(agentSkills)
+      .where(eq(agentSkills.userId, hostUserId(hostContext)))
       .orderBy(desc(agentSkills.required), desc(agentSkills.builtIn), asc(agentSkills.name))
       .all()
       .map(toAgentSkillSummary)
   };
 }
 
-export function getAgentSkill(idOrSlug: string): AgentSkillDetail | undefined {
-  ensureBuiltInAgentSkills();
-  const row = getAgentSkillRow(idOrSlug);
+export function getAgentSkill(idOrSlug: string, hostContext?: HostContext): AgentSkillDetail | undefined {
+  ensureBuiltInAgentSkills(hostContext);
+  const row = getAgentSkillRow(idOrSlug, hostContext);
   return row ? toAgentSkillDetail(row) : undefined;
 }
 
-export function createAgentSkill(input: SaveAgentSkillRequest): SaveAgentSkillResponse {
-  ensureBuiltInAgentSkills();
+export function createAgentSkill(input: SaveAgentSkillRequest, hostContext?: HostContext): SaveAgentSkillResponse {
+  ensureBuiltInAgentSkills(hostContext);
   const now = new Date().toISOString();
   const normalized = normalizeSaveInput(input, undefined);
-  assertUniqueSlug(normalized.slug);
+  assertUniqueSlug(normalized.slug, undefined, hostContext);
 
   db.insert(agentSkills)
     .values({
-      id: `agent-skill-${randomUUID()}`,
+      id: scopedSkillId(`agent-skill-${randomUUID()}`, hostContext),
+      userId: hostUserId(hostContext),
       slug: normalized.slug,
       name: normalized.name,
       description: normalized.description,
@@ -110,15 +113,15 @@ export function createAgentSkill(input: SaveAgentSkillRequest): SaveAgentSkillRe
     })
     .run();
 
-  return { skill: requireAgentSkillDetail(normalized.slug) };
+  return { skill: requireAgentSkillDetail(normalized.slug, hostContext) };
 }
 
-export function saveAgentSkill(idOrSlug: string, input: SaveAgentSkillRequest): SaveAgentSkillResponse {
-  ensureBuiltInAgentSkills();
-  const existing = getRequiredAgentSkillRow(idOrSlug);
+export function saveAgentSkill(idOrSlug: string, input: SaveAgentSkillRequest, hostContext?: HostContext): SaveAgentSkillResponse {
+  ensureBuiltInAgentSkills(hostContext);
+  const existing = getRequiredAgentSkillRow(idOrSlug, hostContext);
 
   if (input.resetToFactory === true) {
-    return { skill: resetBuiltInAgentSkill(existing) };
+    return { skill: resetBuiltInAgentSkill(existing, hostContext) };
   }
 
   const normalized = normalizeSaveInput(input, existing);
@@ -126,7 +129,7 @@ export function saveAgentSkill(idOrSlug: string, input: SaveAgentSkillRequest): 
     if (existing.builtIn === 1) {
       throw new AgentSkillError("invalid_agent_skill", "Built-in Agent skill slugs cannot be changed.");
     }
-    assertUniqueSlug(normalized.slug, existing.id);
+    assertUniqueSlug(normalized.slug, existing.id, hostContext);
   }
 
   if (existing.required === 1 && !normalized.enabled) {
@@ -149,11 +152,11 @@ export function saveAgentSkill(idOrSlug: string, input: SaveAgentSkillRequest): 
     .where(eq(agentSkills.id, existing.id))
     .run();
 
-  return { skill: requireAgentSkillDetail(normalized.slug) };
+  return { skill: requireAgentSkillDetail(normalized.slug, hostContext) };
 }
 
-export function importAgentSkillFromUpload(input: ImportUploadInput): ImportAgentSkillResponse {
-  ensureBuiltInAgentSkills();
+export function importAgentSkillFromUpload(input: ImportUploadInput, hostContext?: HostContext): ImportAgentSkillResponse {
+  ensureBuiltInAgentSkills(hostContext);
   if (input.bytes.byteLength > MAX_SKILL_UPLOAD_BYTES) {
     throw new AgentSkillError("agent_skill_import_failed", "Agent skill upload is too large.");
   }
@@ -162,7 +165,7 @@ export function importAgentSkillFromUpload(input: ImportUploadInput): ImportAgen
   const metadata = parseSkillMarkdownMetadata(imported.files[SKILL_MARKDOWN_FILE] ?? "");
   const fallbackName = fileBaseName(input.fileName) || "Imported Agent skill";
   const name = normalizedText(metadata.name) ?? fallbackName;
-  const slug = uniqueSlug(slugify(name) || slugify(fallbackName) || "imported-skill");
+  const slug = uniqueSlug(slugify(name) || slugify(fallbackName) || "imported-skill", hostContext);
 
   return createAgentSkill({
     slug,
@@ -174,12 +177,17 @@ export function importAgentSkillFromUpload(input: ImportUploadInput): ImportAgen
     triggerMode: "auto",
     triggerKeywords: [],
     files: filesToList(imported.files)
-  });
+  }, hostContext);
 }
 
-export function resolvePlanningSkillLoadoutForRequest(userText: string): PlanningSkillLoadout {
-  ensureBuiltInAgentSkills();
-  const rows = db.select().from(agentSkills).orderBy(desc(agentSkills.required), desc(agentSkills.builtIn), asc(agentSkills.name)).all();
+export function resolvePlanningSkillLoadoutForRequest(userText: string, hostContext?: HostContext): PlanningSkillLoadout {
+  ensureBuiltInAgentSkills(hostContext);
+  const rows = db
+    .select()
+    .from(agentSkills)
+    .where(eq(agentSkills.userId, hostUserId(hostContext)))
+    .orderBy(desc(agentSkills.required), desc(agentSkills.builtIn), asc(agentSkills.name))
+    .all();
   const skills = rows.flatMap((row) => {
     if (row.required === 1) {
       return [toPlanningSkill(row)];
@@ -199,11 +207,15 @@ export function resolvePlanningSkillLoadoutForRequest(userText: string): Plannin
   return { skills };
 }
 
-export function ensureBuiltInAgentSkills(): void {
+export function ensureBuiltInAgentSkills(hostContext?: HostContext): void {
   for (const definition of builtInSkillDefinitions()) {
-    const existing = db.select().from(agentSkills).where(eq(agentSkills.slug, definition.slug)).get();
+    const existing = db
+      .select()
+      .from(agentSkills)
+      .where(and(eq(agentSkills.userId, hostUserId(hostContext)), eq(agentSkills.slug, definition.slug)))
+      .get();
     if (!existing) {
-      insertBuiltInAgentSkill(definition);
+      insertBuiltInAgentSkill(definition, hostContext);
       continue;
     }
 
@@ -264,11 +276,12 @@ function builtInSkillDefinitions(): BuiltInAgentSkillDefinition[] {
   ];
 }
 
-function insertBuiltInAgentSkill(definition: BuiltInAgentSkillDefinition): void {
+function insertBuiltInAgentSkill(definition: BuiltInAgentSkillDefinition, hostContext?: HostContext): void {
   const now = new Date().toISOString();
   db.insert(agentSkills)
     .values({
-      id: `agent-skill-${definition.slug}`,
+      id: scopedSkillId(`agent-skill-${definition.slug}`, hostContext),
+      userId: hostUserId(hostContext),
       slug: definition.slug,
       name: definition.name,
       description: definition.description,
@@ -286,7 +299,7 @@ function insertBuiltInAgentSkill(definition: BuiltInAgentSkillDefinition): void 
     .run();
 }
 
-function resetBuiltInAgentSkill(row: AgentSkillRow): AgentSkillDetail {
+function resetBuiltInAgentSkill(row: AgentSkillRow, hostContext?: HostContext): AgentSkillDetail {
   if (row.builtIn !== 1) {
     throw new AgentSkillError("invalid_agent_skill", "Only built-in Agent skills can be reset.");
   }
@@ -312,7 +325,7 @@ function resetBuiltInAgentSkill(row: AgentSkillRow): AgentSkillDetail {
     .where(eq(agentSkills.id, row.id))
     .run();
 
-  return requireAgentSkillDetail(row.slug);
+  return requireAgentSkillDetail(row.slug, hostContext);
 }
 
 function normalizeSaveInput(input: SaveAgentSkillRequest, existing: AgentSkillRow | undefined): {
@@ -513,8 +526,8 @@ function hasLocalChanges(row: AgentSkillRow): boolean {
   return definition ? JSON.stringify(parseFilesJson(row.filesJson)) !== JSON.stringify(definition.files) : false;
 }
 
-function requireAgentSkillDetail(idOrSlug: string): AgentSkillDetail {
-  const detail = getAgentSkill(idOrSlug);
+function requireAgentSkillDetail(idOrSlug: string, hostContext?: HostContext): AgentSkillDetail {
+  const detail = getAgentSkill(idOrSlug, hostContext);
   if (!detail) {
     throw new AgentSkillError("agent_skill_not_found", "Agent skill was not found.");
   }
@@ -522,8 +535,8 @@ function requireAgentSkillDetail(idOrSlug: string): AgentSkillDetail {
   return detail;
 }
 
-function getRequiredAgentSkillRow(idOrSlug: string): AgentSkillRow {
-  const row = getAgentSkillRow(idOrSlug);
+function getRequiredAgentSkillRow(idOrSlug: string, hostContext?: HostContext): AgentSkillRow {
+  const row = getAgentSkillRow(idOrSlug, hostContext);
   if (!row) {
     throw new AgentSkillError("agent_skill_not_found", "Agent skill was not found.");
   }
@@ -531,32 +544,46 @@ function getRequiredAgentSkillRow(idOrSlug: string): AgentSkillRow {
   return row;
 }
 
-function getAgentSkillRow(idOrSlug: string): AgentSkillRow | undefined {
+function getAgentSkillRow(idOrSlug: string, hostContext?: HostContext): AgentSkillRow | undefined {
   const trimmed = idOrSlug.trim();
   if (!trimmed) {
     return undefined;
   }
 
-  return db.select().from(agentSkills).where(eq(agentSkills.id, trimmed)).get()
-    ?? db.select().from(agentSkills).where(eq(agentSkills.slug, trimmed)).get();
+  return db.select().from(agentSkills).where(and(eq(agentSkills.id, scopedSkillId(trimmed, hostContext)), eq(agentSkills.userId, hostUserId(hostContext)))).get()
+    ?? db.select().from(agentSkills).where(and(eq(agentSkills.id, trimmed), eq(agentSkills.userId, hostUserId(hostContext)))).get()
+    ?? db.select().from(agentSkills).where(and(eq(agentSkills.slug, trimmed), eq(agentSkills.userId, hostUserId(hostContext)))).get();
 }
 
-function assertUniqueSlug(slug: string, currentId?: string): void {
+function assertUniqueSlug(slug: string, currentId?: string, hostContext?: HostContext): void {
   const query = currentId
-    ? db.select().from(agentSkills).where(ne(agentSkills.id, currentId)).all()
-    : db.select().from(agentSkills).all();
+    ? db.select().from(agentSkills).where(and(eq(agentSkills.userId, hostUserId(hostContext)), ne(agentSkills.id, currentId))).all()
+    : db.select().from(agentSkills).where(eq(agentSkills.userId, hostUserId(hostContext))).all();
   if (query.some((row) => row.slug === slug)) {
     throw new AgentSkillError("agent_skill_duplicate_slug", "An Agent skill with this slug already exists.");
   }
 }
 
-function uniqueSlug(baseSlug: string): string {
+function uniqueSlug(baseSlug: string, hostContext?: HostContext): string {
   let candidate = normalizeSlug(baseSlug);
-  for (let index = 2; db.select().from(agentSkills).where(eq(agentSkills.slug, candidate)).get(); index += 1) {
+  for (
+    let index = 2;
+    db.select().from(agentSkills).where(and(eq(agentSkills.userId, hostUserId(hostContext)), eq(agentSkills.slug, candidate))).get();
+    index += 1
+  ) {
     candidate = normalizeSlug(`${baseSlug}-${index}`);
   }
 
   return candidate;
+}
+
+function hostUserId(hostContext: HostContext | undefined): string {
+  return hostContext?.user.id ?? "standalone";
+}
+
+function scopedSkillId(id: string, hostContext: HostContext | undefined): string {
+  const userId = hostUserId(hostContext);
+  return userId === "standalone" || id.startsWith(`${userId}:`) ? id : `${userId}:${id}`;
 }
 
 function filesFromPlanningSkill(skill: PlanningSkillLoadoutSkill): SkillFiles {
