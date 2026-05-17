@@ -67,6 +67,10 @@ interface AgentSocketSession {
 interface AgentConversationContext {
   previousUserText?: string;
   previousPlan?: GenerationPlan;
+  pendingUserQuestion?: {
+    code: string;
+    message: string;
+  };
   previousOutputs: AgentConversationOutputReference[];
   pendingOutputsByRun: Map<string, AgentConversationOutputReference[]>;
 }
@@ -159,13 +163,14 @@ function conversationContextFromSnapshot(snapshot: AgentConversationContextSnaps
   return {
     previousUserText: snapshot?.previousUserText,
     previousPlan: snapshot?.previousPlan,
+    pendingUserQuestion: snapshot?.pendingUserQuestion,
     previousOutputs: snapshot?.previousOutputs ?? [],
     pendingOutputsByRun: new Map()
   };
 }
 
 function hasConversationContext(context: AgentConversationContext): boolean {
-  return Boolean(context.previousUserText || context.previousPlan || context.previousOutputs.length > 0);
+  return Boolean(context.previousUserText || context.previousPlan || context.pendingUserQuestion || context.previousOutputs.length > 0);
 }
 
 function resolveAgentSocketSession(
@@ -562,6 +567,14 @@ async function handleAgentPlanMessage(
   scheduleDisconnectedSessionCleanup(session);
 
   if (!result.ok) {
+    if (isAgentUserInputFailure(result)) {
+      session.conversationContext.previousUserText = message.text;
+      session.conversationContext.pendingUserQuestion = {
+        code: result.code,
+        message: result.message
+      };
+      storeConversationContextForSession(session);
+    }
     sendSessionError(session, {
       code: result.code,
       message: result.message,
@@ -585,6 +598,7 @@ async function handleAgentPlanMessage(
   });
   session.conversationContext.previousUserText = message.text;
   session.conversationContext.previousPlan = result.plan;
+  session.conversationContext.pendingUserQuestion = undefined;
   storeConversationContextForSession(session);
 
   sendSessionEvent(session, {
@@ -637,13 +651,20 @@ function createPlannerConversationContext(
   resolvedReferences: AgentConversationOutputReference[] | undefined,
   referenceResolution: AgentPlannerConversationContext["referenceResolution"] | undefined
 ): AgentPlannerConversationContext | undefined {
-  if (!context.previousUserText && !context.previousPlan && context.previousOutputs.length === 0 && !resolvedReferences?.length) {
+  if (
+    !context.previousUserText &&
+    !context.previousPlan &&
+    !context.pendingUserQuestion &&
+    context.previousOutputs.length === 0 &&
+    !resolvedReferences?.length
+  ) {
     return undefined;
   }
 
   return {
     previousUserText: context.previousUserText,
     previousPlan: context.previousPlan,
+    pendingUserQuestion: context.pendingUserQuestion,
     previousOutputs: context.previousOutputs,
     resolvedReferences,
     referenceResolution
@@ -745,8 +766,13 @@ function storeConversationContextForSession(session: AgentSocketSession): void {
   saveAgentConversationContext(session.conversationId, {
     previousUserText: session.conversationContext.previousUserText,
     previousPlan: session.conversationContext.previousPlan,
+    pendingUserQuestion: session.conversationContext.pendingUserQuestion,
     previousOutputs: session.conversationContext.previousOutputs
   }, session.hostContext);
+}
+
+function isAgentUserInputFailure(result: { ok: false; code: string; message: string }): boolean {
+  return result.code === "missing_selected_canvas_reference" || result.code === "agent_requires_user_input";
 }
 
 async function handleAgentPlanExecutionMessage(

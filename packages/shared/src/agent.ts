@@ -139,6 +139,10 @@ export interface AgentConversationContextSnapshot {
   previousUserText?: string;
   previousPlan?: GenerationPlan;
   previousOutputs: AgentConversationOutputReference[];
+  pendingUserQuestion?: {
+    code: string;
+    message: string;
+  };
 }
 
 export interface AgentConversationSummary {

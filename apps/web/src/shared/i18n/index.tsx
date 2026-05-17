@@ -1513,7 +1513,8 @@ export function localizedApiErrorMessage(input: {
     return input.fallbackText;
   }
 
-  return `${mapped ?? fallbackMessage}${messages[input.locale].errorHttpSuffix({ status: input.status })}`;
+  const message = mapped ?? fallbackMessage ?? input.fallbackText;
+  return `${message}${messages[input.locale].errorHttpSuffix({ status: input.status })}`;
 }
 
 function createTranslate(locale: Locale): Translate {

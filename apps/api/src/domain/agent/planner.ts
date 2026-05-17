@@ -214,6 +214,10 @@ export interface AgentPlannerConversationContext {
   previousUserText?: string;
   previousPlan?: GenerationPlan;
   previousOutputs?: AgentPlannerConversationOutput[];
+  pendingUserQuestion?: {
+    code: string;
+    message: string;
+  };
   resolvedReferences?: AgentPlannerConversationOutput[];
   referenceResolution?: "manual_selection" | "previous_agent_outputs";
 }
@@ -497,7 +501,7 @@ export function createDeepAgentsPlanner(
   plannerOptions?: AgentPlannerOptions,
   skillLoadout?: PlanningSkillLoadout
 ): GenerationPlanAgentRunner {
-  if (agentConfigRequiresStreamingPlanner(config)) {
+  if (agentConfigRequiresAiCoveCompatiblePlanner(config)) {
     return createAiCoveCompatiblePlanner(config, skillLoadout);
   }
 
@@ -516,7 +520,7 @@ export function createDeepAgentsPlanner(
   }) as unknown as GenerationPlanAgentRunner;
 }
 
-export function agentConfigRequiresStreamingPlanner(
+export function agentConfigRequiresAiCoveCompatiblePlanner(
   config: Pick<UsableAgentLlmConfig, "baseUrl" | "model">
 ): boolean {
   const baseUrl = config.baseUrl?.trim().toLowerCase() ?? "";
@@ -529,7 +533,7 @@ function createAgentChatModel(
   plannerOptions?: AgentPlannerOptions
 ): ChatOpenAI {
   const modelKwargs = agentModelKwargsForConfig(config, plannerOptions);
-  const usesStreamingCompatibility = isDeepSeek || agentConfigRequiresStreamingPlanner(config);
+  const usesStreamingCompatibility = isDeepSeek || agentConfigRequiresAiCoveCompatiblePlanner(config);
   return new ChatOpenAI({
     apiKey: config.apiKey,
     configuration: config.baseUrl ? { baseURL: config.baseUrl } : undefined,
@@ -597,11 +601,10 @@ export function createAiCoveCompatiblePlanner(
   skillLoadout?: PlanningSkillLoadout
 ): GenerationPlanAgentRunner {
   return {
-    streamsThinkingDeltas: true,
+    streamsThinkingDeltas: false,
     async invoke(input, options) {
       const body = {
         model: config.model,
-        stream: true,
         messages: [
           {
             role: "system",
@@ -2036,6 +2039,13 @@ function formatConversationContextSummary(context: AgentPlannerConversationConte
 
   if (context.previousPlan) {
     lines.push(`- Previous plan: ${formatPlanSummary(context.previousPlan)}`);
+  }
+
+  if (context.pendingUserQuestion?.message.trim()) {
+    lines.push(`- Pending question to the user (${context.pendingUserQuestion.code}): ${truncate(context.pendingUserQuestion.message.trim(), 500)}`);
+    lines.push(
+      "- Answer to the pending question: treat the current user request above as the user's answer, combine it with the previous user request, and do not repeat the same question if the answer resolves it."
+    );
   }
 
   if (context.previousOutputs?.length) {

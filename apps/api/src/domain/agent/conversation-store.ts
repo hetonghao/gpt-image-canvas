@@ -277,11 +277,23 @@ function sanitizeContext(input: unknown): AgentConversationContextSnapshot {
   }
 
   const previousUserText = stringValue(input.previousUserText);
+  const pendingUserQuestion = sanitizePendingUserQuestion(input.pendingUserQuestion);
   return {
     previousUserText,
     previousPlan: isRecord(input.previousPlan) ? (stripPersistentDataUrls(input.previousPlan) as GenerationPlan) : undefined,
+    pendingUserQuestion,
     previousOutputs: sanitizeConversationOutputs(input.previousOutputs)
   };
+}
+
+function sanitizePendingUserQuestion(input: unknown): AgentConversationContextSnapshot["pendingUserQuestion"] {
+  if (!isRecord(input)) {
+    return undefined;
+  }
+
+  const code = stringValue(input.code);
+  const message = stringValue(input.message);
+  return code && message ? { code, message } : undefined;
 }
 
 function sanitizeConversationOutputs(input: unknown): AgentConversationContextSnapshot["previousOutputs"] {

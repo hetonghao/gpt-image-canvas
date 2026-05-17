@@ -1,6 +1,6 @@
 import {
+  agentConfigRequiresAiCoveCompatiblePlanner,
   agentModelKwargsForConfig,
-  agentConfigRequiresStreamingPlanner,
   buildPlannerUserMessage,
   createAiCoveCompatiblePlanner,
   createDirectChatPlanner,
@@ -63,6 +63,7 @@ async function main(): Promise<void> {
   smokeInvalidJsonRejection();
   smokeNoVisionReferenceHandling();
   smokePlannerConversationContextPrompt();
+  smokePlannerPendingQuestionContextPrompt();
   smokeEcommerceSkillIntentDetection();
   smokeDeepSeekPlannerKwargs();
   smokeReasoningExtraction();
@@ -447,6 +448,30 @@ function smokePlannerConversationContextPrompt(): void {
   expect(content.includes("Previous user request: Generate 10 Guangdong food images."), "planner prompt includes previous user request");
   expect(content.includes("output3: assetId=\"asset-output-3\""), "planner prompt includes resolved output index");
   expect(content.includes("Resolved follow-up image references from previous Agent outputs"), "planner prompt explains resolved references");
+}
+
+function smokePlannerPendingQuestionContextPrompt(): void {
+  const message = buildPlannerUserMessage({
+    userText: "新的",
+    defaults,
+    selectedReferences: [],
+    supportsVision: false,
+    conversationContext: {
+      previousUserText: "sdf",
+      pendingUserQuestion: {
+        code: "agent_requires_user_input",
+        message: "我需要先确认：这次是直接编辑选中的原图，还是生成新的设计图？请补充说明后再发送。"
+      }
+    }
+  });
+
+  expect(typeof message.content === "string", "pending-question planner message is text-only");
+  const content = String(message.content);
+  expect(content.includes("Previous user request: sdf"), "planner prompt includes previous ambiguous request");
+  expect(content.includes("Pending question to the user"), "planner prompt includes pending user question heading");
+  expect(content.includes("Answer to the pending question"), "planner prompt marks short follow-up as an answer");
+  expect(content.includes("combine it with the previous user request"), "planner prompt tells Agent to merge the answer with previous request");
+  expect(content.includes("do not repeat the same question"), "planner prompt tells Agent not to repeat resolved questions");
 }
 
 function smokeEcommerceSkillIntentDetection(): void {
@@ -1112,25 +1137,25 @@ async function smokeDirectPlannerTransportError(): Promise<void> {
 
 function smokeAiCovePlannerCompatibility(): void {
   expect(
-    agentConfigRequiresStreamingPlanner({
+    agentConfigRequiresAiCoveCompatiblePlanner({
       baseUrl: "https://api.ai-cove.com/v1",
       model: "gpt-5.4-mini"
     }),
-    "ai-cove planner config uses streaming compatibility path"
+    "ai-cove planner config uses AI Cove compatibility path"
   );
   expect(
-    !agentConfigRequiresStreamingPlanner({
+    !agentConfigRequiresAiCoveCompatiblePlanner({
       baseUrl: "https://api.openai.com/v1",
       model: "gpt-5.4-mini"
     }),
-    "official OpenAI config does not force streaming compatibility path"
+    "official OpenAI config does not force AI Cove compatibility path"
   );
   expect(
-    agentConfigRequiresStreamingPlanner({
+    agentConfigRequiresAiCoveCompatiblePlanner({
       baseUrl: "http://host.docker.internal:8080/v1",
       model: "gpt-5.4-mini"
     }),
-    "local ai-cove docker gateway uses streaming compatibility path"
+    "local ai-cove docker gateway uses AI Cove compatibility path"
   );
 }
 
@@ -1139,19 +1164,12 @@ async function smokeAiCovePlannerRequestBodyOmitsTemperature(): Promise<void> {
   let capturedBody: Record<string, unknown> | undefined;
   globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     capturedBody = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-    return new Response(
-      [
-        'data: {"choices":[{"delta":{"content":"{\\"schemaVersion\\":1}"}}]}',
-        "data: [DONE]",
-        ""
-      ].join("\n\n"),
-      {
-        status: 200,
-        headers: {
-          "content-type": "text/event-stream"
-        }
+    return new Response(JSON.stringify({ choices: [{ message: { content: "{\"schemaVersion\":1}" } }] }), {
+      status: 200,
+      headers: {
+        "content-type": "application/json"
       }
-    );
+    });
   }) as typeof fetch;
 
   try {
@@ -1173,7 +1191,7 @@ async function smokeAiCovePlannerRequestBodyOmitsTemperature(): Promise<void> {
     globalThis.fetch = originalFetch;
   }
 
-  expect(capturedBody?.stream === true, "AI Cove compatible planner keeps streaming enabled");
+  expect(!("stream" in (capturedBody ?? {})), "AI Cove compatible planner avoids streaming gateway usage checks");
   expect(!("temperature" in (capturedBody ?? {})), "AI Cove compatible planner omits temperature for GPT-5 compatible routing");
 }
 

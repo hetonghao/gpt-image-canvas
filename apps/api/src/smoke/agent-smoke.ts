@@ -257,6 +257,10 @@ async function smokeAgentConversations(
       updatedAt: timestamp,
       dataUrl: "data:image/png;base64,BBBB"
     },
+    pendingUserQuestion: {
+      code: "agent_requires_user_input",
+      message: "Should I edit the selected original or generate a new design?"
+    },
     previousOutputs: [
       {
         index: 1,
@@ -270,6 +274,11 @@ async function smokeAgentConversations(
   } as Parameters<typeof store.saveAgentConversationContext>[1]);
   const context = store.getAgentConversationContext("agent-conversation-context-smoke");
   expect(context?.previousUserText === "Make the previous image warmer.", "Agent conversation context readback keeps user text");
+  expect(context.pendingUserQuestion?.code === "agent_requires_user_input", "Agent conversation context keeps pending question code");
+  expect(
+    context.pendingUserQuestion?.message === "Should I edit the selected original or generate a new design?",
+    "Agent conversation context keeps pending question message"
+  );
   expect(context.previousOutputs[0]?.assetId === "asset-output-1", "Agent conversation context readback keeps output reference");
   expect(!JSON.stringify(context).includes("data:image"), "Agent conversation context strips dataUrl");
 

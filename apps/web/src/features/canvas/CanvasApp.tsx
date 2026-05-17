@@ -5275,17 +5275,19 @@ export function App() {
           if (shouldAskUser && eventRunId) {
             agentUserInputRunIdsRef.current.add(eventRunId);
           }
-        addAgentMessage({
-          role: shouldAskUser ? "question" : "error",
-          content: localizedApiErrorMessage({
-            code: event.code,
-            fallbackMessage: event.message,
-            fallbackText: event.message,
-            locale,
-            status: 400
-          }),
-          runId: eventRunId
-        });
+          addAgentMessage({
+            role: shouldAskUser ? "question" : "error",
+            content: shouldAskUser
+              ? event.message
+              : localizedApiErrorMessage({
+                  code: event.code,
+                  fallbackMessage: event.message,
+                  fallbackText: event.message,
+                  locale,
+                  status: 400
+                }),
+            runId: eventRunId
+          });
         }
         deleteAgentJobLoadingPlaceholdersForRun(event.runId);
         if (event.runId && activeAgentRunIdRef.current === event.runId) {
@@ -5334,11 +5336,11 @@ export function App() {
           if (event.status === "failed" && eventRunId && agentUserInputRunIdsRef.current.delete(eventRunId)) {
             return;
           }
-        addAgentMessage({
-          role: event.status === "succeeded" ? "system" : "error",
-          content: t("agentRunDone", { status: event.status }),
-          runId: eventRunId
-        });
+          addAgentMessage({
+            role: event.status === "succeeded" ? "system" : "error",
+            content: t("agentRunDone", { status: event.status }),
+            runId: eventRunId
+          });
         }
         return;
       case "connected":
