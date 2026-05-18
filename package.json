@@ -13,6 +13,9 @@
     "api:dev": "pnpm --filter @gpt-image-canvas/api dev",
     "web:dev": "pnpm --filter @gpt-image-canvas/web dev",
     "build": "pnpm --filter @gpt-image-canvas/shared build && pnpm --filter @gpt-image-canvas/web build && pnpm --filter @gpt-image-canvas/api build",
+    "smoke:web:onboarding-fields": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/provider-config/provider-onboarding-fields.smoke.ts",
+    "smoke:web:onboarding": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/provider-onboarding.smoke.ts",
+    "smoke:web:provider-config": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/provider-config/provider-config-save.smoke.ts",
     "typecheck": "pnpm --filter @gpt-image-canvas/shared typecheck && pnpm --filter @gpt-image-canvas/web typecheck && pnpm --filter @gpt-image-canvas/api typecheck",
     "start": "pnpm --filter @gpt-image-canvas/api start"
   },

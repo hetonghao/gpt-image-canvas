@@ -3,7 +3,9 @@ import {
   ArrowDown,
   ArrowUp,
   Bot,
+  Check,
   CheckCircle2,
+  CircleAlert,
   Database,
   GripVertical,
   KeyRound,
@@ -35,15 +37,19 @@ import {
 } from "@gpt-image-canvas/shared";
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
 import { apiFetch } from "../../shared/api/host-token";
+import { onboardingProviderFieldStates, type OnboardingFieldState } from "./provider-onboarding-fields";
+import { shouldSaveAgentConfig } from "./provider-config-save";
 
 interface ProviderConfigDialogProps {
   initialTab?: ProviderConfigTab;
   isAuthLoading: boolean;
   isCodexStarting: boolean;
+  mode?: "default" | "onboarding";
   onClose: () => void;
   onLogoutCodex: () => Promise<void>;
   onRefreshAgentConfig: () => Promise<AgentLlmConfigView | null>;
   onRefreshAuthStatus: () => Promise<AuthStatusResponse | null>;
+  onSaved?: () => void;
   onStartCodexLogin: () => Promise<void>;
 }
 
@@ -97,10 +103,12 @@ export function ProviderConfigDialog({
   initialTab = "image",
   isAuthLoading,
   isCodexStarting,
+  mode = "default",
   onClose,
   onLogoutCodex,
   onRefreshAgentConfig,
   onRefreshAuthStatus,
+  onSaved,
   onStartCodexLogin
 }: ProviderConfigDialogProps) {
   const { formatDateTime: formatLocaleDateTime, locale, t } = useI18n();
@@ -143,6 +151,21 @@ export function ProviderConfigDialog({
   const activeSourceRank = activeSourceId ? sourceOrder.indexOf(activeSourceId) + 1 : 0;
   const activeSourceTimeout = activeSource?.details.timeoutMs;
   const showAiCoveCondensedConfig = isAiCoveMode;
+  const isOnboarding = mode === "onboarding";
+  const onboardingFieldStates = isOnboarding
+    ? onboardingProviderFieldStates({
+        agent: {
+          apiKey: isAiCoveMode ? agentForm.apiKeyId : agentForm.apiKey || (hasSavedAgentKey ? agentApiKeyMask ?? "" : ""),
+          baseUrl: isAiCoveMode ? gatewayBaseUrl : agentForm.baseUrl,
+          model: agentForm.model
+        },
+        image: {
+          apiKey: isAiCoveMode ? localForm.apiKeyId : localForm.apiKey || (hasSavedLocalKey ? localApiKeyMask ?? "" : ""),
+          baseUrl: isAiCoveMode ? gatewayBaseUrl : localForm.baseUrl,
+          model: localForm.model
+        }
+      })
+    : null;
 
   const loadHostContext = useCallback(
     async (signal?: AbortSignal): Promise<HostSessionResponse | null> => {
@@ -509,7 +532,12 @@ export function ProviderConfigDialog({
       return;
     }
 
-    const shouldPersistAgentConfig = shouldSaveAgentConfig(agentForm, hasSavedAgentKey, isAiCoveMode);
+    const shouldPersistAgentConfig = shouldSaveAgentConfig({
+      form: agentForm,
+      hasSavedApiKey: hasSavedAgentKey,
+      isAiCoveMode,
+      queryBaseUrlSeed
+    });
     if (isAiCoveMode && shouldPersistAgentConfig && !agentApiKeyId) {
       setMessage({
         tone: "error",
@@ -616,6 +644,10 @@ export function ProviderConfigDialog({
         applyAgentConfig(savedAgentConfig);
       }
       await Promise.all([onRefreshAuthStatus(), onRefreshAgentConfig()]);
+      if (onSaved) {
+        onSaved();
+        return;
+      }
       setMessage({
         tone: "success",
         text: savedConfig.activeSource
@@ -661,6 +693,18 @@ export function ProviderConfigDialog({
         </header>
 
         <div className="provider-config-dialog__body">
+          {isOnboarding ? (
+            <section className="provider-config-onboarding" data-testid="provider-config-onboarding">
+              <div className="provider-config-onboarding__icon">
+                <KeyRound className="size-4" aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <h3>{t("providerOnboardingTitle")}</h3>
+                <p>{t("providerOnboardingCopy")}</p>
+              </div>
+            </section>
+          ) : null}
+
           {isLoading ? (
             <div className="provider-config-loading" data-testid="provider-config-loading" role="status">
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -763,7 +807,10 @@ export function ProviderConfigDialog({
                   ) : null}
                   <div className="provider-form-grid">
                     <label className="provider-field provider-field--span">
-                      <span>Base URL</span>
+                      <span>
+                        Base URL
+                        <OnboardingFieldStatusBadge state={onboardingFieldStates?.image.baseUrl} />
+                      </span>
                       <input
                         className="provider-field__control"
                         data-testid="provider-local-base-url"
@@ -778,6 +825,7 @@ export function ProviderConfigDialog({
                       <HostApiKeySelect
                         keys={hostApiKeys}
                         label={t("hostApiKeyLabel")}
+                        onboardingState={onboardingFieldStates?.image.apiKey}
                         name="localOpenAIKeyId"
                         testId="provider-local-api-key"
                         value={localForm.apiKeyId}
@@ -785,7 +833,10 @@ export function ProviderConfigDialog({
                       />
                     ) : (
                       <label className="provider-field provider-field--span">
-                        <span>API Key</span>
+                        <span>
+                          API Key
+                          <OnboardingFieldStatusBadge state={onboardingFieldStates?.image.apiKey} />
+                        </span>
                         <input
                           autoComplete="off"
                           className="provider-field__control"
@@ -799,7 +850,10 @@ export function ProviderConfigDialog({
                       </label>
                     )}
                     <label className="provider-field provider-field--compact">
-                      <span>{t("providerFieldModel")}</span>
+                      <span>
+                        {t("providerFieldModel")}
+                        <OnboardingFieldStatusBadge state={onboardingFieldStates?.image.model} />
+                      </span>
                       {isAiCoveMode ? (
                         <HostModelSelect
                           isLoading={isImageModelsLoading}
@@ -999,7 +1053,10 @@ export function ProviderConfigDialog({
                   ) : null}
                   <div className="provider-form-grid">
                     <label className="provider-field provider-field--span">
-                      <span>Base URL</span>
+                      <span>
+                        Base URL
+                        <OnboardingFieldStatusBadge state={onboardingFieldStates?.agent.baseUrl} />
+                      </span>
                       <input
                         className="provider-field__control"
                         data-testid="provider-agent-base-url"
@@ -1014,6 +1071,7 @@ export function ProviderConfigDialog({
                       <HostApiKeySelect
                         keys={hostApiKeys}
                         label={t("hostApiKeyLabel")}
+                        onboardingState={onboardingFieldStates?.agent.apiKey}
                         name="agentLlmKeyId"
                         testId="provider-agent-api-key"
                         value={agentForm.apiKeyId}
@@ -1021,7 +1079,10 @@ export function ProviderConfigDialog({
                       />
                     ) : (
                       <label className="provider-field provider-field--span">
-                        <span>API Key</span>
+                        <span>
+                          API Key
+                          <OnboardingFieldStatusBadge state={onboardingFieldStates?.agent.apiKey} />
+                        </span>
                         <input
                           autoComplete="off"
                           className="provider-field__control"
@@ -1035,7 +1096,10 @@ export function ProviderConfigDialog({
                       </label>
                     )}
                     <label className="provider-field provider-field--compact">
-                      <span>{t("providerFieldModel")}</span>
+                      <span>
+                        {t("providerFieldModel")}
+                        <OnboardingFieldStatusBadge state={onboardingFieldStates?.agent.model} />
+                      </span>
                       {isAiCoveMode ? (
                         <HostModelSelect
                           isLoading={isAgentModelsLoading}
@@ -1219,9 +1283,29 @@ function ProviderAvailabilityBadge({ available }: { available: boolean }) {
   );
 }
 
+function OnboardingFieldStatusBadge({ state }: { state?: OnboardingFieldState }) {
+  const { t } = useI18n();
+
+  if (!state) {
+    return null;
+  }
+
+  const isFilled = state === "filled";
+  const label = isFilled ? t("providerOnboardingFieldFilled") : t("providerOnboardingFieldMissing");
+
+  return (
+    <span className="provider-onboarding-field-status" data-state={state} title={label}>
+      <span className="sr-only">{label}</span>
+      <CircleAlert className="provider-onboarding-field-status__icon provider-onboarding-field-status__icon--missing" aria-hidden="true" />
+      <Check className="provider-onboarding-field-status__icon provider-onboarding-field-status__icon--filled" aria-hidden="true" />
+    </span>
+  );
+}
+
 function HostApiKeySelect({
   keys,
   label,
+  onboardingState,
   name,
   testId,
   value,
@@ -1229,6 +1313,7 @@ function HostApiKeySelect({
 }: {
   keys: HostApiKeySummary[];
   label: string;
+  onboardingState?: OnboardingFieldState;
   name: string;
   testId: string;
   value: string;
@@ -1238,7 +1323,10 @@ function HostApiKeySelect({
 
   return (
     <label className="provider-field provider-field--span">
-      <span>{label}</span>
+      <span>
+        {label}
+        <OnboardingFieldStatusBadge state={onboardingState} />
+      </span>
       <select
         className="provider-field__control"
         data-testid={testId}
@@ -1525,21 +1613,6 @@ function providerOverviewCopy(sourceId: ProviderSourceId | undefined, t: Transla
   }
 
   return t("providerStatusNoneCopy");
-}
-
-function shouldSaveAgentConfig(form: AgentLlmFormState, hasSavedApiKey: boolean, isAiCoveMode: boolean): boolean {
-  const baseUrl = form.baseUrl.trim();
-  if (isAiCoveMode) {
-    return Boolean(form.apiKeyId.trim() || form.model.trim() || form.supportsVision);
-  }
-
-  return Boolean(
-    hasSavedApiKey ||
-      form.apiKey.trim() ||
-      (baseUrl && baseUrl !== queryBaseUrlSeed) ||
-      form.model.trim() ||
-      form.supportsVision
-  );
 }
 
 async function readProviderConfigError(response: Response, locale: Locale, t: Translate): Promise<string> {

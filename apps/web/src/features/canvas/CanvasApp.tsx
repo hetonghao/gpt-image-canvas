@@ -67,6 +67,7 @@ import {
 import { AgentSkillDialog } from "../agent/AgentSkillDialog";
 import { HomePage } from "../home/HomePage";
 import { ProviderConfigDialog } from "../provider-config/ProviderConfigDialog";
+import { shouldAutoOpenProviderOnboarding } from "./provider-onboarding";
 import {
   CUSTOM_SIZE_PRESET_ID,
   GENERATION_COUNTS,
@@ -123,7 +124,7 @@ import {
   type StorageTestResult,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
-import { LOCALES, localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
+import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
 import { normalizeAssetUrl } from "../../shared/api/asset-url";
 import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
 import { apiFetch, appendHostTokenParam } from "../../shared/api/host-token";
@@ -158,6 +159,7 @@ const TLDRAW_LICENSE_KEY =
   "tldraw-2026-08-08/WyJ3dGU4bldjRyIsWyIqIl0sMTYsIjIwMjYtMDgtMDgiXQ.Xt7lTydUhMnKfHfp+g8Mrs9gtJjlB8uPyYMniFEfRfruCYdYEl9J0uZl0lMAf6o7GdDB1zXOVhWLFAipssI6Cw";
 const TLDRAW_USER_ID = "gpt-image-canvas-local-user";
 type ProviderConfigTab = "image" | "agent";
+type ProviderConfigDialogMode = "default" | "onboarding";
 
 function tldrawLocaleForLocale(locale: Locale): NonNullable<TLUserPreferences["locale"]> {
   return locale === "zh-CN" ? "zh-cn" : "en";
@@ -173,6 +175,17 @@ function localeForTldrawLocale(locale: TLUserPreferences["locale"]): Locale | un
   }
 
   return undefined;
+}
+
+function localizeDefaultPageName(editor: Editor, locale: Locale): void {
+  if (locale !== "zh-CN") {
+    return;
+  }
+
+  const currentPage = editor.getCurrentPage();
+  if (currentPage.name === "Page 1" || currentPage.name === "page 1") {
+    editor.renamePage(currentPage.id, "页面 1");
+  }
 }
 
 function isDeepSeekAgentConfigView(config: Pick<AgentLlmConfigView, "baseUrl" | "model"> | null | undefined): boolean {
@@ -2662,7 +2675,6 @@ function TopNavigation({
               {t("navGallery")}
             </a>
           </nav>
-          <LanguageSwitcher />
           <button
             aria-label={t("navOpenProviderConfig")}
             className="top-navigation__settings"
@@ -2677,27 +2689,6 @@ function TopNavigation({
         </div>
       </div>
     </header>
-  );
-}
-
-function LanguageSwitcher() {
-  const { locale, setLocale, t } = useI18n();
-
-  return (
-    <div className="language-switcher" aria-label={t("languageAria")} role="group">
-      {LOCALES.map((item) => (
-        <button
-          aria-pressed={locale === item}
-          className="language-switcher__button"
-          data-active={locale === item}
-          key={item}
-          type="button"
-          onClick={() => setLocale(item)}
-        >
-          {item === "zh-CN" ? t("languageZh") : t("languageEn")}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -2878,6 +2869,7 @@ export function App() {
   const [isAiCoveMode, setIsAiCoveMode] = useState(() => isAiCoveEmbeddedRuntime());
   const [route, setRoute] = useState<AppRoute>(() => routeFromLocation(isAiCoveEmbeddedRuntime() ? "canvas" : "home"));
   const shouldAutoOpenCanvasRef = useRef(route !== "gallery");
+  const providerOnboardingDismissedRef = useRef(false);
   const [panelTab, setPanelTab] = useState<PanelTab>("manual");
   const [generationMode, setGenerationMode] = useState<GenerationMode>("text");
   const [prompt, setPrompt] = useState("");
@@ -2905,6 +2897,7 @@ export function App() {
   const [isStorageDialogOpen, setIsStorageDialogOpen] = useState(false);
   const [isProviderConfigDialogOpen, setIsProviderConfigDialogOpen] = useState(false);
   const [providerConfigInitialTab, setProviderConfigInitialTab] = useState<ProviderConfigTab>("image");
+  const [providerConfigDialogMode, setProviderConfigDialogMode] = useState<ProviderConfigDialogMode>("default");
   const [isAgentSkillDialogOpen, setIsAgentSkillDialogOpen] = useState(false);
   const [storageConfig, setStorageConfig] = useState<StorageConfigResponse | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
@@ -3439,6 +3432,24 @@ export function App() {
   }, [authStatus, hasGenerationProvider, isAiCoveMode, isAuthLoading, navigateToRoute, route]);
 
   useEffect(() => {
+    if (
+      !shouldAutoOpenProviderOnboarding({
+        authProvider: authStatus?.provider ?? null,
+        dismissedInPageSession: providerOnboardingDismissedRef.current,
+        isProviderConfigDialogOpen,
+        isAuthLoading,
+        route
+      })
+    ) {
+      return;
+    }
+
+    setProviderConfigInitialTab("image");
+    setProviderConfigDialogMode("onboarding");
+    setIsProviderConfigDialogOpen(true);
+  }, [authStatus?.provider, isAuthLoading, isProviderConfigDialogOpen, route]);
+
+  useEffect(() => {
     const controller = new AbortController();
 
     async function loadStorageConfig(): Promise<void> {
@@ -3508,13 +3519,25 @@ export function App() {
   }
 
   function closeProviderConfigDialog(): void {
+    if (providerConfigDialogMode === "onboarding") {
+      providerOnboardingDismissedRef.current = true;
+    }
     setIsProviderConfigDialogOpen(false);
     setProviderConfigInitialTab("image");
+    setProviderConfigDialogMode("default");
   }
 
   function openProviderConfigDialog(tab: ProviderConfigTab = "image"): void {
     setProviderConfigInitialTab(tab);
+    setProviderConfigDialogMode("default");
     setIsProviderConfigDialogOpen(true);
+  }
+
+  function closeSavedProviderOnboarding(): void {
+    providerOnboardingDismissedRef.current = true;
+    setIsProviderConfigDialogOpen(false);
+    setProviderConfigInitialTab("image");
+    setProviderConfigDialogMode("default");
   }
 
   async function startCodexLogin(): Promise<void> {
@@ -3814,6 +3837,7 @@ export function App() {
 
   const handleEditorMount = useCallback((editor: Editor) => {
     editorRef.current = editor;
+    localizeDefaultPageName(editor, locale);
     if (!editor.user.getIsSnapMode()) {
       editor.user.updateUserPreferences({ isSnapMode: true });
     }
@@ -3884,7 +3908,7 @@ export function App() {
       removeReferenceStoreListener();
       removeListener();
     };
-  }, [isHostSessionBlocked, saveProjectSnapshot, t]);
+  }, [isHostSessionBlocked, locale, saveProjectSnapshot, t]);
 
   function selectScenePreset(nextPresetId: string): void {
     if (nextPresetId === CUSTOM_SIZE_PRESET_ID) {
@@ -7341,10 +7365,12 @@ export function App() {
           initialTab={providerConfigInitialTab}
           isAuthLoading={isAuthLoading}
           isCodexStarting={codexLoginStatus === "starting"}
+          mode={providerConfigDialogMode}
           onClose={closeProviderConfigDialog}
           onLogoutCodex={logoutCodexSession}
           onRefreshAgentConfig={loadAgentConfig}
           onRefreshAuthStatus={loadAuthStatus}
+          onSaved={providerConfigDialogMode === "onboarding" ? closeSavedProviderOnboarding : undefined}
           onStartCodexLogin={startCodexLogin}
         />
       ) : null}
