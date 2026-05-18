@@ -1,70 +1,53 @@
-name: Publish Docker Image
+name: AI Cove GHCR Image
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to publish, for example ai-cove-20260518T035430Z-8a4edd445b9e'
+        required: true
+        type: string
 
 permissions:
   contents: read
   packages: write
 
-concurrency:
-  group: docker-image-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  publish:
-    name: Build and push GHCR image
+  build-and-push:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve GHCR image name
+      - name: Set lowercase image name
         id: image
         shell: bash
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.image.outputs.name }}
-          tags: |
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
-
-      - name: Build and push
+      - name: Build and push linux/amd64 image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           pull: true
           push: true
           build-args: |
             APT_MIRROR=http://deb.debian.org/debian
             APT_SECURITY_MIRROR=http://deb.debian.org/debian-security
             NPM_CONFIG_REGISTRY=https://registry.npmjs.org
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.image.outputs.name }}:${{ inputs.image_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ inputs.image_tag }}
