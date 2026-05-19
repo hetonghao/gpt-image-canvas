@@ -16,6 +16,8 @@
     "smoke:web:onboarding-fields": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/provider-config/provider-onboarding-fields.smoke.ts",
     "smoke:web:onboarding": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/provider-onboarding.smoke.ts",
     "smoke:web:provider-config": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/provider-config/provider-config-save.smoke.ts",
+    "smoke:web:embedded-home-lazy": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/embedded-home-lazy.smoke.ts",
+    "smoke:api:static-assets-cache": "pnpm --filter @gpt-image-canvas/api exec tsx src/server/static-assets-cache.smoke.ts",
     "typecheck": "pnpm --filter @gpt-image-canvas/shared typecheck && pnpm --filter @gpt-image-canvas/web typecheck && pnpm --filter @gpt-image-canvas/api typecheck",
     "start": "pnpm --filter @gpt-image-canvas/api start"
   },

@@ -65,7 +65,6 @@ import {
   summarizeGenerationPlanOutputs
 } from "../agent/AgentPlanNodeShape";
 import { AgentSkillDialog } from "../agent/AgentSkillDialog";
-import { HomePage } from "../home/HomePage";
 import { ProviderConfigDialog } from "../provider-config/ProviderConfigDialog";
 import { shouldAutoOpenProviderOnboarding } from "./provider-onboarding";
 import {
@@ -321,6 +320,7 @@ function loadGalleryPageModule(): Promise<GalleryPageModule> {
 }
 
 const LazyGalleryPage = lazy(loadGalleryPageModule);
+const LazyHomePage = lazy(() => import("../home/HomePage").then((module) => ({ default: module.HomePage })));
 
 function preloadGalleryPage(): void {
   void loadGalleryPageModule();
@@ -5814,15 +5814,17 @@ export function App() {
         onPreloadGallery={preloadGalleryPage}
       />
       {route === "home" ? (
-        <HomePage
-          authError={authError}
-          authStatus={authStatus}
-          isAuthLoading={isAuthLoading}
-          isCodexStarting={codexLoginStatus === "starting"}
-          onOpenProviderConfig={() => openProviderConfigDialog()}
-          onOpenGallery={() => navigateToRoute("gallery")}
-          onStartCodexLogin={startCodexLogin}
-        />
+        <Suspense fallback={null}>
+          <LazyHomePage
+            authError={authError}
+            authStatus={authStatus}
+            isAuthLoading={isAuthLoading}
+            isCodexStarting={codexLoginStatus === "starting"}
+            onOpenProviderConfig={() => openProviderConfigDialog()}
+            onOpenGallery={() => navigateToRoute("gallery")}
+            onStartCodexLogin={startCodexLogin}
+          />
+        </Suspense>
       ) : null}
       <main className="app-shell app-view relative flex min-h-0 overflow-hidden bg-neutral-950 text-neutral-900" data-active-route={route} hidden={route !== "canvas"}>
       <section

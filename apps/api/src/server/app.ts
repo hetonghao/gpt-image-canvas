@@ -50,6 +50,29 @@ export function createApp(): Hono {
 
   app.get("/api/*", (c) => c.json(errorResponse("not_found", "Not found."), 404));
 
+  app.use("/assets/*", async (c, next) => {
+    await next();
+
+    if (!c.res.ok && c.res.status !== 206) {
+      return;
+    }
+
+    const contentType = c.res.headers.get("Content-Type") ?? "";
+    if (contentType.startsWith("text/html")) {
+      return;
+    }
+
+    const headers = new Headers(c.res.headers);
+    headers.set("Cache-Control", "public, max-age=31536000, immutable");
+    c.res = new Response(c.res.body, {
+      status: c.res.status,
+      statusText: c.res.statusText,
+      headers
+    });
+  });
+
+  app.get("/assets/*", serveStatic({ root: webDistRoot }));
+
   app.get("*", serveStatic({ root: webDistRoot }));
   app.get(
     "*",
