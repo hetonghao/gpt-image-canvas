@@ -66,7 +66,8 @@ import {
 } from "../agent/AgentPlanNodeShape";
 import { AgentSkillDialog } from "../agent/AgentSkillDialog";
 import { ProviderConfigDialog } from "../provider-config/ProviderConfigDialog";
-import { shouldAutoOpenProviderOnboarding } from "./provider-onboarding";
+import { generationSubmitActionForProviderState, shouldAutoOpenProviderOnboarding } from "./provider-onboarding";
+import { initialRouteForCurrentRuntime, isAiCoveEmbeddedRuntime, pathForRoute, routeFromLocation, type AppRoute } from "./runtime-route";
 import {
   CUSTOM_SIZE_PRESET_ID,
   GENERATION_COUNTS,
@@ -327,7 +328,6 @@ function preloadGalleryPage(): void {
 }
 
 type PersistedSnapshot = TLEditorSnapshot | TLStoreSnapshot;
-type AppRoute = "home" | "canvas" | "gallery";
 type SaveStatus = "loading" | "saved" | "pending" | "saving" | "error";
 type GenerationMode = "text" | "reference";
 type PanelTab = "manual" | "agent";
@@ -626,31 +626,6 @@ function imageSizeValidationMessage(reason: ImageSizeValidationReason | undefine
     default:
       return t("imageSizeUnsupportedPreset");
   }
-}
-
-function isAiCoveEmbeddedRuntime(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  return params.get("ui_mode") === "embedded" && Boolean(params.get("token")?.trim()) && Boolean(params.get("base_url")?.trim());
-}
-
-function routeFromLocation(defaultRoute: AppRoute = "home"): AppRoute {
-  if (window.location.pathname === "/canvas") {
-    return "canvas";
-  }
-
-  return window.location.pathname === "/gallery" ? "gallery" : defaultRoute;
-}
-
-function pathForRoute(route: AppRoute): string {
-  if (route === "canvas") {
-    return "/canvas";
-  }
-
-  return route === "gallery" ? "/gallery" : "/";
 }
 
 function isPersistedSnapshot(value: unknown): value is PersistedSnapshot {
@@ -2867,7 +2842,7 @@ export function App() {
     setUserPreferences: syncTldrawUserPreferences
   });
   const [isAiCoveMode, setIsAiCoveMode] = useState(() => isAiCoveEmbeddedRuntime());
-  const [route, setRoute] = useState<AppRoute>(() => routeFromLocation(isAiCoveEmbeddedRuntime() ? "canvas" : "home"));
+  const [route, setRoute] = useState<AppRoute>(() => initialRouteForCurrentRuntime());
   const shouldAutoOpenCanvasRef = useRef(route !== "gallery");
   const providerOnboardingDismissedRef = useRef(false);
   const [panelTab, setPanelTab] = useState<PanelTab>("manual");
@@ -2974,6 +2949,10 @@ export function App() {
   const saveRequestRef = useRef(0);
   const isGenerating = activeGenerationCount > 0;
   const hasGenerationProvider = authStatus?.provider === "openai" || authStatus?.provider === "codex";
+  const generationSubmitAction = generationSubmitActionForProviderState({
+    authProvider: authStatus?.provider ?? null,
+    isAuthLoading
+  });
   const isAgentRunning = agentRunStatus === "connecting" || agentRunStatus === "running";
   const agentRunStatusLabel = t("agentRunStatus", { status: agentRunStatus });
   const agentCancelRunLabel = `${agentRunStatusLabel}: ${t("agentCancelRun")}`;
@@ -3031,8 +3010,8 @@ export function App() {
   const isReferenceReady = isReferenceMode && referenceSelection.status === "ready";
   const referenceValidationMessage = isReferenceMode && !isReferenceReady ? referenceSelection.hint : "";
   const validationMessage = promptValidationMessage || dimensionValidationMessage || referenceValidationMessage;
-  const shouldShowValidation = Boolean(validationMessage);
-  const canGenerate = !validationMessage;
+  const shouldShowValidation = generationSubmitAction === "generate" && Boolean(validationMessage);
+  const canGenerate = generationSubmitAction === "configure-image-model" || !validationMessage;
   const isHostSessionBlocked = Boolean(hostSessionError);
   const tldrawComponents = useMemo(
     () =>
@@ -3530,6 +3509,12 @@ export function App() {
   function openProviderConfigDialog(tab: ProviderConfigTab = "image"): void {
     setProviderConfigInitialTab(tab);
     setProviderConfigDialogMode("default");
+    setIsProviderConfigDialogOpen(true);
+  }
+
+  function openProviderConfigOnboarding(tab: ProviderConfigTab = "image"): void {
+    setProviderConfigInitialTab(tab);
+    setProviderConfigDialogMode("onboarding");
     setIsProviderConfigDialogOpen(true);
   }
 
@@ -4090,6 +4075,11 @@ export function App() {
     resolveReference?: (signal: AbortSignal) => Promise<GenerationReferenceInput | undefined>,
     referenceAssetIds?: string[]
   ): Promise<void> {
+    if (generationSubmitAction === "configure-image-model") {
+      openProviderConfigOnboarding("image");
+      return;
+    }
+
     setGenerationError("");
     setGenerationMessage("");
     setGenerationWarning("");
@@ -4226,6 +4216,11 @@ export function App() {
   }
 
   async function submitGeneration(): Promise<void> {
+    if (generationSubmitAction === "configure-image-model") {
+      openProviderConfigOnboarding("image");
+      return;
+    }
+
     const input: GenerationSubmitInput = {
       prompt: trimmedPrompt,
       presetId: stylePreset,
@@ -6440,15 +6435,19 @@ export function App() {
             data-generation-mode={generationMode}
             data-reference-mode={isReferenceReady ? "edit" : "generate"}
             data-testid="generate-button"
-            title={validationMessage || undefined}
-            onClick={submitGeneration}
+            title={generationSubmitAction === "generate" ? validationMessage || undefined : undefined}
+            onClick={() => void submitGeneration()}
           >
             {isReferenceReady ? (
               <ImageIcon className="size-4" aria-hidden="true" />
             ) : (
               <Square className="size-4" aria-hidden="true" />
             )}
-            {generationMode === "reference" ? t("generationStartReference") : t("generationStartText")}
+            {generationSubmitAction === "configure-image-model"
+              ? t("generationConfigureImageModel")
+              : generationMode === "reference"
+                ? t("generationStartReference")
+                : t("generationStartText")}
           </button>
         </div>
         </>

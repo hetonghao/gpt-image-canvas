@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 
+import { AI_COVE_DEFAULT_AGENT_MODEL } from "./provider-config-save.js";
 import { onboardingProviderFieldStates, onboardingRequiredFieldStates } from "./provider-onboarding-fields.js";
 
 assert.deepEqual(
@@ -35,7 +36,7 @@ assert.deepEqual(
     agent: {
       apiKey: "sk-agent",
       baseUrl: "https://api.example.com/v1",
-      model: "gpt-5.1-mini"
+      model: AI_COVE_DEFAULT_AGENT_MODEL
     },
     image: {
       apiKey: "",

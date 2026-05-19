@@ -6,6 +6,10 @@ export interface AgentConfigSaveForm {
   supportsVision: boolean;
 }
 
+export const AI_COVE_DEFAULT_AGENT_MODEL = "gpt-5.4-mini";
+
+export type ProviderConfigTab = "image" | "agent";
+
 export function shouldSaveAgentConfig({
   form,
   hasSavedApiKey,
@@ -23,4 +27,20 @@ export function shouldSaveAgentConfig({
   }
 
   return Boolean(hasSavedApiKey || form.apiKey.trim() || (baseUrl && baseUrl !== queryBaseUrlSeed) || form.model.trim());
+}
+
+export function getProviderConfigSaveIssueTab({
+  agentApiKeyId,
+  isAiCoveMode,
+  shouldPersistAgentConfig
+}: {
+  agentApiKeyId: string;
+  isAiCoveMode: boolean;
+  shouldPersistAgentConfig: boolean;
+}): ProviderConfigTab | null {
+  if (isAiCoveMode && shouldPersistAgentConfig && !agentApiKeyId.trim()) {
+    return "agent";
+  }
+
+  return null;
 }

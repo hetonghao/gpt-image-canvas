@@ -38,7 +38,7 @@ import {
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
 import { apiFetch } from "../../shared/api/host-token";
 import { onboardingProviderFieldStates, type OnboardingFieldState } from "./provider-onboarding-fields";
-import { shouldSaveAgentConfig } from "./provider-config-save";
+import { AI_COVE_DEFAULT_AGENT_MODEL, getProviderConfigSaveIssueTab, shouldSaveAgentConfig, type ProviderConfigTab } from "./provider-config-save";
 
 interface ProviderConfigDialogProps {
   initialTab?: ProviderConfigTab;
@@ -71,8 +71,6 @@ interface AgentLlmFormState {
 }
 
 type DialogMessageTone = "success" | "error";
-type ProviderConfigTab = "image" | "agent";
-
 interface DialogMessage {
   tone: DialogMessageTone;
   text: string;
@@ -331,7 +329,7 @@ export function ProviderConfigDialog({
 
   function applyAgentConfig(nextConfig: AgentLlmConfigView, context: HostSessionResponse | null = hostSession): void {
     const nextIsAiCoveMode = context?.adapter.mode === "ai-cove";
-    const nextModel = nextConfig.model || (nextIsAiCoveMode ? "gpt-5.1-mini" : "");
+    const nextModel = nextConfig.model || (nextIsAiCoveMode ? AI_COVE_DEFAULT_AGENT_MODEL : "");
     const nextSupportsVision = nextConfig.configured ? nextConfig.supportsVision : true;
     setAgentConfig(nextConfig);
     setAgentForm({
@@ -538,7 +536,15 @@ export function ProviderConfigDialog({
       isAiCoveMode,
       queryBaseUrlSeed
     });
-    if (isAiCoveMode && shouldPersistAgentConfig && !agentApiKeyId) {
+    const issueTab = getProviderConfigSaveIssueTab({
+      agentApiKeyId,
+      isAiCoveMode,
+      shouldPersistAgentConfig
+    });
+    if (issueTab) {
+      setActiveTab(issueTab);
+    }
+    if (issueTab === "agent") {
       setMessage({
         tone: "error",
         text: t("hostAgentApiKeyRequired")
