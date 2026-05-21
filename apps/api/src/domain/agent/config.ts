@@ -3,7 +3,7 @@ import type { AgentLlmConfigView, MaskedSecret, SaveAgentLlmConfigRequest } from
 import { db } from "../../infrastructure/database.js";
 import { agentLlmConfigs } from "../../infrastructure/schema.js";
 import { hostAdapterConfig } from "../../infrastructure/runtime.js";
-import { hostGatewayBaseUrl, hostGatewayRuntimeBaseUrl, resolveHostApiKey, type HostContext } from "../host/host-adapter.js";
+import { hostGatewayBaseUrl, hostGatewayRuntimeBaseUrl, isHostedAiCoveMode, resolveHostApiKey, type HostContext } from "../host/host-adapter.js";
 
 const ACTIVE_AGENT_LLM_CONFIG_ID = "active";
 export const DEFAULT_AGENT_LLM_TIMEOUT_MS = 60000;
@@ -25,7 +25,7 @@ export function getAgentLlmConfig(hostContext?: HostContext): AgentLlmConfigView
 export async function getUsableAgentLlmConfig(hostContext?: HostContext, signal?: AbortSignal): Promise<UsableAgentLlmConfig | undefined> {
   const row = getAgentLlmConfigRow(hostContext);
   const apiKey =
-    hostAdapterConfig.mode === "ai-cove" && row?.apiKeyId
+    isHostedAiCoveMode() && row?.apiKeyId
       ? await resolveHostApiKey(requireHostContextForAiCove(hostContext), row.apiKeyId, signal)
       : trimToUndefined(row?.apiKey);
   const model = trimToUndefined(row?.model);
@@ -37,7 +37,7 @@ export async function getUsableAgentLlmConfig(hostContext?: HostContext, signal?
 
   return {
     apiKey,
-    baseUrl: hostAdapterConfig.mode === "ai-cove" ? hostGatewayRuntimeBaseUrl() : trimToUndefined(row?.baseUrl),
+    baseUrl: isHostedAiCoveMode() ? hostGatewayRuntimeBaseUrl() : trimToUndefined(row?.baseUrl),
     model,
     timeoutMs,
     supportsVision: row?.supportsVision === 1
@@ -51,16 +51,16 @@ export async function saveAgentLlmConfig(
 ): Promise<AgentLlmConfigView> {
   const now = new Date().toISOString();
   const existing = getAgentLlmConfigRow(hostContext);
-  const apiKey = hostAdapterConfig.mode === "ai-cove" ? null : resolveApiKeyForSave(input, existing);
-  const apiKeyId = hostAdapterConfig.mode === "ai-cove" ? requiredTrimmedString(input.apiKeyId ?? existing?.apiKeyId ?? "", "Agent LLM API key") : (existing?.apiKeyId ?? null);
-  const baseUrl = hostAdapterConfig.mode === "ai-cove" ? hostGatewayRuntimeBaseUrl() : input.baseUrl.trim();
+  const apiKey = isHostedAiCoveMode() ? null : resolveApiKeyForSave(input, existing);
+  const apiKeyId = isHostedAiCoveMode() ? requiredTrimmedString(input.apiKeyId ?? existing?.apiKeyId ?? "", "Agent LLM API key") : (existing?.apiKeyId ?? null);
+  const baseUrl = isHostedAiCoveMode() ? hostGatewayRuntimeBaseUrl() : input.baseUrl.trim();
   const model = requiredTrimmedString(input.model, "Agent LLM model");
   const timeoutMs = requiredPositiveInteger(input.timeoutMs, "Agent LLM timeout");
 
-  if (hostAdapterConfig.mode !== "ai-cove" && !apiKey) {
+  if (!isHostedAiCoveMode() && !apiKey) {
     throw new Error("Agent LLM API key is required.");
   }
-  if (hostAdapterConfig.mode === "ai-cove") {
+  if (isHostedAiCoveMode()) {
     const selectedApiKeyId = requiredTrimmedString(apiKeyId ?? "", "Agent LLM API key");
     if (!(await resolveHostApiKey(requireHostContextForAiCove(hostContext), selectedApiKeyId, signal))) {
       throw new Error("Selected AI Cove API key is unavailable for the current user.");
@@ -109,10 +109,10 @@ function toAgentLlmConfigView(row: AgentLlmConfigRow | undefined): AgentLlmConfi
   const model = row?.model?.trim() ?? "";
 
   return {
-    configured: Boolean((hostAdapterConfig.mode === "ai-cove" ? row?.apiKeyId : apiKey) && model),
-    apiKey: hostAdapterConfig.mode === "ai-cove" ? { hasSecret: Boolean(row?.apiKeyId) } : maskedSecret(apiKey),
+    configured: Boolean((isHostedAiCoveMode() ? row?.apiKeyId : apiKey) && model),
+    apiKey: isHostedAiCoveMode() ? { hasSecret: Boolean(row?.apiKeyId) } : maskedSecret(apiKey),
     apiKeyId: row?.apiKeyId ?? undefined,
-    baseUrl: hostAdapterConfig.mode === "ai-cove" ? hostGatewayBaseUrl() : (row?.baseUrl?.trim() ?? ""),
+    baseUrl: isHostedAiCoveMode() ? hostGatewayBaseUrl() : (row?.baseUrl?.trim() ?? ""),
     model,
     timeoutMs,
     supportsVision: row?.supportsVision === 1,

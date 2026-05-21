@@ -22,6 +22,7 @@ import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useState, type PointerEvent, type ReactNode } from "react";
 import {
   PROVIDER_SOURCE_IDS,
+  isHostedAiCoveAdapterMode,
   type AgentLlmConfigView,
   type AuthStatusResponse,
   type HostApiKeySummary,
@@ -127,7 +128,7 @@ export function ProviderConfigDialog({
   const [message, setMessage] = useState<DialogMessage | null>(null);
   const [draggingSourceId, setDraggingSourceId] = useState<ProviderSourceId | null>(null);
   const [activeTab, setActiveTab] = useState<ProviderConfigTab>(initialTab);
-  const isAiCoveMode = hostSession?.adapter.mode === "ai-cove";
+  const isAiCoveMode = isHostedAiCoveAdapterMode(hostSession?.adapter.mode);
   const gatewayBaseUrl = hostSession?.adapter.gatewayBaseUrl ?? queryBaseUrlSeed;
   const hasHostApiKeys = hostApiKeys.length > 0;
 
@@ -179,7 +180,7 @@ export function ProviderConfigDialog({
         }
 
         setHostSession(session);
-        if (session.adapter.mode !== "ai-cove") {
+        if (!isHostedAiCoveAdapterMode(session.adapter.mode)) {
           setHostApiKeys([]);
           return session;
         }
@@ -314,28 +315,30 @@ export function ProviderConfigDialog({
   }, [onClose]);
 
   function applyProviderConfig(nextConfig: ProviderConfigResponse, context: HostSessionResponse | null = hostSession): void {
-    const nextIsAiCoveMode = context?.adapter.mode === "ai-cove";
+    const nextIsAiCoveMode = isHostedAiCoveAdapterMode(context?.adapter.mode);
     const nextModel = nextConfig.localOpenAI.model || (nextIsAiCoveMode ? "gpt-image-2" : "");
+    const nextGatewayBaseUrl = nextIsAiCoveMode && context ? context.adapter.gatewayBaseUrl : "";
     setConfig(nextConfig);
     setSourceOrder(nextConfig.sourceOrder);
     setLocalForm({
       apiKey: "",
       apiKeyId: nextConfig.localOpenAI.apiKeyId ?? "",
-      baseUrl: nextIsAiCoveMode ? context.adapter.gatewayBaseUrl : nextConfig.localOpenAI.baseUrl || queryBaseUrlSeed,
+      baseUrl: nextIsAiCoveMode ? nextGatewayBaseUrl : nextConfig.localOpenAI.baseUrl || queryBaseUrlSeed,
       model: nextModel,
       timeoutMs: formatTimeoutSeconds(nextConfig.localOpenAI.timeoutMs)
     });
   }
 
   function applyAgentConfig(nextConfig: AgentLlmConfigView, context: HostSessionResponse | null = hostSession): void {
-    const nextIsAiCoveMode = context?.adapter.mode === "ai-cove";
+    const nextIsAiCoveMode = isHostedAiCoveAdapterMode(context?.adapter.mode);
     const nextModel = nextConfig.model || (nextIsAiCoveMode ? AI_COVE_DEFAULT_AGENT_MODEL : "");
     const nextSupportsVision = nextConfig.configured ? nextConfig.supportsVision : true;
+    const nextGatewayBaseUrl = nextIsAiCoveMode && context ? context.adapter.gatewayBaseUrl : "";
     setAgentConfig(nextConfig);
     setAgentForm({
       apiKey: "",
       apiKeyId: nextConfig.apiKeyId ?? "",
-      baseUrl: nextIsAiCoveMode ? context.adapter.gatewayBaseUrl : nextConfig.baseUrl || queryBaseUrlSeed,
+      baseUrl: nextIsAiCoveMode ? nextGatewayBaseUrl : nextConfig.baseUrl || queryBaseUrlSeed,
       model: nextModel,
       timeoutMs: formatTimeoutSeconds(nextConfig.timeoutMs),
       supportsVision: nextSupportsVision

@@ -21,10 +21,10 @@ import {
   type OpenAIImageProviderConfig
 } from "../../infrastructure/providers/image-provider.js";
 import { codexOAuthTokens, providerConfigs } from "../../infrastructure/schema.js";
-import { hostAdapterConfig } from "../../infrastructure/runtime.js";
 import {
   hostGatewayBaseUrl,
   hostGatewayRuntimeBaseUrl,
+  isHostedAiCoveMode,
   listHostApiKeys,
   resolveHostApiKey,
   type HostApiKeyRecord,
@@ -48,7 +48,7 @@ interface ResolvedLocalConfig {
 }
 
 export async function getProviderConfig(hostContext?: HostContext, signal?: AbortSignal): Promise<ProviderConfigResponse> {
-  if (hostAdapterConfig.mode === "ai-cove") {
+  if (isHostedAiCoveMode()) {
     return getProviderConfigWithSeed(undefined, hostContext, signal);
   }
 
@@ -87,7 +87,7 @@ export async function saveProviderConfig(
   const now = new Date().toISOString();
   const existing = getProviderConfigRow(hostContext);
   const local = resolveLocalConfigForSave(input.localOpenAI, existing);
-  if (hostAdapterConfig.mode === "ai-cove" && local.localApiKeyId) {
+  if (isHostedAiCoveMode() && local.localApiKeyId) {
     await assertHostApiKeyAvailable(hostContext, local.localApiKeyId, signal);
   }
 
@@ -148,7 +148,7 @@ export async function getLocalOpenAIImageProviderConfig(
 ): Promise<OpenAIImageProviderConfig | undefined> {
   const row = getProviderConfigRow(hostContext);
   const apiKey =
-    hostAdapterConfig.mode === "ai-cove" && row?.localApiKeyId
+    isHostedAiCoveMode() && row?.localApiKeyId
       ? await resolveHostApiKey(requireHostContextForAiCove(hostContext), row.localApiKeyId, signal)
       : trimToUndefined(row?.localApiKey);
   if (!apiKey) {
@@ -157,7 +157,7 @@ export async function getLocalOpenAIImageProviderConfig(
 
   return {
     apiKey,
-    baseURL: hostAdapterConfig.mode === "ai-cove" ? hostGatewayRuntimeBaseUrl() : trimToUndefined(row?.localBaseUrl),
+    baseURL: isHostedAiCoveMode() ? hostGatewayRuntimeBaseUrl() : trimToUndefined(row?.localBaseUrl),
     model: trimToUndefined(row?.localModel) ?? IMAGE_MODEL,
     timeoutMs: validTimeoutMs(row?.localTimeoutMs) ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS
   };
@@ -177,7 +177,7 @@ function getProviderConfigRow(hostContext?: HostContext): ProviderConfigRow | un
 
 function getProviderConfigRowWithSeed(baseUrlSeed?: string, hostContext?: HostContext): ProviderConfigRow | undefined {
   const row = getProviderConfigRow(hostContext);
-  if (hostAdapterConfig.mode === "ai-cove") {
+  if (isHostedAiCoveMode()) {
     return row;
   }
 
@@ -267,7 +267,7 @@ function providerSources(
 ): ProviderSourceView[] {
   const envConfig = getEnvironmentOpenAIImageProviderConfig();
   const hasLocalConfig =
-    hostAdapterConfig.mode === "ai-cove"
+    isHostedAiCoveMode()
       ? Boolean(findHostApiKeyRecord(row?.localApiKeyId, hostApiKeys))
       : Boolean(trimToUndefined(row?.localApiKey));
   const codex = codexSessionView(getCodexTokenRow(hostContext));
@@ -293,11 +293,11 @@ function providerSources(
       available: hasLocalConfig,
       status: hasLocalConfig ? "available" : "missing_api_key",
       details: {
-        baseUrl: hostAdapterConfig.mode === "ai-cove" ? hostGatewayBaseUrl() : (row?.localBaseUrl ?? ""),
+        baseUrl: isHostedAiCoveMode() ? hostGatewayBaseUrl() : (row?.localBaseUrl ?? ""),
         model: trimToUndefined(row?.localModel) ?? IMAGE_MODEL,
         timeoutMs: validTimeoutMs(row?.localTimeoutMs) ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS
       },
-      secret: hostAdapterConfig.mode === "ai-cove" ? { hasSecret: Boolean(row?.localApiKeyId) } : maskedSecret(row?.localApiKey)
+      secret: isHostedAiCoveMode() ? { hasSecret: Boolean(row?.localApiKeyId) } : maskedSecret(row?.localApiKey)
     },
     {
       id: "codex",
@@ -318,9 +318,9 @@ function providerSources(
 function localOpenAIConfigView(row: ProviderConfigRow | undefined, hostApiKeys: HostApiKeyRecord[] | undefined): LocalOpenAIProviderConfigView {
   const hasHostApiKey = Boolean(findHostApiKeyRecord(row?.localApiKeyId, hostApiKeys));
   return {
-    apiKey: hostAdapterConfig.mode === "ai-cove" ? { hasSecret: hasHostApiKey } : maskedSecret(row?.localApiKey),
+    apiKey: isHostedAiCoveMode() ? { hasSecret: hasHostApiKey } : maskedSecret(row?.localApiKey),
     apiKeyId: row?.localApiKeyId ?? undefined,
-    baseUrl: hostAdapterConfig.mode === "ai-cove" ? hostGatewayBaseUrl() : (row?.localBaseUrl ?? ""),
+    baseUrl: isHostedAiCoveMode() ? hostGatewayBaseUrl() : (row?.localBaseUrl ?? ""),
     model: trimToUndefined(row?.localModel) ?? IMAGE_MODEL,
     timeoutMs: validTimeoutMs(row?.localTimeoutMs) ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS
   };
@@ -360,9 +360,9 @@ function resolveLocalConfigForSave(
   }
 
   return {
-    localApiKey: hostAdapterConfig.mode === "ai-cove" ? null : resolveLocalApiKey(input, existing),
-    localApiKeyId: hostAdapterConfig.mode === "ai-cove" ? (trimToNull(input.apiKeyId) ?? existing?.localApiKeyId ?? null) : (existing?.localApiKeyId ?? null),
-    localBaseUrl: hostAdapterConfig.mode === "ai-cove" ? hostGatewayRuntimeBaseUrl() : Object.hasOwn(input, "baseUrl") ? trimToNull(input.baseUrl) : (existing?.localBaseUrl ?? null),
+    localApiKey: isHostedAiCoveMode() ? null : resolveLocalApiKey(input, existing),
+    localApiKeyId: isHostedAiCoveMode() ? (trimToNull(input.apiKeyId) ?? existing?.localApiKeyId ?? null) : (existing?.localApiKeyId ?? null),
+    localBaseUrl: isHostedAiCoveMode() ? hostGatewayRuntimeBaseUrl() : Object.hasOwn(input, "baseUrl") ? trimToNull(input.baseUrl) : (existing?.localBaseUrl ?? null),
     localModel: Object.hasOwn(input, "model") ? trimToNull(input.model) : (existing?.localModel ?? null),
     localTimeoutMs: Object.hasOwn(input, "timeoutMs")
       ? requiredPositiveInteger(input.timeoutMs, "Custom OpenAI timeout")
@@ -481,7 +481,7 @@ function isDefined<T>(value: T | undefined): value is T {
 }
 
 async function hostApiKeysForConfig(hostContext: HostContext | undefined, signal?: AbortSignal): Promise<HostApiKeyRecord[] | undefined> {
-  if (hostAdapterConfig.mode !== "ai-cove") {
+  if (!isHostedAiCoveMode()) {
     return undefined;
   }
 
@@ -497,7 +497,7 @@ async function assertHostApiKeyAvailable(hostContext: HostContext | undefined, a
 
 function findHostApiKeyRecord(apiKeyId: string | null | undefined, hostApiKeys: HostApiKeyRecord[] | undefined): HostApiKeyRecord | undefined {
   const id = apiKeyId?.trim();
-  return id ? hostApiKeys?.find((record) => record.summary.id === id && Boolean(record.key)) : undefined;
+  return id ? hostApiKeys?.find((record) => record.summary.id === id) : undefined;
 }
 
 function hostUserId(hostContext: HostContext | undefined): string {

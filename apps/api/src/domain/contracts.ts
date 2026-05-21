@@ -15,6 +15,7 @@ export {
   SIZE_PRESETS,
   STYLE_PRESETS,
   composePrompt,
+  isHostedAiCoveAdapterMode,
   sizeToApiValue,
   validateImageSize,
   validateSceneImageSize

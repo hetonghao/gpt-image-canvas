@@ -1,4 +1,4 @@
-import type { HostApiKeySummary, HostModelSummary, HostSessionResponse, HostUser } from "../contracts.js";
+import { isHostedAiCoveAdapterMode, type HostApiKeySummary, type HostModelSummary, type HostSessionResponse, type HostUser } from "../contracts.js";
 import { hostAdapterConfig } from "../../infrastructure/runtime.js";
 
 const STANDALONE_USER: HostUser = {
@@ -14,6 +14,8 @@ export interface HostApiKeyRecord {
 
 export interface HostContext {
   token?: string;
+  cookie?: string;
+  userId?: string;
   user: HostUser;
 }
 
@@ -41,6 +43,14 @@ export function standaloneHostUser(): HostUser {
   return { ...STANDALONE_USER };
 }
 
+export function isHostedAiCoveMode(): boolean {
+  return isHostedAiCoveAdapterMode(hostAdapterConfig.mode);
+}
+
+function isNewApiHostMode(): boolean {
+  return hostAdapterConfig.mode === "ai-cove-new-api";
+}
+
 export function extractHostToken(input: { authorization?: string | null; token?: string | null }): string | undefined {
   const bearer = input.authorization?.match(/^\s*Bearer\s+(.+?)\s*$/iu)?.[1]?.trim();
   return bearer || input.token?.trim() || undefined;
@@ -48,7 +58,9 @@ export function extractHostToken(input: { authorization?: string | null; token?:
 
 export async function resolveHostContext(input: {
   authorization?: string | null;
+  cookie?: string | null;
   token?: string | null;
+  userId?: string | null;
   signal?: AbortSignal;
 }): Promise<HostResolveResult> {
   if (hostAdapterConfig.mode === "standalone") {
@@ -61,7 +73,8 @@ export async function resolveHostContext(input: {
   }
 
   const token = extractHostToken(input);
-  if (!token) {
+  const cookie = input.cookie?.trim() || undefined;
+  if (!token && !(isNewApiHostMode() && cookie)) {
     return {
       ok: false,
       status: 401,
@@ -71,7 +84,22 @@ export async function resolveHostContext(input: {
   }
 
   try {
-    const userPayload = await fetchHostJson("/api/v1/auth/me", token, input.signal);
+    const userId = input.userId?.trim();
+    if (isNewApiHostMode() && !userId) {
+      return {
+        ok: false,
+        status: 401,
+        code: "host_user_required",
+        message: "AI Cove user id is required."
+      };
+    }
+
+    const userPayload = await fetchHostJson(
+      isNewApiHostMode() ? "/api/user/self" : "/api/v1/auth/me",
+      { token, cookie },
+      input.signal,
+      isNewApiHostMode() ? { userId } : undefined
+    );
     const user = parseHostUser(userPayload);
     if (!user) {
       return {
@@ -86,6 +114,8 @@ export async function resolveHostContext(input: {
       ok: true,
       context: {
         token,
+        cookie,
+        userId: user.id,
         user
       }
     };
@@ -111,11 +141,19 @@ export function hostSessionResponse(context: HostContext): HostSessionResponse {
 }
 
 export async function listHostApiKeys(context: HostContext, signal?: AbortSignal): Promise<HostApiKeyRecord[]> {
-  if (hostAdapterConfig.mode === "standalone" || !context.token) {
+  if (hostAdapterConfig.mode === "standalone") {
     return [];
   }
 
-  const payload = await fetchHostJson("/api/v1/keys?page=1&page_size=100", context.token, signal);
+  if (isNewApiHostMode()) {
+    return listNewApiHostTokens(context, signal);
+  }
+
+  if (!context.token) {
+    return [];
+  }
+
+  const payload = await fetchHostJson("/api/v1/keys?page=1&page_size=100", { token: context.token }, signal);
   return parseHostApiKeyItems(payload);
 }
 
@@ -134,7 +172,30 @@ export async function resolveHostApiKeyRecord(
   }
 
   const records = await listHostApiKeys(context, signal);
-  return records.find((record) => record.summary.id === id && Boolean(record.key));
+  const record = records.find((candidate) => candidate.summary.id === id);
+  if (!record) {
+    return undefined;
+  }
+
+  if (record.key) {
+    return record;
+  }
+
+  if (!isNewApiHostMode()) {
+    return undefined;
+  }
+
+  const userId = context.userId ?? context.user.id;
+  const key = await fetchNewApiTokenKey({ token: context.token, cookie: context.cookie }, userId, id, signal);
+  return key
+    ? {
+        summary: {
+          ...record.summary,
+          maskedKey: maskKey(key) ?? record.summary.maskedKey
+        },
+        key
+      }
+    : undefined;
 }
 
 export async function listHostModels(context: HostContext, apiKeyId: string, signal?: AbortSignal): Promise<HostModelSummary[]> {
@@ -147,18 +208,76 @@ export async function listHostModels(context: HostContext, apiKeyId: string, sig
     return [];
   }
 
-  const payload = await fetchHostJson("/v1/models", record.key, signal);
+  const payload = await fetchHostJson("/v1/models", { token: record.key }, signal);
   return parseHostModelItems(payload);
 }
 
-async function fetchHostJson(path: string, token: string, signal?: AbortSignal): Promise<unknown> {
+async function listNewApiHostTokens(context: HostContext, signal?: AbortSignal): Promise<HostApiKeyRecord[]> {
+  if (!context.token && !context.cookie) {
+    return [];
+  }
+
+  const userId = context.userId ?? context.user.id;
+  const auth = { token: context.token, cookie: context.cookie };
+  const payload = await fetchHostJson("/api/token/?p=1&size=100", auth, signal, { userId });
+  return parseHostApiKeyItems(payload).map((record) => ({
+    summary: record.summary
+  }));
+}
+
+async function fetchNewApiTokenKey(
+  auth: HostFetchAuth,
+  userId: string,
+  tokenId: string,
+  signal?: AbortSignal
+): Promise<string | undefined> {
+  if ((!auth.token && !auth.cookie) || !userId || !tokenId) {
+    return undefined;
+  }
+
+  const payload = await fetchHostJson(`/api/token/${encodeURIComponent(tokenId)}/key`, auth, signal, {
+    method: "POST",
+    userId
+  });
+  return (
+    stringValue(recordValue(recordValue(payload, "data"), "key")) ??
+    stringValue(recordValue(payload, "key")) ??
+    stringValue(recordValue(payload, "data"))
+  );
+}
+
+type HostFetchAuth = {
+  token?: string;
+  cookie?: string;
+};
+
+async function fetchHostJson(
+  path: string,
+  auth: HostFetchAuth,
+  signal?: AbortSignal,
+  options?: {
+    method?: string;
+    userId?: string;
+  }
+): Promise<unknown> {
   const timeout = timeoutSignal(signal, HOST_FETCH_TIMEOUT_MS);
   try {
+    const headers: Record<string, string> = {
+      Accept: "application/json"
+    };
+    if (auth.token) {
+      headers.Authorization = `Bearer ${auth.token}`;
+    }
+    if (auth.cookie) {
+      headers.Cookie = auth.cookie;
+    }
+    if (options?.userId) {
+      headers["New-Api-User"] = options.userId;
+    }
+
     const response = await fetch(`${hostAdapterConfig.aiCoveApiBaseUrl}${path}`, {
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${token}`
-      },
+      method: options?.method ?? "GET",
+      headers,
       signal: timeout.signal
     });
 
@@ -223,12 +342,14 @@ function parseHostApiKeyItems(payload: unknown): HostApiKeyRecord[] {
       numberValue(recordValue(quota, "limit"));
     const quotaUsed =
       numberValue(item.quota_used) ??
+      numberValue(item.used_quota) ??
       numberValue(item.quotaUsed) ??
       numberValue(recordValue(quota, "used")) ??
       numberValue(recordValue(quota, "quota_used")) ??
       numberValue(recordValue(quota, "quotaUsed"));
     const quotaRemaining =
       numberValue(item.quota_remaining) ??
+      numberValue(item.remain_quota) ??
       numberValue(item.quotaRemaining) ??
       numberValue(recordValue(quota, "remaining")) ??
       numberValue(recordValue(quota, "remain"));
@@ -238,7 +359,7 @@ function parseHostApiKeyItems(payload: unknown): HostApiKeyRecord[] {
         summary: {
           id,
           name: stringValue(item.name) ?? id,
-          status: stringValue(item.status),
+          status: scalarStringValue(item.status),
           group: summarizeGroup(item.group),
           quota:
             quotaTotal !== undefined || quotaUsed !== undefined || quotaRemaining !== undefined

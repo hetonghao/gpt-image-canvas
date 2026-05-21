@@ -19,7 +19,7 @@ function parsePort(value: string | undefined): number {
   return parsed;
 }
 
-const hostAdapterModes = ["standalone", "ai-cove"] as const;
+const hostAdapterModes = ["standalone", "ai-cove", "ai-cove-new-api"] as const;
 export type HostAdapterMode = (typeof hostAdapterModes)[number];
 
 function parseHostAdapterMode(value: string | undefined): HostAdapterMode {

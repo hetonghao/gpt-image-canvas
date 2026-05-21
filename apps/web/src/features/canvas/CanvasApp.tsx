@@ -83,6 +83,7 @@ import {
   OUTPUT_FORMATS,
   SIZE_PRESETS,
   STYLE_PRESETS,
+  isHostedAiCoveAdapterMode,
   resolutionTierForSize,
   validateImageSize,
   type AgentConversation,
@@ -3250,7 +3251,7 @@ export function App() {
         }
 
         const session = (await response.json()) as { adapter?: { mode?: string } };
-        if (!controller.signal.aborted && session.adapter?.mode === "ai-cove") {
+        if (!controller.signal.aborted && isHostedAiCoveAdapterMode(session.adapter?.mode)) {
           setIsAiCoveMode(true);
         }
       } catch (error) {

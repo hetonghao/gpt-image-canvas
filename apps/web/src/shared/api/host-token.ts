@@ -1,6 +1,8 @@
 const HOST_TOKEN_STORAGE_KEY = "ai-cove-design.hostToken";
+const HOST_USER_ID_STORAGE_KEY = "ai-cove-design.hostUserId";
 
 let cachedHostToken: string | null | undefined;
+let cachedHostUserId: string | null | undefined;
 
 export function hasHostToken(): boolean {
   return Boolean(getHostToken());
@@ -28,12 +30,18 @@ export function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Prom
 
 export function withHostTokenParam(url: string): string {
   const token = getHostToken();
-  if (!token || !isLocalApiUrl(url)) {
+  const userId = getHostUserId();
+  if ((!token && !userId) || !isLocalApiUrl(url)) {
     return url;
   }
 
   const nextUrl = new URL(url, window.location.href);
-  nextUrl.searchParams.set("token", token);
+  if (token) {
+    nextUrl.searchParams.set("token", token);
+  }
+  if (userId) {
+    nextUrl.searchParams.set("user_id", userId);
+  }
   return nextUrl.pathname + nextUrl.search + nextUrl.hash;
 }
 
@@ -42,18 +50,26 @@ export function appendHostTokenParam(url: URL): URL {
   if (token) {
     url.searchParams.set("token", token);
   }
+  const userId = getHostUserId();
+  if (userId) {
+    url.searchParams.set("user_id", userId);
+  }
   return url;
 }
 
 function withHostAuthorization(input: RequestInfo | URL, init: RequestInit): RequestInit {
   const token = getHostToken();
-  if (!token || !isLocalApiRequest(input)) {
+  const userId = getHostUserId();
+  if ((!token && !userId) || !isLocalApiRequest(input)) {
     return init;
   }
 
   const headers = new Headers(init.headers);
-  if (!headers.has("Authorization")) {
+  if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
+  }
+  if (userId && !headers.has("New-Api-User")) {
+    headers.set("New-Api-User", userId);
   }
 
   return {
@@ -91,6 +107,30 @@ function readTokenFromLocation(): string {
   return new URLSearchParams(window.location.search).get("token")?.trim() ?? "";
 }
 
+function getHostUserId(): string | null {
+  if (cachedHostUserId !== undefined) {
+    return cachedHostUserId;
+  }
+
+  const queryUserId = readUserIdFromLocation();
+  if (queryUserId) {
+    cachedHostUserId = queryUserId;
+    persistHostUserId(queryUserId);
+    return cachedHostUserId;
+  }
+
+  cachedHostUserId = readStoredHostUserId();
+  return cachedHostUserId;
+}
+
+function readUserIdFromLocation(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return new URLSearchParams(window.location.search).get("user_id")?.trim() ?? "";
+}
+
 function readStoredHostToken(): string | null {
   if (typeof window === "undefined") {
     return null;
@@ -98,6 +138,18 @@ function readStoredHostToken(): string | null {
 
   try {
     return window.sessionStorage.getItem(HOST_TOKEN_STORAGE_KEY) || window.localStorage.getItem(HOST_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function readStoredHostUserId(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.sessionStorage.getItem(HOST_USER_ID_STORAGE_KEY) || window.localStorage.getItem(HOST_USER_ID_STORAGE_KEY);
   } catch {
     return null;
   }
@@ -116,6 +168,24 @@ function persistHostToken(token: string): void {
 
   try {
     window.localStorage.setItem(HOST_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // sessionStorage is preferred; localStorage is only a refresh fallback.
+  }
+}
+
+function persistHostUserId(userId: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(HOST_USER_ID_STORAGE_KEY, userId);
+  } catch {
+    // Ignore storage failures; the user id remains available in memory for this page lifetime.
+  }
+
+  try {
+    window.localStorage.setItem(HOST_USER_ID_STORAGE_KEY, userId);
   } catch {
     // sessionStorage is preferred; localStorage is only a refresh fallback.
   }

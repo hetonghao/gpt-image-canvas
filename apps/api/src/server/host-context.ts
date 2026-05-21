@@ -19,7 +19,9 @@ export const hostContextMiddleware: MiddlewareHandler<{ Variables: HostVariables
 
   const resolved = await resolveHostContext({
     authorization: c.req.header("authorization"),
+    cookie: c.req.header("cookie"),
     token: c.req.query("token"),
+    userId: c.req.query("user_id") ?? c.req.header("new-api-user"),
     signal: c.req.raw.signal
   });
 

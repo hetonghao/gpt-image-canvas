@@ -1,4 +1,8 @@
-export type HostAdapterMode = "standalone" | "ai-cove";
+export type HostAdapterMode = "standalone" | "ai-cove" | "ai-cove-new-api";
+
+export function isHostedAiCoveAdapterMode(mode: string | undefined): boolean {
+  return mode === "ai-cove" || mode === "ai-cove-new-api";
+}
 
 export interface HostUser {
   id: string;
