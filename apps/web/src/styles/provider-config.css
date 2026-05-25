@@ -195,7 +195,7 @@
   isolation: isolate;
   display: grid;
   min-width: 0;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--provider-tab-gap);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -210,7 +210,7 @@
   top: var(--provider-tab-pad);
   bottom: var(--provider-tab-pad);
   left: var(--provider-tab-pad);
-  width: calc((100% - (var(--provider-tab-pad) * 2) - var(--provider-tab-gap)) / 2);
+  width: calc((100% - (var(--provider-tab-pad) * 2) - (var(--provider-tab-gap) * 2)) / 3);
   border: 1px solid rgb(15 118 110 / 0.18);
   border-radius: 7px;
   background:
@@ -224,6 +224,10 @@
 
 .provider-config-tabs[data-active-tab="agent"]::before {
   transform: translateX(calc(100% + var(--provider-tab-gap)));
+}
+
+.provider-config-tabs[data-active-tab="summary"]::before {
+  transform: translateX(calc((100% + var(--provider-tab-gap)) * 2));
 }
 
 .provider-config-tab {
@@ -1031,6 +1035,44 @@
   line-height: 1.45;
 }
 
+.provider-config-inline-hint {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.52rem;
+  margin: 0.85rem 0 0;
+  border: 1px solid #f0d19b;
+  border-radius: 7px;
+  background: #fff8e8;
+  color: #744300;
+  font-size: 0.78rem;
+  font-weight: 760;
+  line-height: 1.55;
+  padding: 0.66rem 0.72rem;
+}
+
+.provider-config-inline-hint strong,
+.provider-config-field-bang {
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #8a4f00;
+  color: #fffdf8;
+  font-family: var(--font-mono);
+  line-height: 1;
+}
+
+.provider-config-inline-hint strong {
+  width: 1.2rem;
+  height: 1.2rem;
+  font-size: 0.78rem;
+}
+
+.provider-config-field-bang {
+  width: 1.08rem;
+  height: 1.08rem;
+  font-size: 0.72rem;
+}
+
 .provider-toggle-field {
   display: flex;
   min-width: 0;
@@ -1124,7 +1166,7 @@
 
   .provider-config-tabs {
     position: relative;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     align-self: stretch;
     gap: 0.28rem;
     padding: 0.25rem;

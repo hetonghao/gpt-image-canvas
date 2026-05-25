@@ -27,7 +27,7 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
   DefaultSnapIndicator,
@@ -64,8 +64,7 @@ import {
   isGenerationPlan,
   summarizeGenerationPlanOutputs
 } from "../agent/AgentPlanNodeShape";
-import { AgentSkillDialog } from "../agent/AgentSkillDialog";
-import { ProviderConfigDialog } from "../provider-config/ProviderConfigDialog";
+import type { PromptRegionEditorHandle } from "./PromptRegionEditor";
 import { generationSubmitActionForProviderState, shouldAutoOpenProviderOnboarding } from "./provider-onboarding";
 import { initialRouteForCurrentRuntime, isAiCoveEmbeddedRuntime, pathForRoute, routeFromLocation, type AppRoute } from "./runtime-route";
 import {
@@ -114,21 +113,45 @@ import {
   type ImageQuality,
   type ImageSize,
   type ImageSizeValidationReason,
+  type NormalizedImageRegion,
   type OutputFormat,
   type ProjectState,
   type ReferenceImageInput,
   type ResolutionTier,
+  type RegionSummaryRequest,
+  type RegionSummaryResponse,
   type SaveStorageConfigRequest,
   type S3EndpointMode,
   type SizePreset,
   type StorageConfigResponse,
   type StorageTestResult,
+  type SummaryLlmConfigView,
   type StylePresetId
 } from "@gpt-image-canvas/shared";
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
 import { normalizeAssetUrl } from "../../shared/api/asset-url";
 import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
 import { apiFetch, appendHostTokenParam } from "../../shared/api/host-token";
+import {
+  createManualRegionPromptItem,
+  defaultRegionForPoint,
+  finalRegionPromptForModel,
+  insertRegionPromptDocumentTokenAtCursor,
+  promptIncludesRegionItemToken,
+  promptWithRegionTokens,
+  removeRegionPromptItemToken,
+  removeRegionPromptPendingTokens,
+  referencesForRegionPromptItems,
+  regionPixelBounds,
+  regionPrecisionText,
+  regionPreviewAspectRatio,
+  removeRegionPromptTokens,
+  replaceRegionPromptPendingToken,
+  regionSummaryAvailability,
+  type RegionPromptReference,
+  type RegionPromptItem,
+  type RegionSummaryAvailability
+} from "./region-prompt";
 
 const AUTOSAVE_DEBOUNCE_MS = 1200;
 const GENERATION_POLL_INTERVAL_MS = 1500;
@@ -323,6 +346,9 @@ function loadGalleryPageModule(): Promise<GalleryPageModule> {
 
 const LazyGalleryPage = lazy(loadGalleryPageModule);
 const LazyHomePage = lazy(() => import("../home/HomePage").then((module) => ({ default: module.HomePage })));
+const LazyAgentSkillDialog = lazy(() => import("../agent/AgentSkillDialog").then((module) => ({ default: module.AgentSkillDialog })));
+const LazyProviderConfigDialog = lazy(() => import("../provider-config/ProviderConfigDialog").then((module) => ({ default: module.ProviderConfigDialog })));
+const LazyPromptRegionEditor = lazy(() => import("./PromptRegionEditor").then((module) => ({ default: module.PromptRegionEditor })));
 
 function preloadGalleryPage(): void {
   void loadGalleryPageModule();
@@ -333,6 +359,8 @@ type SaveStatus = "loading" | "saved" | "pending" | "saving" | "error";
 type GenerationMode = "text" | "reference";
 type PanelTab = "manual" | "agent";
 type PanelStatusTone = "progress" | "success" | "warning" | "error";
+type PromptPreviewTab = "edit" | "final";
+type RegionAnnotationMode = "none" | "auto" | "manual";
 type CodexLoginStatus = "idle" | "starting" | "pending" | "authorized" | "expired" | "denied" | "error";
 type AgentRunStatus = "idle" | "connecting" | "running";
 type AgentChatMessageRole = "user" | "assistant" | "thinking" | "system" | "error" | "question" | "plan";
@@ -551,6 +579,59 @@ interface AgentReferenceSelection {
   totalSelectedCount: number;
   hint: string;
   warning?: string;
+}
+
+interface RegionPromptFlight {
+  id: string;
+  itemId: string;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+}
+
+interface RegionFocusPreview {
+  id: string;
+  itemId: string;
+  anchor: RegionFocusAnchor;
+  referenceName: string;
+  cropDataUrl?: string;
+  cropAspectRatio?: string;
+  label: string;
+  description: string;
+  precision: string;
+  status: "summarizing" | "ready";
+  collapsed: boolean;
+  dismissing: boolean;
+  origin: "auto" | "hover";
+}
+
+interface RegionFocusAnchor {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+}
+
+interface RegionFocusFrame {
+  id: string;
+  itemId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface ManualRegionDraft {
+  id: string;
+  insertionIndex: number;
+  reference: ReferenceSelectionItem;
+  region: NormalizedImageRegion;
+  x: number;
+  y: number;
+  label: string;
 }
 
 function missingReferenceSelection(t: Translate): ReferenceSelection {
@@ -786,11 +867,38 @@ function referenceAssetIdsForRecord(record: GenerationRecord): string[] {
   return record.referenceAssetId ? [record.referenceAssetId] : [];
 }
 
-function referenceAssetIdsForSelection(selection: Extract<ReferenceSelection, { status: "ready" }>): string[] | undefined {
-  const referenceAssetIds = selection.references.map((reference) => reference.localAssetId);
+function referenceAssetIdsForReferences(references: ReferenceSelectionItem[]): string[] | undefined {
+  const referenceAssetIds = references.map((reference) => reference.localAssetId);
   return referenceAssetIds.every((referenceAssetId): referenceAssetId is string => Boolean(referenceAssetId))
     ? referenceAssetIds
     : undefined;
+}
+
+function regionPromptReferenceKey(reference: Pick<ReferenceSelectionItem, "assetId" | "localAssetId" | "sourceUrl" | "width" | "height">): string {
+  return reference.localAssetId ?? reference.assetId ?? `${reference.sourceUrl}|${Math.round(reference.width)}x${Math.round(reference.height)}`;
+}
+
+function regionPromptReferenceFromSelection(reference: ReferenceSelectionItem): RegionPromptReference {
+  return {
+    key: regionPromptReferenceKey(reference),
+    assetId: reference.assetId,
+    localAssetId: reference.localAssetId,
+    name: reference.name,
+    sourceUrl: reference.sourceUrl,
+    width: reference.width,
+    height: reference.height
+  };
+}
+
+function selectionReferenceFromRegionPrompt(reference: RegionPromptReference): ReferenceSelectionItem {
+  return {
+    assetId: reference.assetId as TLAssetId | null,
+    localAssetId: reference.localAssetId,
+    name: reference.name,
+    sourceUrl: reference.sourceUrl,
+    width: reference.width,
+    height: reference.height
+  };
 }
 
 function createTemporaryGenerationRecord(input: {
@@ -1344,32 +1452,17 @@ function resolveReferenceSelection(editor: Editor, t: Translate): ReferenceSelec
 
   const references: Array<ReferenceSelectionItem & { sortX: number; sortY: number }> = [];
   for (const shape of selectedShapes) {
-    const imageShape = shape as TLImageShape;
-    const asset = imageShape.props.assetId ? editor.getAsset(imageShape.props.assetId) : undefined;
-    const sourceUrl = getImageSourceUrl(imageShape, asset);
-
-    if (!sourceUrl) {
-      return {
-        status: "unreadable",
-        hint: t("generationSelectionMissingSource")
-      };
-    }
-
-    if (!isReadableReferenceSource(sourceUrl, asset)) {
+    const reference = referenceItemForImageShape(editor, shape as TLImageShape);
+    if (!reference) {
       return {
         status: "unreadable",
         hint: t("generationSelectionUnreadable")
       };
     }
 
-    const bounds = editor.getShapePageBounds(imageShape);
+    const bounds = editor.getShapePageBounds(shape);
     references.push({
-      assetId: imageShape.props.assetId,
-      localAssetId: getLocalAssetId(asset, sourceUrl),
-      name: getReferenceName(asset, sourceUrl),
-      sourceUrl,
-      width: asset?.type === "image" ? asset.props.w : imageShape.props.w,
-      height: asset?.type === "image" ? asset.props.h : imageShape.props.h,
+      ...reference,
       sortX: bounds?.x ?? 0,
       sortY: bounds?.y ?? 0
     });
@@ -1778,6 +1871,70 @@ function getImageShapeUnderPointer(editor: Editor, pointerClientPoint: ClientPoi
   return shapeAtPoint?.type === "image" ? (shapeAtPoint as TLImageShape) : undefined;
 }
 
+function referenceItemForImageShape(editor: Editor, imageShape: TLImageShape): ReferenceSelectionItem | undefined {
+  const asset = imageShape.props.assetId ? editor.getAsset(imageShape.props.assetId) : undefined;
+  const sourceUrl = getImageSourceUrl(imageShape, asset);
+  if (!sourceUrl || !isReadableReferenceSource(sourceUrl, asset)) {
+    return undefined;
+  }
+
+  return {
+    assetId: imageShape.props.assetId,
+    localAssetId: getLocalAssetId(asset, sourceUrl),
+    name: getReferenceName(asset, sourceUrl),
+    sourceUrl,
+    width: asset?.type === "image" ? asset.props.w : imageShape.props.w,
+    height: asset?.type === "image" ? asset.props.h : imageShape.props.h
+  };
+}
+
+function normalizedImagePointFromCanvasPointer(editor: Editor, imageShape: TLImageShape, pointerClientPoint: ClientPoint): { x: number; y: number } {
+  const bounds = editor.getShapePageBounds(imageShape);
+  const pagePoint = editor.screenToPage(pointerClientPoint);
+  if (!bounds || bounds.w <= 0 || bounds.h <= 0) {
+    return { x: 0.5, y: 0.5 };
+  }
+
+  return {
+    x: Math.max(0, Math.min(1, (pagePoint.x - bounds.x) / bounds.w)),
+    y: Math.max(0, Math.min(1, (pagePoint.y - bounds.y) / bounds.h))
+  };
+}
+
+function regionFocusRectFromImageShape(
+  editor: Editor,
+  imageShape: TLImageShape,
+  region: NormalizedImageRegion,
+  pointerClientPoint: ClientPoint
+): Pick<RegionFocusFrame, "x" | "y" | "width" | "height"> {
+  const bounds = editor.getShapePageBounds(imageShape);
+  if (!bounds || bounds.w <= 0 || bounds.h <= 0) {
+    return {
+      x: pointerClientPoint.x - 24,
+      y: pointerClientPoint.y - 24,
+      width: 48,
+      height: 48
+    };
+  }
+
+  const topLeft = editor.pageToScreen({
+    x: bounds.x + bounds.w * region.x,
+    y: bounds.y + bounds.h * region.y
+  });
+  const bottomRight = editor.pageToScreen({
+    x: bounds.x + bounds.w * (region.x + region.width),
+    y: bounds.y + bounds.h * (region.y + region.height)
+  });
+  const x = Math.min(topLeft.x, bottomRight.x);
+  const y = Math.min(topLeft.y, bottomRight.y);
+  return {
+    x,
+    y,
+    width: Math.max(28, Math.abs(bottomRight.x - topLeft.x)),
+    height: Math.max(28, Math.abs(bottomRight.y - topLeft.y))
+  };
+}
+
 function isPointerOverCanvas(editor: Editor, pointerClientPoint: ClientPoint): boolean {
   const target = editor.getContainer().ownerDocument.elementFromPoint(pointerClientPoint.x, pointerClientPoint.y);
   return Boolean(target?.closest(".tl-canvas"));
@@ -1954,6 +2111,205 @@ async function readReferenceImage(selection: ReferenceSelectionItem, signal: Abo
     dataUrl: await blobToDataUrl(blob, t),
     fileName: fileNameWithImageExtension(selection.name, blob.type),
     mimeType: blob.type
+  };
+}
+
+async function cropReferenceRegion(
+  reference: ReferenceSelectionItem,
+  region: NormalizedImageRegion,
+  signal: AbortSignal,
+  t: Translate
+): Promise<{ dataUrl: string; fileName: string; aspectRatio: string }> {
+  const source = await readReferenceImage(reference, signal, t);
+  const image = await loadImageElement(source.dataUrl, t);
+  const bounds = regionPixelBounds(region, { width: image.naturalWidth, height: image.naturalHeight });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = bounds.width;
+  canvas.height = bounds.height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error(t("readReferenceDataFailed"));
+  }
+
+  context.drawImage(image, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0, bounds.width, bounds.height);
+  const croppedBlob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((nextBlob) => {
+      if (nextBlob) {
+        resolve(nextBlob);
+        return;
+      }
+
+      reject(new Error(t("readReferenceDataFailed")));
+    }, "image/png");
+  });
+
+  return {
+    aspectRatio: `${bounds.width} / ${bounds.height}`,
+    dataUrl: await blobToDataUrl(croppedBlob, t),
+    fileName: fileNameWithImageExtension(`region-${reference.name}`, "image/png")
+  };
+}
+
+function loadImageElement(dataUrl: string, t: Translate): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(t("readReferenceDataFailed")));
+    image.src = dataUrl;
+  });
+}
+
+function regionSummaryStatusCopy(state: RegionSummaryAvailability, t: Translate, error = ""): string {
+  if (error) {
+    return error;
+  }
+  if (state.status === "ready") {
+    return t(state.source === "summary" ? "regionPromptUsingSummaryLlm" : "regionPromptUsingAgentFallback");
+  }
+  if (state.status === "loading") {
+    return t("regionPromptConfigLoading");
+  }
+  if (state.status === "summary-no-vision") {
+    return t("regionPromptSummaryNoVision");
+  }
+  return t("regionPromptMissingConfig");
+}
+
+function activeReferenceSelection(input: {
+  isRegionAnnotationActive: boolean;
+  referenceSelection: ReferenceSelection;
+  regionPromptReferences: ReferenceSelectionItem[];
+}): ReferenceSelectionItem[] {
+  if (input.isRegionAnnotationActive) {
+    return input.regionPromptReferences;
+  }
+
+  return input.referenceSelection.status === "ready" ? input.referenceSelection.references : [];
+}
+
+function referenceValidationCopy(input: {
+  hasPendingRegionPrompt: boolean;
+  isReferenceMode: boolean;
+  isReferenceReady: boolean;
+  isRegionAnnotationActive: boolean;
+  referenceSelection: ReferenceSelection;
+  t: Translate;
+}): string {
+  if (!input.isReferenceMode) {
+    return "";
+  }
+  if (input.isRegionAnnotationActive && input.hasPendingRegionPrompt) {
+    return input.t("regionPromptSummaryPending");
+  }
+  if (input.isReferenceReady) {
+    return "";
+  }
+  return input.isRegionAnnotationActive ? input.t("regionPromptDependencyNeed") : input.referenceSelection.hint;
+}
+
+function referenceStateTitleCopy(input: {
+  activeReferenceCount: number;
+  isReferenceReady: boolean;
+  isRegionAnnotationActive: boolean;
+  t: Translate;
+}): string {
+  if (input.isReferenceReady) {
+    return input.isRegionAnnotationActive
+      ? input.t("regionPromptDependencyReady", { count: input.activeReferenceCount })
+      : input.t("generationReferenceReady", { count: input.activeReferenceCount });
+  }
+
+  return input.isRegionAnnotationActive
+    ? input.t("regionPromptDependencyNeed")
+    : input.t("generationReferenceNeed", { max: MAX_REFERENCE_IMAGES });
+}
+
+function regionAnnotationModeHintCopy(mode: RegionAnnotationMode, t: Translate): string {
+  if (mode === "auto") {
+    return t("regionPromptAutoModeHint");
+  }
+  if (mode === "manual") {
+    return t("regionPromptManualModeHint");
+  }
+  return t("regionPromptNoneModeHint");
+}
+
+function regionAnnotationStatusCopy(input: {
+  agentConfigError: string;
+  mode: RegionAnnotationMode;
+  regionSummaryState: RegionSummaryAvailability;
+  summaryConfigError: string;
+  t: Translate;
+}): string {
+  if (input.mode === "auto") {
+    return regionSummaryStatusCopy(input.regionSummaryState, input.t, input.summaryConfigError || input.agentConfigError);
+  }
+  if (input.mode === "manual") {
+    return input.t("regionPromptManualStatus");
+  }
+  return input.t("regionPromptNoneStatus");
+}
+
+function regionPromptFlightStyle(flight: RegionPromptFlight): CSSProperties {
+  return {
+    left: `${flight.fromX}px`,
+    top: `${flight.fromY}px`,
+    "--region-flight-x": `${flight.toX - flight.fromX}px`,
+    "--region-flight-y": `${flight.toY - flight.fromY}px`
+  } as CSSProperties;
+}
+
+function regionFocusAnchorFromRect(rect: DOMRect): RegionFocusAnchor {
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height
+  };
+}
+
+function regionFocusFrameStyle(frame: RegionFocusFrame): CSSProperties {
+  return {
+    left: `${frame.x}px`,
+    top: `${frame.y}px`,
+    width: `${frame.width}px`,
+    height: `${frame.height}px`
+  };
+}
+
+function regionFocusPreviewStyle(preview: RegionFocusPreview, stackIndex = 0): CSSProperties {
+  const width = preview.collapsed ? 190 : 258;
+  const estimatedHeight = preview.collapsed ? 44 : 360;
+  const gap = 10;
+  const viewportWidth = typeof window === "undefined" ? preview.anchor.right + width + gap : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? preview.anchor.bottom + estimatedHeight + gap : window.innerHeight;
+  const anchorCenter = preview.anchor.left + preview.anchor.width / 2;
+  const fitsAbove = preview.anchor.top >= estimatedHeight + gap + 12;
+  const stackGap = preview.collapsed ? Math.min(3, stackIndex) * 38 : 0;
+  const belowTop = Math.min(preview.anchor.bottom + gap + stackGap, viewportHeight - estimatedHeight - 12);
+  const aboveTop = Math.max(12, preview.anchor.top - gap - stackGap);
+  const stackLeftNudge = preview.collapsed ? Math.min(3, stackIndex) * -8 : 0;
+  return {
+    "--region-crop-aspect-ratio": preview.cropAspectRatio ?? "1 / 1",
+    "--region-card-y": fitsAbove ? "translateY(-100%)" : "translateY(0)",
+    zIndex: preview.collapsed ? 72 + Math.max(0, 4 - stackIndex) : 78,
+    left: `${Math.max(12, Math.min(anchorCenter - width / 2 + stackLeftNudge, viewportWidth - width - 12))}px`,
+    top: `${fitsAbove ? aboveTop : Math.max(12, belowTop)}px`,
+    transform: fitsAbove ? "translateY(-100%)" : undefined
+  } as CSSProperties;
+}
+
+function manualRegionDraftStyle(draft: ManualRegionDraft): CSSProperties {
+  const width = 280;
+  const height = 116;
+  const viewportWidth = typeof window === "undefined" ? draft.x + width : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? draft.y + height : window.innerHeight;
+  return {
+    left: `${Math.max(12, Math.min(draft.x + 14, viewportWidth - width - 12))}px`,
+    top: `${Math.max(12, Math.min(draft.y + 14, viewportHeight - height - 12))}px`
   };
 }
 
@@ -2890,6 +3246,15 @@ export function App() {
   const [isStorageSaving, setIsStorageSaving] = useState(false);
   const [isStorageTesting, setIsStorageTesting] = useState(false);
   const [referenceSelection, setReferenceSelection] = useState<ReferenceSelection>(() => missingReferenceSelection(t));
+  const [regionAnnotationMode, setRegionAnnotationMode] = useState<RegionAnnotationMode>("none");
+  const [promptPreviewTab, setPromptPreviewTab] = useState<PromptPreviewTab>("edit");
+  const [isRegionModifierPressed, setIsRegionModifierPressed] = useState(false);
+  const [regionPromptItems, setRegionPromptItems] = useState<RegionPromptItem[]>([]);
+  const [arrivingRegionPromptIds, setArrivingRegionPromptIds] = useState<Set<string>>(() => new Set());
+  const [regionPromptFlights, setRegionPromptFlights] = useState<RegionPromptFlight[]>([]);
+  const [regionFocusFrames, setRegionFocusFrames] = useState<RegionFocusFrame[]>([]);
+  const [regionFocusPreviews, setRegionFocusPreviews] = useState<RegionFocusPreview[]>([]);
+  const [manualRegionDraft, setManualRegionDraft] = useState<ManualRegionDraft | null>(null);
   const [agentSizePresetId, setAgentSizePresetId] = useState(DEFAULT_SIZE_PRESET.id);
   const [agentWidth, setAgentWidth] = useState(DEFAULT_SIZE_PRESET.width);
   const [agentHeight, setAgentHeight] = useState(DEFAULT_SIZE_PRESET.height);
@@ -2899,6 +3264,9 @@ export function App() {
   const [agentConfig, setAgentConfig] = useState<AgentLlmConfigView | null>(null);
   const [isAgentConfigLoading, setIsAgentConfigLoading] = useState(true);
   const [agentConfigError, setAgentConfigError] = useState("");
+  const [summaryConfig, setSummaryConfig] = useState<SummaryLlmConfigView | null>(null);
+  const [isSummaryConfigLoading, setIsSummaryConfigLoading] = useState(true);
+  const [summaryConfigError, setSummaryConfigError] = useState("");
   const [isHostSessionChecked, setIsHostSessionChecked] = useState(false);
   const [hostSessionError, setHostSessionError] = useState("");
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
@@ -2919,10 +3287,19 @@ export function App() {
   const [isAgentSettingsOpen, setIsAgentSettingsOpen] = useState(false);
   const [isCanvasDarkMode, setIsCanvasDarkMode] = useState(false);
   const canvasShellRef = useRef<HTMLElement | null>(null);
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const promptRegionEditorRef = useRef<PromptRegionEditorHandle | null>(null);
+  const pendingPromptRegionFocusRef = useRef<number | null>(null);
+  const promptEditorCursorIndexRef = useRef(0);
+  const regionPromptItemsRef = useRef<RegionPromptItem[]>([]);
+  regionPromptItemsRef.current = regionPromptItems;
+  const manualRegionInputRef = useRef<HTMLInputElement | null>(null);
   const panelCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
-  const generationModeRef = useRef<GenerationMode>("text");
+  const regionCanvasPointerDownRef = useRef<((event: PointerEvent) => void) | null>(null);
   const activeGenerationsRef = useRef<Map<string, ActiveGenerationTask>>(new Map());
+  const regionFocusFrameTimersRef = useRef<Map<string, number>>(new Map());
+  const regionFocusPreviewTimersRef = useRef<Map<string, number>>(new Map());
   const agentRequestRef = useRef(0);
   const agentSocketRef = useRef<WebSocket | null>(null);
   const agentSocketOpenPromiseRef = useRef<Promise<WebSocket> | null>(null);
@@ -3005,11 +3382,55 @@ export function App() {
   }, [agentSizePresetId]);
 
   const trimmedPrompt = prompt.trim();
-  const promptValidationMessage = prompt.trim() ? "" : t("promptRequired");
   const dimensionValidationMessage = sizeValidationMessage(width, height, t, locale);
   const isReferenceMode = generationMode === "reference";
-  const isReferenceReady = isReferenceMode && referenceSelection.status === "ready";
-  const referenceValidationMessage = isReferenceMode && !isReferenceReady ? referenceSelection.hint : "";
+  const isRegionAnnotationActive = isReferenceMode && regionAnnotationMode !== "none";
+  const regionPromptReferences = useMemo(
+    () => referencesForRegionPromptItems(regionPromptItems).map(selectionReferenceFromRegionPrompt),
+    [regionPromptItems]
+  );
+  const hasPendingRegionPrompt = regionPromptItems.some((item) => item.status === "summarizing");
+  const activeReferenceItems = activeReferenceSelection({
+    isRegionAnnotationActive,
+    referenceSelection,
+    regionPromptReferences
+  });
+  const submittedPromptPreview = isRegionAnnotationActive ? promptWithRegionTokens(prompt, regionPromptItems) : prompt;
+  const promptValidationMessage = submittedPromptPreview.trim() ? "" : t("promptRequired");
+  const isReferenceReady = isReferenceMode && activeReferenceItems.length > 0;
+  const regionSummaryState = regionSummaryAvailability({
+    agentConfig,
+    isAgentConfigLoading,
+    isSummaryConfigLoading,
+    summaryConfig
+  });
+  const canUseRegionSummary = regionSummaryState.status === "ready";
+  const referenceValidationMessage = referenceValidationCopy({
+    hasPendingRegionPrompt,
+    isReferenceMode,
+    isReferenceReady,
+    isRegionAnnotationActive,
+    referenceSelection,
+    t
+  });
+  const referenceStateTitle = referenceStateTitleCopy({
+    activeReferenceCount: activeReferenceItems.length,
+    isReferenceReady,
+    isRegionAnnotationActive,
+    t
+  });
+  const referenceStateHint = isRegionAnnotationActive ? t("regionPromptCanvasHint") : referenceSelection.hint;
+  const regionAnnotationModeHint = regionAnnotationModeHintCopy(regionAnnotationMode, t);
+  const regionAnnotationStatus = regionAnnotationStatusCopy({
+    agentConfigError,
+    mode: regionAnnotationMode,
+    regionSummaryState,
+    summaryConfigError,
+    t
+  });
+  const finalPromptPreview = isRegionAnnotationActive ? finalRegionPromptForModel(prompt, regionPromptItems, locale) : "";
+  const finalPromptPreviewTitle = finalPromptPreview.trim() || t("promptFinalPreviewEmpty");
+  const isPromptEditorEmpty = !prompt.trim() && regionPromptItems.length === 0;
   const validationMessage = promptValidationMessage || dimensionValidationMessage || referenceValidationMessage;
   const shouldShowValidation = generationSubmitAction === "generate" && Boolean(validationMessage);
   const canGenerate = generationSubmitAction === "configure-image-model" || !validationMessage;
@@ -3075,6 +3496,32 @@ export function App() {
     } finally {
       if (!signal?.aborted) {
         setIsAgentConfigLoading(false);
+      }
+    }
+  }, [locale, t]);
+  const loadSummaryConfig = useCallback(async (signal?: AbortSignal): Promise<SummaryLlmConfigView | null> => {
+    setIsSummaryConfigLoading(true);
+    setSummaryConfigError("");
+
+    try {
+      const response = await apiFetch("/api/summary-config", { signal });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, locale, t));
+      }
+
+      const config = (await response.json()) as SummaryLlmConfigView;
+      if (!signal?.aborted) {
+        setSummaryConfig(config);
+      }
+      return config;
+    } catch (error) {
+      if (!signal?.aborted) {
+        setSummaryConfigError(error instanceof Error ? error.message : t("summaryConfigLoadFailed"));
+      }
+      return null;
+    } finally {
+      if (!signal?.aborted) {
+        setIsSummaryConfigLoading(false);
       }
     }
   }, [locale, t]);
@@ -3224,6 +3671,14 @@ export function App() {
       activeAgentRunIdRef.current = null;
       agentJobPlaceholdersRef.current.clear();
       agentOutputPlacementCountsRef.current.clear();
+      for (const timer of regionFocusFrameTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      regionFocusFrameTimersRef.current.clear();
+      for (const timer of regionFocusPreviewTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      regionFocusPreviewTimersRef.current.clear();
       window.clearTimeout(agentHistorySaveTimerRef.current);
       agentHistorySaveTimerRef.current = undefined;
       window.clearTimeout(agentCopyResetTimerRef.current);
@@ -3244,9 +3699,11 @@ export function App() {
           setSaveError(message);
           setAuthError(message);
           setAgentConfigError(message);
+          setSummaryConfigError(message);
           setIsProjectLoaded(true);
           setIsAuthLoading(false);
           setIsAgentConfigLoading(false);
+          setIsSummaryConfigLoading(false);
           return;
         }
 
@@ -3262,9 +3719,11 @@ export function App() {
           setSaveError(message);
           setAuthError(message);
           setAgentConfigError(message);
+          setSummaryConfigError(message);
           setIsProjectLoaded(true);
           setIsAuthLoading(false);
           setIsAgentConfigLoading(false);
+          setIsSummaryConfigLoading(false);
         }
       } finally {
         if (!controller.signal.aborted) {
@@ -3303,8 +3762,10 @@ export function App() {
             setHostSessionError(hostAuthError);
             setAuthError(hostAuthError);
             setAgentConfigError(hostAuthError);
+            setSummaryConfigError(hostAuthError);
             setIsAuthLoading(false);
             setIsAgentConfigLoading(false);
+            setIsSummaryConfigLoading(false);
           }
           throw new Error(`Project load failed with ${response.status}`);
         }
@@ -3358,12 +3819,50 @@ export function App() {
 
     const controller = new AbortController();
 
-    void loadAgentConfig(controller.signal);
+    void Promise.all([loadAgentConfig(controller.signal), loadSummaryConfig(controller.signal)]);
 
     return () => {
       controller.abort();
     };
-  }, [isHostSessionBlocked, isHostSessionChecked, loadAgentConfig]);
+  }, [isHostSessionBlocked, isHostSessionChecked, loadAgentConfig, loadSummaryConfig]);
+
+  useEffect(() => {
+    if (generationMode !== "reference") {
+      setReferenceSelection(missingReferenceSelection(t));
+      setRegionPromptItems([]);
+      setPromptPreviewTab("edit");
+    }
+    setManualRegionDraft(null);
+    setRegionPromptFlights([]);
+    setArrivingRegionPromptIds(new Set());
+  }, [generationMode, t]);
+
+  useEffect(() => {
+    if (!isRegionAnnotationActive) {
+      setPromptPreviewTab("edit");
+    }
+  }, [isRegionAnnotationActive]);
+
+  useEffect(() => {
+    const updateModifierState = (event: KeyboardEvent): void => {
+      setIsRegionModifierPressed(event.metaKey || event.ctrlKey);
+    };
+    const clearModifierState = (): void => setIsRegionModifierPressed(false);
+
+    window.addEventListener("keydown", updateModifierState);
+    window.addEventListener("keyup", updateModifierState);
+    window.addEventListener("blur", clearModifierState);
+
+    return () => {
+      window.removeEventListener("keydown", updateModifierState);
+      window.removeEventListener("keyup", updateModifierState);
+      window.removeEventListener("blur", clearModifierState);
+    };
+  }, []);
+
+  useEffect(() => {
+    regionCanvasPointerDownRef.current = handleCanvasRegionPointerDown;
+  });
 
   useEffect(() => {
     const transcript = agentTranscriptRef.current;
@@ -3373,6 +3872,20 @@ export function App() {
 
     transcript.scrollTop = transcript.scrollHeight;
   }, [agentMessages]);
+
+  useEffect(() => {
+    if (!manualRegionDraft) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      manualRegionInputRef.current?.focus();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [manualRegionDraft?.id]);
 
   useEffect(() => {
     if (!currentAgentConversationId || agentMessages.length === 0) {
@@ -3800,26 +4313,16 @@ export function App() {
   }, [isAiPanelOpen, isMobileDrawer]);
 
   useEffect(() => {
-    generationModeRef.current = generationMode;
-
     const editor = editorRef.current;
+    const nextReferenceSelection = editor ? resolveReferenceSelection(editor, t) : missingReferenceSelection(t);
+    setReferenceSelection((currentSelection) =>
+      areReferenceSelectionsEqual(currentSelection, nextReferenceSelection) ? currentSelection : nextReferenceSelection
+    );
     const nextAgentSelection = editor ? resolveAgentReferenceSelection(editor, t) : emptyAgentReferenceSelection(t);
     setAgentReferenceSelection((currentSelection) =>
       areAgentReferenceSelectionsEqual(currentSelection, nextAgentSelection) ? currentSelection : nextAgentSelection
     );
-
-    if (generationMode === "reference" && editor) {
-      const nextSelection = resolveReferenceSelection(editor, t);
-      setReferenceSelection((currentSelection) =>
-        areReferenceSelectionsEqual(currentSelection, nextSelection) ? currentSelection : nextSelection
-      );
-      return;
-    }
-
-    setReferenceSelection((currentSelection) =>
-      areReferenceSelectionsEqual(currentSelection, missingReferenceSelection(t)) ? currentSelection : missingReferenceSelection(t)
-    );
-  }, [generationMode, t]);
+  }, [t]);
 
   const handleEditorMount = useCallback((editor: Editor) => {
     editorRef.current = editor;
@@ -3830,18 +4333,13 @@ export function App() {
 
     let referenceSelectionFrame: number | undefined;
     const commitReferenceSelection = (): void => {
-      const nextAgentSelection = resolveAgentReferenceSelection(editor, t);
-      setAgentReferenceSelection((currentSelection) =>
-        areAgentReferenceSelectionsEqual(currentSelection, nextAgentSelection) ? currentSelection : nextAgentSelection
-      );
-
-      if (generationModeRef.current !== "reference") {
-        return;
-      }
-
       const nextSelection = resolveReferenceSelection(editor, t);
       setReferenceSelection((currentSelection) =>
         areReferenceSelectionsEqual(currentSelection, nextSelection) ? currentSelection : nextSelection
+      );
+      const nextAgentSelection = resolveAgentReferenceSelection(editor, t);
+      setAgentReferenceSelection((currentSelection) =>
+        areAgentReferenceSelectionsEqual(currentSelection, nextAgentSelection) ? currentSelection : nextAgentSelection
       );
     };
     const updateReferenceSelection = (): void => {
@@ -3877,6 +4375,10 @@ export function App() {
       source: "all",
       scope: "all"
     });
+    const handleRegionPointerDown = (event: PointerEvent): void => {
+      regionCanvasPointerDownRef.current?.(event);
+    };
+    editor.getContainer().addEventListener("pointerdown", handleRegionPointerDown, { capture: true });
     editor.on("change", updateReferenceSelection);
     deleteAgentPlanNodes(editor);
     commitReferenceSelection();
@@ -3890,6 +4392,7 @@ export function App() {
       if (editorRef.current === editor) {
         editorRef.current = null;
       }
+      editor.getContainer().removeEventListener("pointerdown", handleRegionPointerDown, { capture: true });
       editor.off("change", updateReferenceSelection);
       removeReferenceStoreListener();
       removeListener();
@@ -4216,14 +4719,520 @@ export function App() {
     }
   }
 
+  function beginRegionPromptFlight(itemId: string, start?: ClientPoint): void {
+    const targetRect = promptRegionEditorRef.current?.getTargetRect() ?? promptInputRef.current?.getBoundingClientRect();
+    if (!start || !targetRect) {
+      return;
+    }
+
+    const flight: RegionPromptFlight = {
+      id: crypto.randomUUID(),
+      itemId,
+      fromX: start.x,
+      fromY: start.y,
+      toX: targetRect.right - 18,
+      toY: targetRect.bottom - 18
+    };
+
+    setArrivingRegionPromptIds((current) => new Set(current).add(itemId));
+    setRegionPromptFlights((flights) => [...flights, flight]);
+  }
+
+  function finishRegionPromptFlight(flight: RegionPromptFlight): void {
+    setRegionPromptFlights((flights) => flights.filter((item) => item.id !== flight.id));
+    setArrivingRegionPromptIds((current) => {
+      const next = new Set(current);
+      next.delete(flight.itemId);
+      return next;
+    });
+  }
+
+  function beginRegionFocusFrame(input: {
+    imageShape: TLImageShape;
+    itemId: string;
+    pointer: ClientPoint;
+    region: NormalizedImageRegion;
+  }): void {
+    const editor = editorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    const rect = regionFocusRectFromImageShape(editor, input.imageShape, input.region, input.pointer);
+    const id = crypto.randomUUID();
+    setRegionFocusFrames((frames) => [...frames, { id, itemId: input.itemId, ...rect }]);
+    const timer = window.setTimeout(() => {
+      regionFocusFrameTimersRef.current.delete(id);
+      setRegionFocusFrames((frames) => frames.filter((frame) => frame.id !== id));
+    }, 1100);
+    regionFocusFrameTimersRef.current.set(id, timer);
+  }
+
+  function regionFocusPreviewFromItem(
+    item: RegionPromptItem,
+    anchor: RegionFocusAnchor,
+    origin: RegionFocusPreview["origin"]
+  ): RegionFocusPreview {
+    return {
+      id: crypto.randomUUID(),
+      itemId: item.id,
+      anchor,
+      referenceName: item.reference.name,
+      cropDataUrl: item.cropDataUrl,
+      cropAspectRatio: item.cropAspectRatio ?? regionPreviewAspectRatio(item.region, item.reference),
+      label: item.label,
+      description: item.description,
+      precision: regionPrecisionText(item.region, item.reference, locale),
+      status: item.status === "ready" ? "ready" : "summarizing",
+      collapsed: false,
+      dismissing: false,
+      origin
+    };
+  }
+
+  function showRegionFocusPreview(input: {
+    itemId: string;
+    rect: DOMRect;
+    item?: RegionPromptItem;
+    origin: RegionFocusPreview["origin"];
+  }): void {
+    const item = input.item ?? regionPromptItemsRef.current.find((candidate) => candidate.id === input.itemId);
+    if (!item) {
+      return;
+    }
+
+    if (input.origin === "hover") {
+      const timer = regionFocusPreviewTimersRef.current.get(input.itemId);
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        regionFocusPreviewTimersRef.current.delete(input.itemId);
+      }
+    }
+
+    const nextPreview = regionFocusPreviewFromItem(item, regionFocusAnchorFromRect(input.rect), input.origin);
+    setRegionFocusPreviews((previews) => {
+      const existing = previews.find((preview) => preview.itemId === input.itemId);
+      const nextOrigin = existing?.origin === "auto" && existing.status === "summarizing" ? "auto" : input.origin;
+      const updatedPreview: RegionFocusPreview = {
+        ...nextPreview,
+        id: existing?.id ?? nextPreview.id,
+        dismissing: input.origin === "hover" ? false : existing?.dismissing ?? nextPreview.dismissing,
+        origin: nextOrigin
+      };
+      const others = previews
+        .filter((preview) => preview.itemId !== input.itemId)
+        .map((preview) => ({ ...preview, collapsed: true }));
+      return [...others, updatedPreview].slice(-4);
+    });
+  }
+
+  function showRegionFocusPreviewWhenTokenReady(item: RegionPromptItem, attempt = 0, onShown?: () => void): void {
+    const rect = promptRegionEditorRef.current?.getRegionTokenRect(item.id);
+    if (rect) {
+      showRegionFocusPreview({ itemId: item.id, item, origin: "auto", rect });
+      onShown?.();
+      return;
+    }
+    if (attempt >= 8) {
+      return;
+    }
+    window.requestAnimationFrame(() => showRegionFocusPreviewWhenTokenReady(item, attempt + 1, onShown));
+  }
+
+  function updateRegionFocusPreview(itemId: string, patch: Partial<RegionFocusPreview>): void {
+    setRegionFocusPreviews((previews) =>
+      previews.map((preview) =>
+        preview.itemId === itemId
+          ? {
+              ...preview,
+              ...patch
+            }
+          : preview
+      )
+    );
+  }
+
+  function dismissRegionFocusPreview(itemId: string, delayMs = 0, markDismissing = false): void {
+    const previousTimer = regionFocusPreviewTimersRef.current.get(itemId);
+    if (previousTimer !== undefined) {
+      window.clearTimeout(previousTimer);
+      regionFocusPreviewTimersRef.current.delete(itemId);
+    }
+    if (markDismissing) {
+      setRegionFocusPreviews((previews) =>
+        previews.map((preview) => (preview.itemId === itemId ? { ...preview, dismissing: true, collapsed: false } : preview))
+      );
+    }
+    const timer = window.setTimeout(() => {
+      regionFocusPreviewTimersRef.current.delete(itemId);
+      setRegionFocusPreviews((previews) => previews.filter((preview) => preview.itemId !== itemId));
+    }, delayMs);
+    regionFocusPreviewTimersRef.current.set(itemId, timer);
+  }
+
+  function handleShowRegionFocusPreview(id: string, rect: DOMRect): void {
+    showRegionFocusPreview({ itemId: id, origin: "hover", rect });
+  }
+
+  function handleHideRegionFocusPreview(id: string): void {
+    setRegionFocusPreviews((previews) =>
+      previews.filter((preview) => preview.itemId !== id || preview.origin === "auto" || preview.dismissing)
+    );
+  }
+
+  async function hydrateManualRegionPreview(item: RegionPromptItem, reference: ReferenceSelectionItem): Promise<void> {
+    const controller = new AbortController();
+    try {
+      const image = await cropReferenceRegion(reference, item.region, controller.signal, t);
+      const previewItem: RegionPromptItem = {
+        ...item,
+        cropDataUrl: image.dataUrl,
+        cropAspectRatio: image.aspectRatio
+      };
+      if (!regionPromptItemsRef.current.some((candidate) => candidate.id === item.id)) {
+        return;
+      }
+      setRegionPromptItems((items) =>
+        items.map((candidate) =>
+          candidate.id === item.id
+            ? {
+                ...candidate,
+                cropDataUrl: image.dataUrl,
+                cropAspectRatio: image.aspectRatio
+              }
+            : candidate
+        )
+      );
+      updateRegionFocusPreview(item.id, {
+        cropDataUrl: image.dataUrl,
+        cropAspectRatio: image.aspectRatio
+      });
+      window.requestAnimationFrame(() => showRegionFocusPreviewWhenTokenReady(previewItem));
+    } catch {
+      // Manual labels should remain usable even if preview cropping is unavailable.
+    }
+  }
+
+  function resizePromptInput(): void {
+    const input = promptInputRef.current;
+    if (!input) {
+      return;
+    }
+
+    const minHeight = isRegionAnnotationActive ? 56 : 128;
+    input.style.height = "auto";
+    input.style.height = `${Math.max(minHeight, input.scrollHeight)}px`;
+  }
+
+  function regionPromptInsertionIndex(): number {
+    const editorCursor = promptRegionEditorRef.current?.getCursorIndex() ?? promptEditorCursorIndexRef.current;
+    return Math.max(0, Math.min(prompt.length, editorCursor ?? prompt.length));
+  }
+
+  function focusPromptRegionEditorAfterInsert(cursorIndex: number): void {
+    pendingPromptRegionFocusRef.current = cursorIndex;
+    window.requestAnimationFrame(() => {
+      const editor = promptRegionEditorRef.current;
+      if (!editor) {
+        return;
+      }
+      editor.focusAtCursor(pendingPromptRegionFocusRef.current ?? cursorIndex);
+      pendingPromptRegionFocusRef.current = null;
+    });
+  }
+
+  const setPromptRegionEditorHandle = useCallback((editor: PromptRegionEditorHandle | null) => {
+    promptRegionEditorRef.current = editor;
+    if (!editor || pendingPromptRegionFocusRef.current === null) {
+      return;
+    }
+
+    const cursorIndex = pendingPromptRegionFocusRef.current;
+    pendingPromptRegionFocusRef.current = null;
+    window.requestAnimationFrame(() => editor.focusAtCursor(cursorIndex));
+  }, []);
+
+  function insertRegionPromptItemIntoPrompt(region: RegionPromptItem, insertionIndex: number): void {
+    const anchoredRegion = { ...region, insertionIndex };
+    const editorResult = promptRegionEditorRef.current?.insertRegionToken(anchoredRegion, insertionIndex);
+    if (editorResult) {
+      promptEditorCursorIndexRef.current = editorResult.cursorIndex;
+      focusPromptRegionEditorAfterInsert(editorResult.cursorIndex);
+      return;
+    }
+
+    const edit = insertRegionPromptDocumentTokenAtCursor(prompt, anchoredRegion, insertionIndex);
+    promptEditorCursorIndexRef.current = edit.cursorIndex;
+    setPrompt(edit.prompt);
+    focusPromptRegionEditorAfterInsert(edit.cursorIndex);
+  }
+
+  function handlePromptEditorChange(nextPrompt: string): void {
+    setPrompt(nextPrompt);
+    setRegionPromptItems((items) => {
+      const nextItems = items.filter((item) => promptIncludesRegionItemToken(nextPrompt, item));
+      const nextIds = new Set(nextItems.map((item) => item.id));
+      setRegionFocusPreviews((previews) => previews.filter((preview) => nextIds.has(preview.itemId)));
+      setRegionFocusFrames((frames) => frames.filter((frame) => nextIds.has(frame.itemId)));
+      return nextItems;
+    });
+  }
+
+  useEffect(() => {
+    resizePromptInput();
+  }, [isRegionAnnotationActive, prompt, regionPromptItems.length]);
+
+  async function summarizeReferenceRegion(
+    reference: ReferenceSelectionItem,
+    region: NormalizedImageRegion,
+    insertionIndex: number,
+    start?: ClientPoint,
+    imageShape?: TLImageShape
+  ): Promise<void> {
+    const itemId = crypto.randomUUID();
+    const pendingRegion: RegionPromptItem = {
+      id: itemId,
+      mode: "auto",
+      label: "",
+      description: "",
+      note: "",
+      insertionIndex,
+      region,
+      reference: regionPromptReferenceFromSelection(reference),
+      cropAspectRatio: regionPreviewAspectRatio(region, reference),
+      status: "summarizing"
+    };
+    setRegionPromptItems((items) => [...items, pendingRegion]);
+    insertRegionPromptItemIntoPrompt(pendingRegion, insertionIndex);
+    beginRegionPromptFlight(itemId, start);
+    window.requestAnimationFrame(() => showRegionFocusPreviewWhenTokenReady(pendingRegion));
+    if (start && imageShape) {
+      beginRegionFocusFrame({ imageShape, itemId, pointer: start, region });
+    }
+
+    try {
+      const controller = new AbortController();
+      const image = await cropReferenceRegion(reference, region, controller.signal, t);
+      setRegionPromptItems((items) =>
+        items.map((item) =>
+          item.id === itemId
+            ? {
+                ...item,
+                cropDataUrl: image.dataUrl,
+                cropAspectRatio: image.aspectRatio
+              }
+            : item
+        )
+      );
+      updateRegionFocusPreview(itemId, { cropDataUrl: image.dataUrl, cropAspectRatio: image.aspectRatio });
+      const body: RegionSummaryRequest = {
+        image: {
+          dataUrl: image.dataUrl,
+          fileName: image.fileName
+        },
+        source: {
+          width: Math.round(reference.width),
+          height: Math.round(reference.height)
+        },
+        region,
+        locale
+      };
+
+      const response = await apiFetch("/api/images/region-summary", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, locale, t));
+      }
+
+      const summary = (await response.json()) as RegionSummaryResponse;
+      const readyRegion: RegionPromptItem = {
+        id: itemId,
+        mode: "auto",
+        label: summary.label,
+        description: summary.description,
+        note: "",
+        insertionIndex,
+        region,
+        reference: regionPromptReferenceFromSelection(reference),
+        cropDataUrl: image.dataUrl,
+        cropAspectRatio: image.aspectRatio,
+        status: "ready"
+      };
+      if (!regionPromptItemsRef.current.some((item) => item.id === itemId)) {
+        return;
+      }
+      setRegionPromptItems((items) =>
+        items.map((item) =>
+          item.id === itemId
+            ? {
+                ...item,
+                label: summary.label,
+                description: summary.description,
+                cropDataUrl: image.dataUrl,
+                cropAspectRatio: image.aspectRatio,
+                status: "ready"
+              }
+            : item
+        )
+      );
+      updateRegionFocusPreview(itemId, {
+        label: summary.label,
+        description: summary.description,
+        cropDataUrl: image.dataUrl,
+        cropAspectRatio: image.aspectRatio,
+        status: "ready"
+      });
+      dismissRegionFocusPreview(itemId, 2400, true);
+      const replacedInEditor = promptRegionEditorRef.current?.replaceRegionToken(readyRegion) ?? false;
+      window.requestAnimationFrame(() => showRegionFocusPreviewWhenTokenReady(readyRegion));
+      if (!replacedInEditor) {
+        setPrompt((currentPrompt) => {
+          const replacement = replaceRegionPromptPendingToken(currentPrompt, readyRegion);
+          if (replacement.changed) {
+            return replacement.prompt;
+          }
+          if (promptIncludesRegionItemToken(currentPrompt, readyRegion)) {
+            return currentPrompt;
+          }
+          return insertRegionPromptDocumentTokenAtCursor(currentPrompt, readyRegion, insertionIndex).prompt;
+        });
+      }
+    } catch (error) {
+      promptRegionEditorRef.current?.removeRegionToken(pendingRegion);
+      setPrompt((currentPrompt) => removeRegionPromptItemToken(currentPrompt, pendingRegion));
+      setRegionPromptItems((items) => items.filter((item) => item.id !== itemId));
+      dismissRegionFocusPreview(itemId);
+      setGenerationError(error instanceof Error ? error.message : t("regionPromptSummaryFailed"));
+    }
+  }
+
+  function handleCanvasRegionPointerDown(event: PointerEvent): void {
+    if (
+      panelTab !== "manual" ||
+      generationMode !== "reference" ||
+      regionAnnotationMode === "none" ||
+      event.button !== 0 ||
+      (!event.metaKey && !event.ctrlKey)
+    ) {
+      return;
+    }
+
+    const editor = editorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    const pointer = { x: event.clientX, y: event.clientY };
+    const imageShape = getImageShapeUnderPointer(editor, pointer);
+    if (!imageShape) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    const reference = referenceItemForImageShape(editor, imageShape);
+    if (!reference) {
+      setGenerationError(t("generationSelectionUnreadable"));
+      return;
+    }
+
+    const imagePoint = normalizedImagePointFromCanvasPointer(editor, imageShape, pointer);
+    const region = defaultRegionForPoint(imagePoint.x, imagePoint.y);
+    const insertionIndex = regionPromptInsertionIndex();
+    setGenerationError("");
+
+    if (regionAnnotationMode === "manual") {
+      const draftId = crypto.randomUUID();
+      beginRegionFocusFrame({ imageShape, itemId: draftId, pointer, region });
+      setManualRegionDraft({
+        id: draftId,
+        insertionIndex,
+        reference,
+        region,
+        x: pointer.x,
+        y: pointer.y,
+        label: ""
+      });
+      return;
+    }
+
+    if (!canUseRegionSummary) {
+      setGenerationError(regionSummaryStatusCopy(regionSummaryState, t, summaryConfigError || agentConfigError));
+      return;
+    }
+
+    void summarizeReferenceRegion(reference, region, insertionIndex, pointer, imageShape);
+  }
+
+  function selectRegionAnnotationMode(mode: RegionAnnotationMode): void {
+    setRegionAnnotationMode(mode);
+    setPromptPreviewTab("edit");
+    setManualRegionDraft(null);
+    setRegionPromptFlights([]);
+    setRegionFocusFrames([]);
+    setRegionFocusPreviews([]);
+    setArrivingRegionPromptIds(new Set());
+    if (mode === "none") {
+      setPrompt((currentPrompt) => removeRegionPromptPendingTokens(removeRegionPromptTokens(currentPrompt, regionPromptItems)));
+      setRegionPromptItems([]);
+    }
+  }
+
+  function updateManualRegionDraftLabel(label: string): void {
+    setManualRegionDraft((draft) => (draft ? { ...draft, label } : draft));
+  }
+
+  function confirmManualRegionDraft(): void {
+    if (!manualRegionDraft) {
+      return;
+    }
+
+    const label = manualRegionDraft.label.trim();
+    if (!label) {
+      manualRegionInputRef.current?.focus();
+      return;
+    }
+
+    const item = createManualRegionPromptItem({
+      id: manualRegionDraft.id,
+      label,
+      locale,
+      reference: regionPromptReferenceFromSelection(manualRegionDraft.reference),
+      region: manualRegionDraft.region
+    });
+    const anchoredItem = {
+      ...item,
+      cropAspectRatio: regionPreviewAspectRatio(manualRegionDraft.region, manualRegionDraft.reference),
+      insertionIndex: manualRegionDraft.insertionIndex
+    };
+    const start = { x: manualRegionDraft.x, y: manualRegionDraft.y };
+    insertRegionPromptItemIntoPrompt(anchoredItem, manualRegionDraft.insertionIndex);
+    setRegionPromptItems((items) => [...items, anchoredItem]);
+    setManualRegionDraft(null);
+    beginRegionPromptFlight(anchoredItem.id, start);
+    window.requestAnimationFrame(() =>
+      showRegionFocusPreviewWhenTokenReady(anchoredItem, 0, () => dismissRegionFocusPreview(anchoredItem.id, 2400, true))
+    );
+    void hydrateManualRegionPreview(anchoredItem, manualRegionDraft.reference);
+  }
+
   async function submitGeneration(): Promise<void> {
     if (generationSubmitAction === "configure-image-model") {
       openProviderConfigOnboarding("image");
       return;
     }
 
+    const submittedUserPrompt = isRegionAnnotationActive ? finalRegionPromptForModel(trimmedPrompt, regionPromptItems, locale) : trimmedPrompt;
     const input: GenerationSubmitInput = {
-      prompt: trimmedPrompt,
+      prompt: submittedUserPrompt,
       presetId: stylePreset,
       sizePresetId,
       size: {
@@ -4236,20 +5245,19 @@ export function App() {
     };
 
     if (generationMode === "reference") {
+      const referencesForRequest = activeReferenceItems;
       await executeGeneration(input, "reference", async (signal) => {
-        if (referenceSelection.status !== "ready") {
+        if (referencesForRequest.length === 0) {
           return undefined;
         }
 
-        const referenceAssetIds = referenceAssetIdsForSelection(referenceSelection);
+        const referenceAssetIds = referenceAssetIdsForReferences(referencesForRequest);
 
         return {
-          referenceImages: await Promise.all(referenceSelection.references.map((reference) => readReferenceImage(reference, signal, t))),
+          referenceImages: await Promise.all(referencesForRequest.map((reference) => readReferenceImage(reference, signal, t))),
           referenceAssetIds
         };
-      }, referenceSelection.status === "ready"
-        ? referenceAssetIdsForSelection(referenceSelection)
-        : undefined);
+      }, referenceAssetIdsForReferences(referencesForRequest));
       return;
     }
 
@@ -4259,6 +5267,12 @@ export function App() {
   function cancelReferenceSelection(): void {
     editorRef.current?.selectNone();
     setReferenceSelection(missingReferenceSelection(t));
+    setRegionPromptItems([]);
+    setManualRegionDraft(null);
+    setRegionPromptFlights([]);
+    setRegionFocusFrames([]);
+    setRegionFocusPreviews([]);
+    setArrivingRegionPromptIds(new Set());
     setGenerationError("");
     setGenerationMessage("");
     setGenerationWarning("");
@@ -5801,7 +6815,14 @@ export function App() {
   }
 
   return (
-    <div className="app-root" data-canvas-theme={route !== "home" && isCanvasDarkMode ? "dark" : "light"}>
+    <div
+      className="app-root"
+      data-canvas-theme={route !== "home" && isCanvasDarkMode ? "dark" : "light"}
+      data-region-annotation-mode={isReferenceMode ? regionAnnotationMode : undefined}
+      data-region-modifier-active={
+        isRegionAnnotationActive && panelTab === "manual" && isRegionModifierPressed ? "true" : undefined
+      }
+    >
       <TopNavigation
         isAiCoveMode={isAiCoveMode}
         route={route}
@@ -6014,21 +7035,146 @@ export function App() {
             </div>
           </div>
 
-          <label className="block">
-            <span className="control-label">{t("generationPromptLabel")}</span>
-            <textarea
-              aria-invalid={Boolean(promptValidationMessage)}
-              className="prompt-textarea mt-2 h-32 w-full resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm leading-6 text-neutral-950 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
-              id="prompt-input"
-              name="prompt"
-              placeholder={t("generationPromptPlaceholder")}
-              value={prompt}
-              data-testid="prompt-input"
-              onChange={(event) => setPrompt(event.target.value)}
-            />
-          </label>
+          <div className="prompt-workflow">
+            <div className="prompt-workflow__head">
+              <div className="prompt-workflow__label-row">
+                <label className="control-label" htmlFor="prompt-input">
+                  {t("generationPromptLabel")}
+                </label>
+              </div>
+              {isReferenceMode ? (
+                <div className="region-annotation-switch" role="group" aria-label={t("regionPromptModeAria")}>
+                  <button
+                    className={regionAnnotationMode === "none" ? "region-annotation-switch__button is-active" : "region-annotation-switch__button"}
+                    type="button"
+                    aria-pressed={regionAnnotationMode === "none"}
+                    data-testid="region-mode-none"
+                    onClick={() => selectRegionAnnotationMode("none")}
+                  >
+                    <ImageIcon className="size-3.5" aria-hidden="true" />
+                    {t("regionPromptNoneMode")}
+                  </button>
+                  <button
+                    className={regionAnnotationMode === "auto" ? "region-annotation-switch__button is-active" : "region-annotation-switch__button"}
+                    type="button"
+                    aria-pressed={regionAnnotationMode === "auto"}
+                    data-testid="region-mode-auto"
+                    onClick={() => selectRegionAnnotationMode("auto")}
+                  >
+                    <Sparkles className="size-3.5" aria-hidden="true" />
+                    {t("regionPromptAutoMode")}
+                  </button>
+                  <button
+                    className={regionAnnotationMode === "manual" ? "region-annotation-switch__button is-active" : "region-annotation-switch__button"}
+                    type="button"
+                    aria-pressed={regionAnnotationMode === "manual"}
+                    data-testid="region-mode-manual"
+                    onClick={() => selectRegionAnnotationMode("manual")}
+                  >
+                    <MapPin className="size-3.5" aria-hidden="true" />
+                    {t("regionPromptManualMode")}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            {isReferenceMode ? (
+              <p className="prompt-workflow__status">
+                <span>{regionAnnotationModeHint}</span>
+                <span>{regionAnnotationStatus}</span>
+              </p>
+            ) : null}
+            {isRegionAnnotationActive ? (
+              <div className="prompt-preview-tabs" role="tablist" aria-label={t("promptPreviewTabsAria")}>
+                <button
+                  className={promptPreviewTab === "edit" ? "prompt-preview-tabs__button is-active" : "prompt-preview-tabs__button"}
+                  type="button"
+                  role="tab"
+                  aria-selected={promptPreviewTab === "edit"}
+                  onClick={() => setPromptPreviewTab("edit")}
+                >
+                  {t("promptEditTab")}
+                </button>
+                <button
+                  className={promptPreviewTab === "final" ? "prompt-preview-tabs__button is-active" : "prompt-preview-tabs__button"}
+                  type="button"
+                  role="tab"
+                  aria-selected={promptPreviewTab === "final"}
+                  onClick={() => setPromptPreviewTab("final")}
+                >
+                  {t("promptFinalTab")}
+                </button>
+              </div>
+            ) : null}
+            <div
+              className="prompt-composer"
+              data-prompt-view={isRegionAnnotationActive ? promptPreviewTab : "edit"}
+              data-has-tags={isRegionAnnotationActive && regionPromptItems.length > 0 ? "true" : undefined}
+              data-region-mode={isReferenceMode ? regionAnnotationMode : undefined}
+            >
+              {isRegionAnnotationActive && promptPreviewTab === "final" ? (
+                <pre className="prompt-final-preview-panel" tabIndex={0} aria-label={t("promptFinalTab")} data-testid="prompt-final-preview">
+                  {finalPromptPreviewTitle}
+                </pre>
+              ) : isRegionAnnotationActive ? (
+                <Suspense
+                  fallback={
+                    <textarea
+                      aria-busy="true"
+                      aria-invalid={Boolean(promptValidationMessage)}
+                      aria-label={t("generationPromptLabel")}
+                      className="prompt-textarea prompt-textarea--embedded prompt-region-editor-fallback w-full resize-none"
+                      data-testid="prompt-input"
+                      id="prompt-input"
+                      name="prompt"
+                      placeholder={t("generationPromptPlaceholder")}
+                      readOnly
+                      rows={4}
+                      value={prompt}
+                    />
+                  }
+                >
+                  <LazyPromptRegionEditor
+                    ariaInvalid={Boolean(promptValidationMessage)}
+                    ariaLabel={t("generationPromptLabel")}
+                    arrivingIds={arrivingRegionPromptIds}
+                    id="prompt-input"
+                    isEmpty={isPromptEditorEmpty}
+                    onChange={handlePromptEditorChange}
+                    onCursorChange={(cursorIndex) => {
+                      promptEditorCursorIndexRef.current = cursorIndex;
+                    }}
+                    onHideRegionPreview={handleHideRegionFocusPreview}
+                    onShowRegionPreview={handleShowRegionFocusPreview}
+                    placeholder={t("generationPromptPlaceholder")}
+                    locale={locale}
+                    ref={setPromptRegionEditorHandle}
+                    regions={regionPromptItems}
+                    t={t}
+                    testId="prompt-input"
+                    value={prompt}
+                  />
+                </Suspense>
+              ) : (
+                <textarea
+                  aria-invalid={Boolean(promptValidationMessage)}
+                  className="prompt-textarea prompt-textarea--embedded w-full resize-none rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm leading-6 text-neutral-950 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100"
+                  id="prompt-input"
+                  name="prompt"
+                  placeholder={t("generationPromptPlaceholder")}
+                  ref={promptInputRef}
+                  rows={4}
+                  value={prompt}
+                  data-testid="prompt-input"
+                  onChange={(event) => {
+                    setPrompt(event.target.value);
+                    window.requestAnimationFrame(resizePromptInput);
+                  }}
+                />
+              )}
+            </div>
+          </div>
 
-          {!trimmedPrompt ? (
+          {!submittedPromptPreview.trim() ? (
             <div className="-mt-3 flex flex-wrap gap-2" data-testid="prompt-starters">
               {promptStarters.map((starter) => (
                 <button
@@ -6050,23 +7196,21 @@ export function App() {
               className={`rounded-md border px-3 py-3 ${
                 isReferenceReady ? "border-blue-200 bg-blue-50 text-blue-800" : "border-neutral-200 bg-neutral-50 text-neutral-600"
               }`}
-              data-reference-state={referenceSelection.status}
+              data-reference-state={isReferenceReady ? "ready" : "none"}
               data-testid="reference-state"
             >
               <div className="flex items-start gap-2">
                 <ImageIcon className={`mt-0.5 size-4 ${isReferenceReady ? "text-blue-600" : "text-neutral-400"}`} aria-hidden="true" />
                 <div className="min-w-0">
                   <p className="text-sm font-semibold">
-                    {referenceSelection.status === "ready"
-                      ? t("generationReferenceReady", { count: referenceSelection.references.length })
-                      : t("generationReferenceNeed", { max: MAX_REFERENCE_IMAGES })}
+                    {referenceStateTitle}
                   </p>
                   <p className="mt-1 text-xs leading-5" data-testid="reference-hint">
-                    {referenceSelection.hint}
+                    {referenceStateHint}
                   </p>
-                  {referenceSelection.status === "ready" ? (
+                  {activeReferenceItems.length > 0 ? (
                     <div className="reference-preview-list">
-                      {referenceSelection.references.map((reference, index) => (
+                      {activeReferenceItems.map((reference, index) => (
                         <div className="reference-preview-card" key={`${reference.sourceUrl}-${index}`}>
                           <span className="reference-preview-card__index">{index + 1}</span>
                           <img
@@ -6992,7 +8136,11 @@ export function App() {
         />
       ) : null}
 
-      {isAgentSkillDialogOpen ? <AgentSkillDialog onClose={() => setIsAgentSkillDialogOpen(false)} /> : null}
+      {isAgentSkillDialogOpen ? (
+        <Suspense fallback={null}>
+          <LazyAgentSkillDialog onClose={() => setIsAgentSkillDialogOpen(false)} />
+        </Suspense>
+      ) : null}
 
       {isStorageDialogOpen ? (
         <div className="app-modal-backdrop fixed inset-0 z-[3000] flex items-center justify-center bg-neutral-950/45 px-4 py-6" data-testid="storage-dialog">
@@ -7362,19 +8510,134 @@ export function App() {
         document.body
       ) : null}
       </main>
+      {regionFocusFrames.length > 0 || regionFocusPreviews.length > 0
+        ? createPortal(
+            <div className="region-focus-layer" data-theme={isCanvasDarkMode ? "dark" : "light"} aria-live="polite">
+              {regionFocusFrames.map((frame) => (
+                <span className="region-focus-frame" key={frame.id} style={regionFocusFrameStyle(frame)} aria-hidden="true" />
+              ))}
+              {regionFocusPreviews.map((preview, index) => (
+                <aside
+                  className="region-focus-card"
+                  data-collapsed={preview.collapsed ? "true" : undefined}
+                  data-dismissing={preview.dismissing ? "true" : undefined}
+                  data-origin={preview.origin}
+                  data-status={preview.status}
+                  key={preview.id}
+                  style={regionFocusPreviewStyle(preview, regionFocusPreviews.length - 1 - index)}
+                >
+                  <header className="region-focus-card__head">
+                    <span className="region-focus-card__icon" aria-hidden="true">
+                      {preview.status === "ready" ? <CheckCircle2 className="size-4" /> : <Sparkles className="size-3.5" />}
+                    </span>
+                    <div>
+                      <strong>{preview.label || t("regionPromptFocusTitle")}</strong>
+                      <span>{preview.status === "ready" ? t("regionPromptFocusReady") : t("regionPromptFocusPending")}</span>
+                    </div>
+                  </header>
+                  {!preview.collapsed ? (
+                    <>
+                      <div className="region-focus-card__crop">
+                        {preview.cropDataUrl ? (
+                          <img
+                            alt={t("regionPromptFocusPreviewAlt", {
+                              label: preview.label || t("regionPromptSummarizingLabel")
+                            })}
+                            src={preview.cropDataUrl}
+                          />
+                        ) : (
+                          <span>{t("regionPromptFocusCropping")}</span>
+                        )}
+                      </div>
+                      {preview.label ? <p className="region-focus-card__label">{preview.label}</p> : null}
+                      {preview.description ? <p className="region-focus-card__description">{preview.description}</p> : null}
+                      <p className="region-focus-card__precision">{preview.precision}</p>
+                      <p className="region-focus-card__reference">{preview.referenceName}</p>
+                    </>
+                  ) : null}
+                </aside>
+              ))}
+            </div>,
+            document.body
+          )
+        : null}
+      {regionPromptFlights.length > 0
+        ? createPortal(
+            <div className="region-prompt-flight-layer" aria-hidden="true">
+              {regionPromptFlights.map((flight) => (
+                <span
+                  className="region-prompt-flight-star"
+                  key={flight.id}
+                  style={regionPromptFlightStyle(flight)}
+                  onAnimationEnd={() => finishRegionPromptFlight(flight)}
+                >
+                  <Sparkles className="size-4" aria-hidden="true" />
+                </span>
+              ))}
+            </div>,
+            document.body
+          )
+        : null}
+      {manualRegionDraft
+        ? createPortal(
+            <form
+              className="manual-region-popover"
+              style={manualRegionDraftStyle(manualRegionDraft)}
+              data-testid="manual-region-popover"
+              onSubmit={(event) => {
+                event.preventDefault();
+                confirmManualRegionDraft();
+              }}
+            >
+              <label>
+                <span>{t("regionPromptManualPopoverLabel")}</span>
+                <input
+                  ref={manualRegionInputRef}
+                  value={manualRegionDraft.label}
+                  placeholder={t("regionPromptManualPopoverPlaceholder")}
+                  onChange={(event) => updateManualRegionDraftLabel(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setManualRegionDraft(null);
+                      return;
+                    }
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      confirmManualRegionDraft();
+                    }
+                  }}
+                />
+              </label>
+              <div className="manual-region-popover__actions">
+                <button className="secondary-action h-8 px-2 text-xs" type="button" onClick={() => setManualRegionDraft(null)}>
+                  {t("commonCancel")}
+                </button>
+                <button className="primary-action h-8 px-2 text-xs" type="submit">
+                  <Check className="size-3.5" aria-hidden="true" />
+                  {t("regionPromptManualConfirm")}
+                </button>
+              </div>
+            </form>,
+            document.body
+          )
+        : null}
       {isProviderConfigDialogOpen ? (
-        <ProviderConfigDialog
-          initialTab={providerConfigInitialTab}
-          isAuthLoading={isAuthLoading}
-          isCodexStarting={codexLoginStatus === "starting"}
-          mode={providerConfigDialogMode}
-          onClose={closeProviderConfigDialog}
-          onLogoutCodex={logoutCodexSession}
-          onRefreshAgentConfig={loadAgentConfig}
-          onRefreshAuthStatus={loadAuthStatus}
-          onSaved={providerConfigDialogMode === "onboarding" ? closeSavedProviderOnboarding : undefined}
-          onStartCodexLogin={startCodexLogin}
-        />
+        <Suspense fallback={null}>
+          <LazyProviderConfigDialog
+            initialTab={providerConfigInitialTab}
+            isAuthLoading={isAuthLoading}
+            isCodexStarting={codexLoginStatus === "starting"}
+            mode={providerConfigDialogMode}
+            onClose={closeProviderConfigDialog}
+            onLogoutCodex={logoutCodexSession}
+            onRefreshAgentConfig={loadAgentConfig}
+            onRefreshAuthStatus={loadAuthStatus}
+            onRefreshSummaryConfig={loadSummaryConfig}
+            onSaved={providerConfigDialogMode === "onboarding" ? closeSavedProviderOnboarding : undefined}
+            onStartCodexLogin={startCodexLogin}
+          />
+        </Suspense>
       ) : null}
       {route === "gallery" ? (
         <Suspense

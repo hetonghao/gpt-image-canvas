@@ -6,7 +6,7 @@
   "packageManager": "pnpm@9.14.2",
   "description": "Local professional AI canvas powered by tldraw and GPT Image 2.",
   "engines": {
-    "node": ">=24.15.0 <25"
+    "node": ">=24.15.0 <26"
   },
   "scripts": {
     "dev": "concurrently -n api,web -c cyan,magenta \"pnpm api:dev\" \"pnpm web:dev\"",
@@ -16,7 +16,12 @@
     "smoke:web:onboarding-fields": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/provider-config/provider-onboarding-fields.smoke.ts",
     "smoke:web:onboarding": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/provider-onboarding.smoke.ts",
     "smoke:web:provider-config": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/provider-config/provider-config-save.smoke.ts",
+    "smoke:web:region-prompt": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/region-prompt.smoke.ts",
+    "smoke:web:deferred-dialog-dependencies": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/deferred-dialog-dependencies.smoke.ts",
+    "smoke:web:deferred-canvas-startup-dependencies": "pnpm --filter @gpt-image-canvas/web build && pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/deferred-canvas-startup-dependencies.smoke.ts",
     "smoke:web:embedded-home-lazy": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/embedded-home-lazy.smoke.ts",
+    "smoke:web:font-dependencies": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/styles/font-dependencies.smoke.ts",
+    "smoke:api:region-summary": "pnpm --filter @gpt-image-canvas/shared build && pnpm --filter @gpt-image-canvas/api exec tsx src/smoke/region-summary-smoke.ts",
     "smoke:api:static-assets-cache": "pnpm --filter @gpt-image-canvas/api exec tsx src/server/static-assets-cache.smoke.ts",
     "typecheck": "pnpm --filter @gpt-image-canvas/shared typecheck && pnpm --filter @gpt-image-canvas/web typecheck && pnpm --filter @gpt-image-canvas/api typecheck",
     "start": "pnpm --filter @gpt-image-canvas/api start"

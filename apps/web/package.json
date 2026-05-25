@@ -11,6 +11,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.43.0",
     "@gpt-image-canvas/shared": "workspace:^",
     "@tldraw/tlschema": "4.5.10",
     "lucide-react": "^1.11.0",

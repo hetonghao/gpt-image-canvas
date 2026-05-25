@@ -92,6 +92,23 @@ Stores Agent planning model configuration.
 | `created_at` | text | Required ISO timestamp. |
 | `updated_at` | text | Required ISO timestamp. |
 
+## `summary_llm_configs`
+
+Stores optional manual-region Summary LLM configuration.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | text | Primary key. |
+| `user_id` | text | Required local or hosted user scope. |
+| `api_key` | text | Optional Summary LLM API key for local mode. |
+| `api_key_id` | text | Optional hosted API key selector. |
+| `base_url` | text | Required OpenAI-compatible base URL; empty means provider default. |
+| `model` | text | Required model name when configured. |
+| `timeout_ms` | integer | Required timeout in milliseconds. |
+| `supports_vision` | integer | Required boolean flag stored as integer. |
+| `created_at` | text | Required ISO timestamp. |
+| `updated_at` | text | Required ISO timestamp. |
+
 ## `agent_skills`
 
 Stores local-first Agent planning skills, including built-in seeded skills and user-created/imported skills.
@@ -199,4 +216,3 @@ Stores multiple reference assets used by one generation.
 - `generation_outputs.asset_id` optionally references `assets.id`.
 - `generation_reference_assets.generation_id` references `generation_records.id` with cascade delete.
 - `generation_reference_assets.asset_id` references `assets.id`.
-

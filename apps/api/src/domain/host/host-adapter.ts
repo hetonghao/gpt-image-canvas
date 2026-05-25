@@ -10,6 +10,10 @@ const HOST_FETCH_TIMEOUT_MS = 10_000;
 export interface HostApiKeyRecord {
   summary: HostApiKeySummary;
   key?: string;
+  modelLimits?: {
+    enabled: boolean;
+    models: string[];
+  };
 }
 
 export interface HostContext {
@@ -166,13 +170,7 @@ export async function resolveHostApiKeyRecord(
   apiKeyId: string,
   signal?: AbortSignal
 ): Promise<HostApiKeyRecord | undefined> {
-  const id = apiKeyId.trim();
-  if (!id) {
-    return undefined;
-  }
-
-  const records = await listHostApiKeys(context, signal);
-  const record = records.find((candidate) => candidate.summary.id === id);
+  const record = await resolveListedHostApiKeyRecord(context, apiKeyId, signal);
   if (!record) {
     return undefined;
   }
@@ -186,7 +184,7 @@ export async function resolveHostApiKeyRecord(
   }
 
   const userId = context.userId ?? context.user.id;
-  const key = await fetchNewApiTokenKey({ token: context.token, cookie: context.cookie }, userId, id, signal);
+  const key = await fetchNewApiTokenKey({ token: context.token, cookie: context.cookie }, userId, record.summary.id, signal);
   return key
     ? {
         summary: {
@@ -201,6 +199,15 @@ export async function resolveHostApiKeyRecord(
 export async function listHostModels(context: HostContext, apiKeyId: string, signal?: AbortSignal): Promise<HostModelSummary[]> {
   if (hostAdapterConfig.mode === "standalone") {
     return [];
+  }
+
+  if (isNewApiHostMode()) {
+    const record = await resolveListedHostApiKeyRecord(context, apiKeyId, signal);
+    if (!record) {
+      return [];
+    }
+
+    return filterHostModelsForApiKey(await listNewApiUserModels(context, signal), record);
   }
 
   const record = await resolveHostApiKeyRecord(context, apiKeyId, signal);
@@ -221,8 +228,19 @@ async function listNewApiHostTokens(context: HostContext, signal?: AbortSignal):
   const auth = { token: context.token, cookie: context.cookie };
   const payload = await fetchHostJson("/api/token/?p=1&size=100", auth, signal, { userId });
   return parseHostApiKeyItems(payload).map((record) => ({
-    summary: record.summary
+    summary: record.summary,
+    modelLimits: record.modelLimits
   }));
+}
+
+async function resolveListedHostApiKeyRecord(context: HostContext, apiKeyId: string, signal?: AbortSignal): Promise<HostApiKeyRecord | undefined> {
+  const id = apiKeyId.trim();
+  if (!id) {
+    return undefined;
+  }
+
+  const records = await listHostApiKeys(context, signal);
+  return records.find((candidate) => candidate.summary.id === id);
 }
 
 async function fetchNewApiTokenKey(
@@ -244,6 +262,29 @@ async function fetchNewApiTokenKey(
     stringValue(recordValue(payload, "key")) ??
     stringValue(recordValue(payload, "data"))
   );
+}
+
+async function listNewApiUserModels(context: HostContext, signal?: AbortSignal): Promise<HostModelSummary[]> {
+  if (!context.token && !context.cookie) {
+    return [];
+  }
+
+  const userId = context.userId ?? context.user.id;
+  const payload = await fetchHostJson("/api/user/models", { token: context.token, cookie: context.cookie }, signal, { userId });
+  return parseHostModelItems(payload);
+}
+
+function filterHostModelsForApiKey(models: HostModelSummary[], record: HostApiKeyRecord): HostModelSummary[] {
+  if (!record.modelLimits?.enabled) {
+    return models;
+  }
+
+  const allowed = new Set(record.modelLimits.models);
+  if (allowed.size === 0) {
+    return [];
+  }
+
+  return models.filter((model) => allowed.has(model.id));
 }
 
 type HostFetchAuth = {
@@ -333,6 +374,7 @@ function parseHostApiKeyItems(payload: unknown): HostApiKeyRecord[] {
     }
 
     const key = stringValue(item.key) ?? stringValue(item.api_key) ?? stringValue(item.apiKey);
+    const modelLimitsEnabled = booleanValue(item.model_limits_enabled) ?? booleanValue(item.modelLimitsEnabled) ?? false;
     const quota = recordValue(item, "quota");
     const quotaTotal =
       numberValue(item.quota) ??
@@ -371,7 +413,13 @@ function parseHostApiKeyItems(payload: unknown): HostApiKeyRecord[] {
               : undefined,
           maskedKey: maskKey(key)
         },
-        key
+        key,
+        modelLimits: modelLimitsEnabled
+          ? {
+              enabled: true,
+              models: parseModelLimitIds(recordValue(item, "model_limits") ?? recordValue(item, "modelLimits"))
+            }
+          : undefined
       }
     ];
   });
@@ -444,6 +492,62 @@ function recordValue(value: unknown, key: string): unknown {
 
 function arrayValue(value: unknown): unknown[] | undefined {
   return Array.isArray(value) ? value : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value !== 0;
+  }
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", ""].includes(normalized)) {
+    return false;
+  }
+
+  return undefined;
+}
+
+function parseModelLimitIds(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return uniqueStrings(value.flatMap((item) => (typeof item === "string" ? [item] : [])));
+  }
+
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed)) {
+        return uniqueStrings(parsed.flatMap((item) => (typeof item === "string" ? [item] : [])));
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  return uniqueStrings(trimmed.split(","));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
 function stringValue(value: unknown): string | undefined {

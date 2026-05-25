@@ -20,7 +20,7 @@ Local AI image canvas for prompt-to-image generation, reference-image generation
 
 ## Requirements
 
-- Node.js `24.15.0`. The repo includes `.nvmrc` and `.node-version`.
+- Node.js `24.15.0` through `25.x`. The repo includes `.nvmrc` and `.node-version` pinned to the production Docker baseline.
 - pnpm `9.14.2`. The version is pinned in `package.json`.
 - An OpenAI API key with access to `gpt-image-2`, an OpenAI-compatible image endpoint, or a Codex login completed inside the app.
 - Docker Desktop or a compatible Docker Engine, only if you want the Docker workflow.

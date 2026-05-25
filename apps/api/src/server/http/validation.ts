@@ -1,9 +1,12 @@
 import {
   GENERATION_COUNTS,
   IMAGE_QUALITIES,
+  MAX_REGION_SUMMARY_IMAGE_BYTES,
   MAX_REFERENCE_IMAGES,
   OUTPUT_FORMATS,
   PROVIDER_SOURCE_IDS,
+  REGION_SUMMARY_IMAGE_MIME_TYPES,
+  REGION_SUMMARY_LOCALES,
   SIZE_PRESETS,
   STYLE_PRESETS,
   composePrompt,
@@ -14,9 +17,12 @@ import {
   type OutputFormat,
   type ProviderSourceId,
   type ReferenceImageInput,
+  type RegionSummaryLocale,
+  type RegionSummaryRequest,
   type SaveAgentLlmConfigRequest,
   type SaveLocalOpenAIProviderConfig,
   type SaveProviderConfigRequest,
+  type SaveSummaryLlmConfigRequest,
   type SaveStorageConfigRequest,
   type StylePresetId
 } from "../../domain/contracts.js";
@@ -383,6 +389,70 @@ export function parseAgentLlmConfigPayload(input: unknown): ParseResult<SaveAgen
   };
 }
 
+export function parseSummaryLlmConfigPayload(input: unknown): ParseResult<SaveSummaryLlmConfigRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_summary_config", "Summary LLM config payload must be a JSON object.")
+    };
+  }
+
+  if (Object.hasOwn(input, "apiKey") && typeof input.apiKey !== "string") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_summary_config", "Summary LLM API key must be a string.")
+    };
+  }
+
+  if (Object.hasOwn(input, "apiKeyId") && typeof input.apiKeyId !== "string") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_summary_config", "Summary LLM API key id must be a string.")
+    };
+  }
+
+  if (typeof input.baseUrl !== "string") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_summary_config", "Summary LLM base URL must be a string.")
+    };
+  }
+
+  if (typeof input.model !== "string") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_summary_config", "Summary LLM model must be a string.")
+    };
+  }
+
+  if (typeof input.timeoutMs !== "number" || !Number.isInteger(input.timeoutMs) || input.timeoutMs <= 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_summary_config", "Summary LLM timeout must be a positive integer.")
+    };
+  }
+
+  if (typeof input.supportsVision !== "boolean") {
+    return {
+      ok: false,
+      error: errorResponse("invalid_summary_config", "Summary LLM supportsVision must be a boolean.")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      apiKey: stringValue(input.apiKey),
+      apiKeyId: stringValue(input.apiKeyId),
+      preserveApiKey: input.preserveApiKey === true,
+      baseUrl: input.baseUrl,
+      model: input.model,
+      timeoutMs: input.timeoutMs,
+      supportsVision: input.supportsVision
+    }
+  };
+}
+
 export function parseProviderConfigPayload(input: unknown): ParseResult<SaveProviderConfigRequest> {
   if (!isRecord(input)) {
     return {
@@ -509,6 +579,107 @@ function parseLocalOpenAIProviderConfig(input: unknown): ParseResult<SaveLocalOp
   return {
     ok: true,
     value: config
+  };
+}
+
+export function parseRegionSummaryPayload(input: unknown): ParseResult<RegionSummaryRequest> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_region_summary_request", "Region summary payload must be a JSON object.")
+    };
+  }
+
+  if (!isRecord(input.image)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_region_summary_request", "Region summary image is required.")
+    };
+  }
+
+  const dataUrl = stringValue(input.image.dataUrl)?.trim();
+  if (!dataUrl) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_region_summary_request", "Region summary image dataUrl is required.")
+    };
+  }
+
+  const dataUrlMatch = /^data:([^;,]+);base64,([a-zA-Z0-9+/]+={0,2})$/u.exec(dataUrl);
+  const mimeType = dataUrlMatch?.[1]?.toLowerCase();
+  if (!dataUrlMatch || !mimeType || !REGION_SUMMARY_IMAGE_MIME_TYPES.includes(mimeType as (typeof REGION_SUMMARY_IMAGE_MIME_TYPES)[number])) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_region_summary_request", "Region summary image must be PNG, JPEG, JPG, or WebP.")
+    };
+  }
+
+  const byteLength = Buffer.byteLength(dataUrlMatch[2] ?? "", "base64");
+  if (byteLength <= 0 || byteLength > MAX_REGION_SUMMARY_IMAGE_BYTES) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_region_summary_request", "Region summary image size is unsupported.")
+    };
+  }
+
+  if (!isRecord(input.source)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_region_summary_request", "Region summary source dimensions are required.")
+    };
+  }
+
+  const sourceWidth = parsePositiveIntegerValue(input.source.width);
+  const sourceHeight = parsePositiveIntegerValue(input.source.height);
+  if (!sourceWidth || !sourceHeight) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_region_summary_request", "Region summary source dimensions must be positive integers.")
+    };
+  }
+
+  if (!isRecord(input.region)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_region_summary_request", "Region summary coordinates are required.")
+    };
+  }
+
+  const region = {
+    x: numberValue(input.region.x),
+    y: numberValue(input.region.y),
+    width: numberValue(input.region.width),
+    height: numberValue(input.region.height)
+  };
+  if (!isNormalizedRegion(region)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_region_summary_request", "Region summary coordinates must be normalized within image bounds.")
+    };
+  }
+
+  const locale = parseOptionalString(input.locale) ?? "zh-CN";
+  if (!REGION_SUMMARY_LOCALES.includes(locale as RegionSummaryLocale)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_region_summary_request", "Region summary locale must be zh-CN or en.")
+    };
+  }
+
+  return {
+    ok: true,
+    value: {
+      image: {
+        dataUrl,
+        fileName: stringValue(input.image.fileName)?.trim() || undefined
+      },
+      source: {
+        width: sourceWidth,
+        height: sourceHeight
+      },
+      region,
+      locale: locale as RegionSummaryLocale
+    }
   };
 }
 
@@ -721,6 +892,25 @@ function parseCount(value: unknown): ParseResult<GenerationCount> {
 
 function parseDimension(value: unknown): number {
   return typeof value === "number" ? value : Number.NaN;
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" ? value : Number.NaN;
+}
+
+function isNormalizedRegion(region: { x: number; y: number; width: number; height: number }): boolean {
+  return (
+    Number.isFinite(region.x) &&
+    Number.isFinite(region.y) &&
+    Number.isFinite(region.width) &&
+    Number.isFinite(region.height) &&
+    region.x >= 0 &&
+    region.y >= 0 &&
+    region.width > 0 &&
+    region.height > 0 &&
+    region.x + region.width <= 1 &&
+    region.y + region.height <= 1
+  );
 }
 
 function parsePositiveIntegerValue(value: unknown): number | undefined {

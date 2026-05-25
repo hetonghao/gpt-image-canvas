@@ -6,6 +6,7 @@ import {
   Check,
   CheckCircle2,
   CircleAlert,
+  CircleHelp,
   Database,
   GripVertical,
   KeyRound,
@@ -34,12 +35,21 @@ import {
   type ProviderSourceId,
   type ProviderSourceView,
   type SaveAgentLlmConfigRequest,
-  type SaveProviderConfigRequest
+  type SaveProviderConfigRequest,
+  type SaveSummaryLlmConfigRequest,
+  type SummaryLlmConfigView
 } from "@gpt-image-canvas/shared";
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
 import { apiFetch } from "../../shared/api/host-token";
 import { onboardingProviderFieldStates, type OnboardingFieldState } from "./provider-onboarding-fields";
-import { AI_COVE_DEFAULT_AGENT_MODEL, getProviderConfigSaveIssueTab, shouldSaveAgentConfig, type ProviderConfigTab } from "./provider-config-save";
+import {
+  AI_COVE_DEFAULT_AGENT_MODEL,
+  getProviderConfigSaveIssueTab,
+  resolveSummaryModelApiKeyId,
+  shouldSaveAgentConfig,
+  summaryConfigSaveIntent,
+  type ProviderConfigTab
+} from "./provider-config-save";
 
 interface ProviderConfigDialogProps {
   initialTab?: ProviderConfigTab;
@@ -50,6 +60,7 @@ interface ProviderConfigDialogProps {
   onLogoutCodex: () => Promise<void>;
   onRefreshAgentConfig: () => Promise<AgentLlmConfigView | null>;
   onRefreshAuthStatus: () => Promise<AuthStatusResponse | null>;
+  onRefreshSummaryConfig: () => Promise<SummaryLlmConfigView | null>;
   onSaved?: () => void;
   onStartCodexLogin: () => Promise<void>;
 }
@@ -94,6 +105,9 @@ const emptyAgentLlmForm: AgentLlmFormState = {
   supportsVision: true
 };
 
+const DEFAULT_SUMMARY_TIMEOUT_MS = 60000;
+const SUMMARY_LLM_RECOMMENDED_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"] as const;
+
 const queryBaseUrlSeed = readQueryBaseUrlSeed();
 
 seedLocalProviderBaseUrlFromQuery();
@@ -107,23 +121,29 @@ export function ProviderConfigDialog({
   onLogoutCodex,
   onRefreshAgentConfig,
   onRefreshAuthStatus,
+  onRefreshSummaryConfig,
   onSaved,
   onStartCodexLogin
 }: ProviderConfigDialogProps) {
   const { formatDateTime: formatLocaleDateTime, locale, t } = useI18n();
   const [config, setConfig] = useState<ProviderConfigResponse | null>(null);
   const [agentConfig, setAgentConfig] = useState<AgentLlmConfigView | null>(null);
+  const [summaryConfig, setSummaryConfig] = useState<SummaryLlmConfigView | null>(null);
   const [hostSession, setHostSession] = useState<HostSessionResponse | null>(null);
   const [hostApiKeys, setHostApiKeys] = useState<HostApiKeySummary[]>([]);
   const [imageModels, setImageModels] = useState<HostModelSummary[]>([]);
   const [agentModels, setAgentModels] = useState<HostModelSummary[]>([]);
+  const [summaryModels, setSummaryModels] = useState<HostModelSummary[]>([]);
   const [isImageModelsLoading, setIsImageModelsLoading] = useState(false);
   const [isAgentModelsLoading, setIsAgentModelsLoading] = useState(false);
+  const [isSummaryModelsLoading, setIsSummaryModelsLoading] = useState(false);
   const [sourceOrder, setSourceOrder] = useState<ProviderSourceId[]>([...PROVIDER_SOURCE_IDS]);
   const [localForm, setLocalForm] = useState<LocalProviderFormState>(emptyLocalProviderForm);
   const [agentForm, setAgentForm] = useState<AgentLlmFormState>(emptyAgentLlmForm);
+  const [summaryForm, setSummaryForm] = useState<AgentLlmFormState>(emptyAgentLlmForm);
   const [isLoading, setIsLoading] = useState(true);
   const [isAgentConfigLoading, setIsAgentConfigLoading] = useState(true);
+  const [isSummaryConfigLoading, setIsSummaryConfigLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<DialogMessage | null>(null);
   const [draggingSourceId, setDraggingSourceId] = useState<ProviderSourceId | null>(null);
@@ -141,6 +161,8 @@ export function ProviderConfigDialog({
   const hasSavedLocalKey = Boolean(config?.localOpenAI.apiKey.hasSecret);
   const agentApiKeyMask = agentConfig?.apiKey.value;
   const hasSavedAgentKey = Boolean(agentConfig?.apiKey.hasSecret);
+  const summaryApiKeyMask = summaryConfig?.apiKey.value;
+  const hasSavedSummaryKey = Boolean(summaryConfig?.apiKey.hasSecret);
   const codexSource = sourcesById.get("codex");
   const codex = codexSource?.details.codex;
   const envSource = sourcesById.get("env-openai");
@@ -151,6 +173,12 @@ export function ProviderConfigDialog({
   const activeSourceTimeout = activeSource?.details.timeoutMs;
   const showAiCoveCondensedConfig = isAiCoveMode;
   const isOnboarding = mode === "onboarding";
+  const summaryModelApiKeyId = resolveSummaryModelApiKeyId({
+    agentApiKeyId: agentForm.apiKeyId,
+    firstHostApiKeyId: hostApiKeys[0]?.id ?? "",
+    imageApiKeyId: localForm.apiKeyId,
+    summaryApiKeyId: summaryForm.apiKeyId
+  });
   const onboardingFieldStates = isOnboarding
     ? onboardingProviderFieldStates({
         agent: {
@@ -215,6 +243,10 @@ export function ProviderConfigDialog({
   useEffect(() => {
     setAgentModels([]);
   }, [hostSession?.adapter.mode, agentForm.apiKeyId]);
+
+  useEffect(() => {
+    setSummaryModels([]);
+  }, [hostSession?.adapter.mode, summaryModelApiKeyId]);
 
   const loadProviderConfig = useCallback(
     async (signal?: AbortSignal, context: HostSessionResponse | null = null): Promise<ProviderConfigResponse | null> => {
@@ -286,17 +318,52 @@ export function ProviderConfigDialog({
     [locale, t]
   );
 
+  const loadSummaryConfig = useCallback(
+    async (signal?: AbortSignal, context: HostSessionResponse | null = null): Promise<SummaryLlmConfigView | null> => {
+      setIsSummaryConfigLoading(true);
+      setMessage(null);
+
+      try {
+        const response = await apiFetch("/api/summary-config", { signal });
+        if (!response.ok) {
+          throw new Error(await readProviderConfigError(response, locale, t));
+        }
+
+        const body = (await response.json()) as SummaryLlmConfigView;
+        if (signal?.aborted) {
+          return null;
+        }
+
+        applySummaryConfig(body, context);
+        return body;
+      } catch (error) {
+        if (!signal?.aborted) {
+          setMessage({
+            tone: "error",
+            text: error instanceof Error ? error.message : t("summaryConfigLoadFailed")
+          });
+        }
+        return null;
+      } finally {
+        if (!signal?.aborted) {
+          setIsSummaryConfigLoading(false);
+        }
+      }
+    },
+    [locale, t]
+  );
+
   useEffect(() => {
     const controller = new AbortController();
     void (async () => {
       const context = await loadHostContext(controller.signal);
-      await Promise.all([loadProviderConfig(controller.signal, context), loadAgentConfig(controller.signal, context)]);
+      await Promise.all([loadProviderConfig(controller.signal, context), loadAgentConfig(controller.signal, context), loadSummaryConfig(controller.signal, context)]);
     })();
 
     return () => {
       controller.abort();
     };
-  }, [loadAgentConfig, loadHostContext, loadProviderConfig]);
+  }, [loadAgentConfig, loadHostContext, loadProviderConfig, loadSummaryConfig]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -345,6 +412,20 @@ export function ProviderConfigDialog({
     });
   }
 
+  function applySummaryConfig(nextConfig: SummaryLlmConfigView, context: HostSessionResponse | null = hostSession): void {
+    const nextIsAiCoveMode = isHostedAiCoveAdapterMode(context?.adapter.mode);
+    const nextGatewayBaseUrl = nextIsAiCoveMode && context ? context.adapter.gatewayBaseUrl : "";
+    setSummaryConfig(nextConfig);
+    setSummaryForm({
+      apiKey: "",
+      apiKeyId: nextConfig.apiKeyId ?? "",
+      baseUrl: nextIsAiCoveMode ? nextGatewayBaseUrl : nextConfig.baseUrl || "",
+      model: nextConfig.model,
+      timeoutMs: formatTimeoutSeconds(nextConfig.timeoutMs),
+      supportsVision: nextConfig.configured ? nextConfig.supportsVision : true
+    });
+  }
+
   function updateLocalForm(patch: Partial<LocalProviderFormState>): void {
     setLocalForm((current) => ({
       ...current,
@@ -355,6 +436,14 @@ export function ProviderConfigDialog({
 
   function updateAgentForm(patch: Partial<AgentLlmFormState>): void {
     setAgentForm((current) => ({
+      ...current,
+      ...patch
+    }));
+    setMessage(null);
+  }
+
+  function updateSummaryForm(patch: Partial<AgentLlmFormState>): void {
+    setSummaryForm((current) => ({
       ...current,
       ...patch
     }));
@@ -387,6 +476,19 @@ export function ProviderConfigDialog({
     };
   }, [agentForm.apiKeyId, agentForm.model, isAiCoveMode]);
 
+  useEffect(() => {
+    if (!isAiCoveMode || !summaryModelApiKeyId) {
+      setSummaryModels(selectableCurrentModel(summaryForm.model, "summary"));
+      return;
+    }
+
+    const controller = new AbortController();
+    void loadHostModels(summaryModelApiKeyId, "summary", summaryForm.model, setSummaryModels, setIsSummaryModelsLoading, controller.signal);
+    return () => {
+      controller.abort();
+    };
+  }, [isAiCoveMode, summaryForm.model, summaryModelApiKeyId]);
+
   async function loadHostModels(
     apiKeyId: string,
     usage: ProviderConfigTab,
@@ -406,11 +508,11 @@ export function ProviderConfigDialog({
       const body = (await response.json()) as HostModelsResponse;
       if (!signal?.aborted) {
         const filtered = body.items.filter((model) => isModelAllowedForTab(model.id, usage));
-        setModels(filtered.length > 0 ? filtered : selectableCurrentModel(currentModelId, usage));
+        setModels(filtered.length > 0 ? filtered : fallbackHostModels(currentModelId, usage));
       }
     } catch {
       if (!signal?.aborted) {
-        setModels(selectableCurrentModel(currentModelId, usage));
+        setModels(fallbackHostModels(currentModelId, usage));
       }
     } finally {
       if (!signal?.aborted) {
@@ -525,6 +627,7 @@ export function ProviderConfigDialog({
 
     const localApiKeyId = localForm.apiKeyId.trim();
     const agentApiKeyId = agentForm.apiKeyId.trim();
+    const summaryApiKeyId = summaryForm.apiKeyId.trim();
     if (isAiCoveMode && !localApiKeyId) {
       setMessage({
         tone: "error",
@@ -533,6 +636,13 @@ export function ProviderConfigDialog({
       return;
     }
 
+    const summaryIntent = summaryConfigSaveIntent({
+      form: summaryForm,
+      hasSavedApiKey: hasSavedSummaryKey,
+      isAiCoveMode,
+      queryBaseUrlSeed
+    });
+    const shouldPersistSummaryConfig = summaryIntent === "save";
     const shouldPersistAgentConfig = shouldSaveAgentConfig({
       form: agentForm,
       hasSavedApiKey: hasSavedAgentKey,
@@ -542,7 +652,9 @@ export function ProviderConfigDialog({
     const issueTab = getProviderConfigSaveIssueTab({
       agentApiKeyId,
       isAiCoveMode,
-      shouldPersistAgentConfig
+      shouldPersistAgentConfig,
+      shouldPersistSummaryConfig,
+      summaryApiKeyId
     });
     if (issueTab) {
       setActiveTab(issueTab);
@@ -551,6 +663,13 @@ export function ProviderConfigDialog({
       setMessage({
         tone: "error",
         text: t("hostAgentApiKeyRequired")
+      });
+      return;
+    }
+    if (issueTab === "summary") {
+      setMessage({
+        tone: "error",
+        text: t("hostSummaryApiKeyRequired")
       });
       return;
     }
@@ -575,6 +694,31 @@ export function ProviderConfigDialog({
       setMessage({
         tone: "error",
         text: t("agentConfigTimeoutInvalid")
+      });
+      return;
+    }
+
+    const summaryTimeoutMs = parseTimeoutInputMs(summaryForm.timeoutMs);
+    const summaryApiKey = summaryForm.apiKey.trim();
+    const summaryModel = summaryForm.model.trim();
+    if (!isAiCoveMode && shouldPersistSummaryConfig && !summaryApiKey && !hasSavedSummaryKey) {
+      setMessage({
+        tone: "error",
+        text: t("summaryConfigApiKeyRequired")
+      });
+      return;
+    }
+    if (shouldPersistSummaryConfig && !summaryModel) {
+      setMessage({
+        tone: "error",
+        text: t("summaryConfigModelRequired")
+      });
+      return;
+    }
+    if (shouldPersistSummaryConfig && summaryTimeoutMs === undefined) {
+      setMessage({
+        tone: "error",
+        text: t("summaryConfigTimeoutInvalid")
       });
       return;
     }
@@ -620,6 +764,35 @@ export function ProviderConfigDialog({
           };
     }
 
+    let summaryBody: SaveSummaryLlmConfigRequest | null = null;
+    if (summaryIntent === "clear") {
+      summaryBody = {
+        apiKey: "",
+        preserveApiKey: false,
+        baseUrl: "",
+        model: "",
+        timeoutMs: DEFAULT_SUMMARY_TIMEOUT_MS,
+        supportsVision: true
+      };
+    } else if (summaryIntent === "save" && summaryTimeoutMs !== undefined) {
+      summaryBody = isAiCoveMode
+        ? {
+            apiKeyId: summaryApiKeyId,
+            baseUrl: gatewayBaseUrl,
+            model: summaryModel,
+            timeoutMs: summaryTimeoutMs,
+            supportsVision: summaryForm.supportsVision
+          }
+        : {
+            apiKey: summaryApiKey,
+            preserveApiKey: !summaryApiKey && hasSavedSummaryKey,
+            baseUrl: summaryForm.baseUrl.trim(),
+            model: summaryModel,
+            timeoutMs: summaryTimeoutMs,
+            supportsVision: summaryForm.supportsVision
+          };
+    }
+
     try {
       const response = await apiFetch("/api/provider-config", {
         method: "PUT",
@@ -647,12 +820,29 @@ export function ProviderConfigDialog({
         }
         savedAgentConfig = (await agentResponse.json()) as AgentLlmConfigView;
       }
+      let savedSummaryConfig: SummaryLlmConfigView | null = null;
+      if (summaryBody) {
+        const summaryResponse = await apiFetch("/api/summary-config", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(summaryBody)
+        });
+        if (!summaryResponse.ok) {
+          throw new Error(await readProviderConfigError(summaryResponse, locale, t));
+        }
+        savedSummaryConfig = (await summaryResponse.json()) as SummaryLlmConfigView;
+      }
 
       applyProviderConfig(savedConfig);
       if (savedAgentConfig) {
         applyAgentConfig(savedAgentConfig);
       }
-      await Promise.all([onRefreshAuthStatus(), onRefreshAgentConfig()]);
+      if (savedSummaryConfig) {
+        applySummaryConfig(savedSummaryConfig);
+      }
+      await Promise.all([onRefreshAuthStatus(), onRefreshAgentConfig(), onRefreshSummaryConfig()]);
       if (onSaved) {
         onSaved();
         return;
@@ -769,6 +959,24 @@ export function ProviderConfigDialog({
               <span className="provider-config-tab__copy">
                 <strong>{t("agentLlmTitle")}</strong>
                 <span>{isAgentConfigLoading ? t("agentConfigLoading") : agentConfig?.configured ? t("providerAvailable") : t("providerUnavailable")}</span>
+              </span>
+            </button>
+            <button
+              aria-controls="provider-config-panel-summary"
+              aria-selected={activeTab === "summary"}
+              className="provider-config-tab"
+              data-active={activeTab === "summary"}
+              data-testid="provider-config-tab-summary"
+              id="provider-config-tab-summary"
+              role="tab"
+              tabIndex={activeTab === "summary" ? 0 : -1}
+              type="button"
+              onClick={() => setActiveTab("summary")}
+            >
+              <CircleHelp className="size-4" aria-hidden="true" />
+              <span className="provider-config-tab__copy">
+                <strong>{t("summaryLlmTitle")}</strong>
+                <span>{isSummaryConfigLoading ? t("agentConfigLoading") : summaryConfig?.configured ? t("providerAvailable") : t("summaryConfigOptional")}</span>
               </span>
             </button>
           </nav>
@@ -1032,7 +1240,7 @@ export function ProviderConfigDialog({
                 )}
               </div>
             </div>
-          ) : (
+          ) : activeTab === "agent" ? (
             <div
               aria-labelledby="provider-config-tab-agent"
               className="provider-config-tab-panel provider-config-tab-panel--agent"
@@ -1164,23 +1372,159 @@ export function ProviderConfigDialog({
 
               </div>
             </div>
+          ) : (
+            <div
+              aria-labelledby="provider-config-tab-summary"
+              className="provider-config-tab-panel provider-config-tab-panel--agent"
+              data-tab="summary"
+              data-testid="provider-summary-panel"
+              id="provider-config-panel-summary"
+              key="summary"
+              role="tabpanel"
+            >
+              <div className="provider-workspace provider-workspace--agent">
+                <section className="provider-detail-card provider-detail-card--agent" data-testid="provider-summary-section" aria-labelledby="provider-summary-title">
+                  <header className="provider-detail-card__header">
+                    <span className="provider-detail-card__icon">
+                      <CircleHelp className="size-4" aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <h3 id="provider-summary-title">{t("summaryLlmTitle")}</h3>
+                      <p>{t("summaryLlmDescription")}</p>
+                    </div>
+                    <ProviderAvailabilityBadge available={summaryConfig?.configured ?? false} />
+                  </header>
+                  {isAiCoveMode && !hasHostApiKeys ? (
+                    <div className="provider-secret-pill" role="alert">
+                      <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
+                      {t("hostApiKeysEmpty")}
+                    </div>
+                  ) : null}
+                  <p className="provider-config-inline-hint" data-testid="summary-llm-gemini-hint">
+                    <strong>!</strong>
+                    <span>{t("summaryLlmGeminiHint")}</span>
+                  </p>
+                  <div className="provider-form-grid">
+                    <label className="provider-field provider-field--span">
+                      <span>Base URL</span>
+                      <input
+                        className="provider-field__control"
+                        data-testid="provider-summary-base-url"
+                        disabled={isAiCoveMode}
+                        name="summaryLlmBaseUrl"
+                        placeholder={t("agentConfigBaseUrlPlaceholder")}
+                        value={isAiCoveMode ? gatewayBaseUrl : summaryForm.baseUrl}
+                        onChange={(event) => updateSummaryForm({ baseUrl: event.target.value })}
+                      />
+                    </label>
+                    {isAiCoveMode ? (
+                      <HostApiKeySelect
+                        keys={hostApiKeys}
+                        label={t("hostApiKeyLabel")}
+                        name="summaryLlmKeyId"
+                        testId="provider-summary-api-key"
+                        value={summaryForm.apiKeyId}
+                        onChange={(apiKeyId) => updateSummaryForm({ apiKeyId })}
+                      />
+                    ) : (
+                      <label className="provider-field provider-field--span">
+                        <span>API Key</span>
+                        <input
+                          autoComplete="off"
+                          className="provider-field__control"
+                          data-testid="provider-summary-api-key"
+                          name="summaryLlmKey"
+                          placeholder={summaryApiKeyMask ? t("summaryConfigApiKeySaved", { mask: summaryApiKeyMask }) : t("summaryConfigApiKeyPlaceholder")}
+                          type="password"
+                          value={summaryForm.apiKey}
+                          onChange={(event) => updateSummaryForm({ apiKey: event.target.value })}
+                        />
+                      </label>
+                    )}
+                    <label className="provider-field provider-field--compact">
+                      <span>
+                        {t("providerFieldModel")}
+                        <span className="provider-config-field-bang" title={t("summaryLlmGeminiHint")}>
+                          !
+                        </span>
+                      </span>
+                      {isAiCoveMode ? (
+                        <HostModelSelect
+                          isLoading={isSummaryModelsLoading}
+                          models={summaryModels}
+                          name="summaryLlmModel"
+                          placeholder={t("summaryConfigModelPlaceholder")}
+                          shouldIncludeCurrentValue={isLikelyAgentLlmModel}
+                          testId="provider-summary-model"
+                          value={summaryForm.model}
+                          onChange={(model) =>
+                            updateSummaryForm({
+                              apiKeyId: model ? summaryModelApiKeyId : summaryForm.apiKeyId,
+                              model
+                            })
+                          }
+                        />
+                      ) : (
+                        <input
+                          className="provider-field__control"
+                          data-testid="provider-summary-model"
+                          name="summaryLlmModel"
+                          placeholder={t("summaryConfigModelPlaceholder")}
+                          value={summaryForm.model}
+                          onChange={(event) => updateSummaryForm({ model: event.target.value })}
+                        />
+                      )}
+                    </label>
+                    <label className="provider-field provider-field--compact">
+                      <span>{t("providerTimeoutMs")}</span>
+                      <input
+                        className="provider-field__control"
+                        data-testid="provider-summary-timeout"
+                        min="0.001"
+                        name="summaryLlmTimeout"
+                        type="number"
+                        step="0.001"
+                        value={summaryForm.timeoutMs}
+                        onChange={(event) => updateSummaryForm({ timeoutMs: event.target.value })}
+                      />
+                    </label>
+                    <label className="provider-toggle-field">
+                      <input
+                        checked={summaryForm.supportsVision}
+                        data-testid="provider-summary-supports-vision"
+                        type="checkbox"
+                        onChange={(event) => updateSummaryForm({ supportsVision: event.target.checked })}
+                      />
+                      <span>{t("agentConfigSupportsVision")}</span>
+                    </label>
+                  </div>
+                  {hasSavedSummaryKey && !summaryForm.apiKey && !isAiCoveMode ? (
+                    <div className="provider-secret-pill">
+                      <KeyRound className="size-3.5 shrink-0" aria-hidden="true" />
+                      {t("summaryConfigApiKeySaved", { mask: summaryApiKeyMask ?? "" })}
+                    </div>
+                  ) : null}
+                </section>
+              </div>
+            </div>
           )}
         </div>
 
         <footer className="provider-config-dialog__footer">
           <button
             className="secondary-action h-10"
-            disabled={isLoading || isAgentConfigLoading || isSaving}
+            disabled={isLoading || isAgentConfigLoading || isSummaryConfigLoading || isSaving}
             type="button"
             onClick={() => {
               void loadProviderConfig(undefined, hostSession);
               void loadAgentConfig(undefined, hostSession);
+              void loadSummaryConfig(undefined, hostSession);
             }}
           >
             <RefreshCcw className="size-4" aria-hidden="true" />
             {t("providerRefresh")}
           </button>
-          <button className="primary-action h-10" data-testid="provider-config-save" disabled={isLoading || isAgentConfigLoading || isSaving || !config || (isAiCoveMode && !hasHostApiKeys)} type="button" onClick={() => void saveProviderConfig()}>
+          <button className="primary-action h-10" data-testid="provider-config-save" disabled={isLoading || isAgentConfigLoading || isSummaryConfigLoading || isSaving || !config || (isAiCoveMode && !hasHostApiKeys)} type="button" onClick={() => void saveProviderConfig()}>
             {isSaving ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <Save className="size-4" aria-hidden="true" />}
             {t("providerSave")}
           </button>
@@ -1491,6 +1835,16 @@ function isModelAllowedForTab(modelId: string, tab: ProviderConfigTab): boolean 
 function selectableCurrentModel(modelId: string, tab: ProviderConfigTab): HostModelSummary[] {
   const trimmed = modelId.trim();
   return trimmed && isModelAllowedForTab(trimmed, tab) ? [{ id: trimmed }] : [];
+}
+
+function fallbackHostModels(modelId: string, tab: ProviderConfigTab): HostModelSummary[] {
+  const currentModels = selectableCurrentModel(modelId, tab);
+  if (tab !== "summary") {
+    return currentModels;
+  }
+
+  const modelIds = [...currentModels.map((model) => model.id), ...SUMMARY_LLM_RECOMMENDED_MODELS];
+  return Array.from(new Set(modelIds)).map((id) => ({ id }));
 }
 
 function isLikelyImageModel(modelId: string): boolean {

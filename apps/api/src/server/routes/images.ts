@@ -6,10 +6,11 @@ import {
   startReferenceImageGenerationTask,
   startTextToImageGenerationTask
 } from "../../domain/generation/generation-tasks.js";
+import { regionSummaryFailureCode, resolveRegionSummaryModelConfig, summarizeImageRegion } from "../../domain/summary/region-summary.js";
 import { ProviderError } from "../../infrastructure/providers/image-provider.js";
-import { errorResponse, providerErrorJson } from "../http/errors.js";
+import { errorResponse, errorToMessage, providerErrorJson } from "../http/errors.js";
 import { readJson } from "../http/json.js";
-import { parseEditPayload, parseGeneratePayload } from "../http/validation.js";
+import { parseEditPayload, parseGeneratePayload, parseRegionSummaryPayload } from "../http/validation.js";
 import { requireHostContext } from "../host-context.js";
 
 export function registerImageRoutes(app: Hono): void {
@@ -57,6 +58,36 @@ export function registerImageRoutes(app: Hono): void {
       }
 
       throw error;
+    }
+  });
+
+  app.post("/api/images/region-summary", async (c) => {
+    const payload = await readJson(c.req.raw);
+    if (!payload.ok) {
+      return c.json(payload.error, 400);
+    }
+
+    const parsed = parseRegionSummaryPayload(payload.value);
+    if (!parsed.ok) {
+      return c.json(parsed.error, 400);
+    }
+
+    const modelConfig = await resolveRegionSummaryModelConfig(requireHostContext(c), c.req.raw.signal);
+    if (!modelConfig.ok) {
+      return c.json(errorResponse(modelConfig.code, modelConfig.message), 400);
+    }
+
+    try {
+      return c.json(
+        await summarizeImageRegion({
+          request: parsed.value,
+          config: modelConfig.config,
+          signal: c.req.raw.signal
+        })
+      );
+    } catch (error) {
+      console.warn("[region-summary] upstream request failed:", errorToMessage(error));
+      return c.json(errorResponse(regionSummaryFailureCode(error), "Region summary failed."), 502);
     }
   });
 

@@ -114,6 +114,19 @@ CREATE TABLE IF NOT EXISTS agent_llm_configs (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS summary_llm_configs (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL DEFAULT 'standalone',
+  api_key TEXT,
+  api_key_id TEXT,
+  base_url TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  timeout_ms INTEGER NOT NULL DEFAULT 60000,
+  supports_vision INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS agent_conversations (
   id TEXT PRIMARY KEY NOT NULL,
   user_id TEXT NOT NULL DEFAULT 'standalone',
@@ -206,6 +219,7 @@ ensureUserIdColumn("assets");
 ensureUserIdColumn("storage_configs");
 ensureUserIdColumn("provider_configs");
 ensureUserIdColumn("agent_llm_configs");
+ensureUserIdColumn("summary_llm_configs");
 ensureUserIdColumn("agent_conversations");
 ensureUserIdColumn("agent_skills");
 ensureUserIdColumn("codex_oauth_tokens");
@@ -218,6 +232,7 @@ CREATE INDEX IF NOT EXISTS assets_user_id_idx ON assets(user_id);
 CREATE INDEX IF NOT EXISTS storage_configs_user_id_idx ON storage_configs(user_id);
 CREATE INDEX IF NOT EXISTS provider_configs_user_id_idx ON provider_configs(user_id);
 CREATE INDEX IF NOT EXISTS agent_llm_configs_user_id_idx ON agent_llm_configs(user_id);
+CREATE INDEX IF NOT EXISTS summary_llm_configs_user_id_idx ON summary_llm_configs(user_id);
 CREATE INDEX IF NOT EXISTS agent_conversations_user_id_idx ON agent_conversations(user_id);
 CREATE INDEX IF NOT EXISTS agent_skills_user_id_idx ON agent_skills(user_id);
 CREATE INDEX IF NOT EXISTS codex_oauth_tokens_user_id_idx ON codex_oauth_tokens(user_id);
@@ -259,6 +274,12 @@ ensureColumn("agent_llm_configs", "base_url", "base_url TEXT NOT NULL DEFAULT ''
 ensureColumn("agent_llm_configs", "model", "model TEXT NOT NULL DEFAULT ''");
 ensureColumn("agent_llm_configs", "timeout_ms", "timeout_ms INTEGER NOT NULL DEFAULT 60000");
 ensureColumn("agent_llm_configs", "supports_vision", "supports_vision INTEGER NOT NULL DEFAULT 0");
+ensureColumn("summary_llm_configs", "api_key", "api_key TEXT");
+ensureColumn("summary_llm_configs", "api_key_id", "api_key_id TEXT");
+ensureColumn("summary_llm_configs", "base_url", "base_url TEXT NOT NULL DEFAULT ''");
+ensureColumn("summary_llm_configs", "model", "model TEXT NOT NULL DEFAULT ''");
+ensureColumn("summary_llm_configs", "timeout_ms", "timeout_ms INTEGER NOT NULL DEFAULT 60000");
+ensureColumn("summary_llm_configs", "supports_vision", "supports_vision INTEGER NOT NULL DEFAULT 1");
 ensureColumn("agent_skills", "slug", "slug TEXT NOT NULL DEFAULT ''");
 ensureColumn("agent_skills", "name", "name TEXT NOT NULL DEFAULT ''");
 ensureColumn("agent_skills", "description", "description TEXT NOT NULL DEFAULT ''");
@@ -275,6 +296,7 @@ migrateStorageConfigRows();
 backfillGenerationReferenceAssets();
 ensureProviderConfigRow();
 ensureAgentLlmConfigRow();
+ensureSummaryLlmConfigRow();
 
 export const db = drizzle(sqlite, { schema });
 
@@ -395,4 +417,15 @@ function ensureAgentLlmConfigRow(): void {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run("active", null, "", "", 60000, 0, now, now);
+}
+
+function ensureSummaryLlmConfigRow(): void {
+  const now = new Date().toISOString();
+  sqlite
+    .prepare(
+      `INSERT OR IGNORE INTO summary_llm_configs
+        (id, api_key, base_url, model, timeout_ms, supports_vision, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run("active", null, "", "", 60000, 1, now, now);
 }

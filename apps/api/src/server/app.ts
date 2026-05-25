@@ -1,6 +1,6 @@
 import { relative } from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { WebSocketServer } from "ws";
 import { runtimePaths } from "../infrastructure/runtime.js";
 import { errorResponse } from "./http/errors.js";
@@ -17,7 +17,15 @@ import { registerImageRoutes } from "./routes/images.js";
 import { registerProjectRoutes } from "./routes/project.js";
 import { registerProviderConfigRoutes } from "./routes/provider-config.js";
 import { registerStorageRoutes } from "./routes/storage.js";
+import { registerSummaryConfigRoutes } from "./routes/summary-config.js";
 import { hostContextMiddleware } from "./host-context.js";
+
+const immutableStaticAssetPaths = [
+  "/brand-logo.png",
+  "/favicon.png",
+  "/favicon-32.png",
+  "/apple-touch-icon.png"
+] as const;
 
 export const agentWebSocketServer = new WebSocketServer({ noServer: true });
 export const app = createApp();
@@ -37,6 +45,7 @@ export function createApp(): Hono {
   registerAuthRoutes(app);
   registerProviderConfigRoutes(app);
   registerAgentConfigRoutes(app);
+  registerSummaryConfigRoutes(app);
   registerAgentConversationRoutes(app);
   registerAgentSkillRoutes(app);
   registerProjectRoutes(app);
@@ -50,7 +59,7 @@ export function createApp(): Hono {
 
   app.get("/api/*", (c) => c.json(errorResponse("not_found", "Not found."), 404));
 
-  app.use("/assets/*", async (c, next) => {
+  const setImmutableStaticCache: MiddlewareHandler = async (c, next) => {
     await next();
 
     if (!c.res.ok && c.res.status !== 206) {
@@ -69,7 +78,12 @@ export function createApp(): Hono {
       statusText: c.res.statusText,
       headers
     });
-  });
+  };
+
+  app.use("/assets/*", setImmutableStaticCache);
+  for (const path of immutableStaticAssetPaths) {
+    app.use(path, setImmutableStaticCache);
+  }
 
   app.get("/assets/*", serveStatic({ root: webDistRoot }));
 

@@ -274,7 +274,7 @@
   .provider-config-tabs {
     --provider-tab-gap: 0.28rem;
 
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .provider-overview-card {

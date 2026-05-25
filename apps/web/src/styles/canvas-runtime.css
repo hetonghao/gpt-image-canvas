@@ -221,7 +221,7 @@
     display: inline-flex;
     position: fixed;
     right: max(1rem, calc(1rem + env(safe-area-inset-right)));
-    bottom: max(1rem, calc(1rem + env(safe-area-inset-bottom)));
+    bottom: max(6.5rem, calc(1rem + env(safe-area-inset-bottom)));
     z-index: 1800;
     height: 2.75rem;
     align-items: center;

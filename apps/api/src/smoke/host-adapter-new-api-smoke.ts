@@ -56,6 +56,24 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise
             remain_quota: 123,
             used_quota: 5,
             key: "sk-desi********1111"
+          },
+          {
+            id: 8,
+            name: "Dashboard models key",
+            status: 1,
+            group: "openai-default",
+            remain_quota: 999,
+            used_quota: 1,
+            key: "sk-dash********2222"
+          },
+          {
+            id: 9,
+            name: "Limited models key",
+            status: 1,
+            group: "default",
+            model_limits_enabled: true,
+            model_limits: "gpt-5.4,gemini-3.5-flash",
+            key: "sk-limi********3333"
           }
         ]
       }
@@ -75,12 +93,52 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise
     });
   }
 
+  if (parsed.pathname === "/api/token/8/key") {
+    return json(
+      {
+        success: false,
+        message: "rate limited"
+      },
+      429
+    );
+  }
+
+  if (parsed.pathname === "/api/token/9/key") {
+    return json({
+      success: true,
+      data: {
+        key: "sk-limited-token"
+      }
+    });
+  }
+
   if (parsed.pathname === "/v1/models") {
+    if (headers.get("authorization") === "Bearer sk-limited-token") {
+      return json(
+        {
+          error: {
+            message: "group is not available"
+          }
+        },
+        403
+      );
+    }
+
     expect(headers.get("authorization") === "Bearer sk-real-token", "model list uses revealed token key");
     expect(headers.get("new-api-user") === null, "model list does not send dashboard user id");
     return json({
       object: "list",
       data: [{ id: "gpt-image-1" }]
+    });
+  }
+
+  if (parsed.pathname === "/api/user/models") {
+    expect(headers.get("authorization") === null, "dashboard model fallback does not need access token");
+    expect(headers.get("cookie") === "session=abc", "dashboard model fallback forwards session cookie");
+    expect(headers.get("new-api-user") === "42", "dashboard model fallback includes New-Api-User");
+    return json({
+      success: true,
+      data: ["gpt-5.4", "gemini-3.5-flash", "gpt-image-2"]
     });
   }
 
@@ -104,7 +162,7 @@ expect(resolved.context.user.displayName === "ada", "resolved username is used a
 expect(resolved.context.user.email === "ada@example.com", "resolved email is parsed");
 
 const keys = await listHostApiKeys(resolved.context);
-expect(keys.length === 1, "one token is listed");
+expect(keys.length === 3, "tokens are listed");
 expect(keys[0]?.summary.id === "7", "token id is mapped");
 expect(keys[0]?.summary.name === "Design key", "token name is mapped");
 expect(keys[0]?.summary.status === "1", "numeric token status is stringified");
@@ -115,7 +173,21 @@ expect(keys[0]?.key === undefined, "token list does not reveal full token key");
 expect(!requests.some((request) => request.url === "https://new-api.example/api/token/7/key"), "token list avoids reveal endpoint");
 
 const models = await listHostModels(resolved.context, "7");
-expect(models.length === 1 && models[0]?.id === "gpt-image-1", "models are listed with revealed key");
+expect(
+  models.map((model) => model.id).join(",") === "gemini-3.5-flash,gpt-5.4,gpt-image-2",
+  "new-api lists dashboard user models without revealing the selected token"
+);
+const fallbackModels = await listHostModels(resolved.context, "8");
+expect(
+  fallbackModels.map((model) => model.id).join(",") === "gemini-3.5-flash,gpt-5.4,gpt-image-2",
+  "new-api dashboard model listing is not blocked by token reveal rate limits"
+);
+const limitedModels = await listHostModels(resolved.context, "9");
+expect(
+  limitedModels.map((model) => model.id).join(",") === "gemini-3.5-flash,gpt-5.4",
+  "new-api dashboard model listing respects token model limits when present"
+);
+expect(!requests.some((request) => request.url === "https://new-api.example/api/token/8/key"), "new-api model listing does not reveal rate-limited tokens");
 expect(hostGatewayBaseUrl() === "https://public.example/v1", "gateway public base adds /v1");
 expect(requests.some((request) => request.url === "https://new-api.example/api/user/self"), "session request captured");
 

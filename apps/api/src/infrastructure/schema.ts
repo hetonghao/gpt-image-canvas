@@ -96,6 +96,23 @@ export const agentLlmConfigs = sqliteTable(
   (table) => [index("agent_llm_configs_user_id_idx").on(table.userId)]
 );
 
+export const summaryLlmConfigs = sqliteTable(
+  "summary_llm_configs",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    apiKey: text("api_key"),
+    apiKeyId: text("api_key_id"),
+    baseUrl: text("base_url").notNull(),
+    model: text("model").notNull(),
+    timeoutMs: integer("timeout_ms").notNull(),
+    supportsVision: integer("supports_vision").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (table) => [index("summary_llm_configs_user_id_idx").on(table.userId)]
+);
+
 export const agentConversations = sqliteTable(
   "agent_conversations",
   {
