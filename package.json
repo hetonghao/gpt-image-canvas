@@ -21,6 +21,7 @@
     "smoke:web:deferred-canvas-startup-dependencies": "pnpm --filter @gpt-image-canvas/web build && pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/deferred-canvas-startup-dependencies.smoke.ts",
     "smoke:web:embedded-home-lazy": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/embedded-home-lazy.smoke.ts",
     "smoke:web:font-dependencies": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/styles/font-dependencies.smoke.ts",
+    "smoke:web:boot-screen": "pnpm --filter @gpt-image-canvas/web build && pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/boot-screen.smoke.ts",
     "smoke:api:region-summary": "pnpm --filter @gpt-image-canvas/shared build && pnpm --filter @gpt-image-canvas/api exec tsx src/smoke/region-summary-smoke.ts",
     "smoke:api:static-assets-cache": "pnpm --filter @gpt-image-canvas/api exec tsx src/server/static-assets-cache.smoke.ts",
     "typecheck": "pnpm --filter @gpt-image-canvas/shared typecheck && pnpm --filter @gpt-image-canvas/web typecheck && pnpm --filter @gpt-image-canvas/api typecheck",

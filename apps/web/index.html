@@ -7,9 +7,170 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>AI-Cove-Design</title>
+    <script data-boot-theme>
+      (() => {
+        const readCookie = (name) => {
+          const prefix = `${name}=`;
+          const cookie = document.cookie.split("; ").find((item) => item.startsWith(prefix));
+          return cookie ? decodeURIComponent(cookie.slice(prefix.length)) : "";
+        };
+        const normalizeTheme = (value) => (value === "dark" || value === "light" || value === "system" ? value : "");
+        const queryTheme = normalizeTheme(new URLSearchParams(window.location.search).get("theme"));
+        const storedTheme = queryTheme || normalizeTheme(readCookie("vite-ui-theme"));
+        const isSystemDark = () => (typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)").matches : false);
+        const resolvedTheme = storedTheme === "system" ? (isSystemDark() ? "dark" : "light") : storedTheme || "light";
+        document.documentElement.dataset.bootTheme = resolvedTheme === "dark" ? "dark" : "light";
+      })();
+    </script>
+    <style data-boot-screen>
+      :root {
+        --boot-background: #fff7e6;
+        --boot-panel-background: rgb(255 253 248 / 0.78);
+        --boot-panel-border: rgb(126 50 26 / 0.14);
+        --boot-panel-shadow: 0 24px 70px rgb(126 50 26 / 0.12);
+        --boot-text: #15110d;
+        --boot-muted-text: rgb(21 17 13 / 0.62);
+        --boot-mark-background: #7e321a;
+        --boot-mark-text: #fffdf8;
+        --boot-bar-background: rgb(126 50 26 / 0.16);
+        --boot-bar-fill: #227c70;
+        color: #15110d;
+        color-scheme: light;
+        background: #fff7e6;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      }
+
+      :root[data-boot-theme="dark"] {
+        --boot-background: #15110d;
+        --boot-panel-background: rgb(255 253 248 / 0.08);
+        --boot-panel-border: rgb(255 253 248 / 0.14);
+        --boot-panel-shadow: 0 24px 70px rgb(0 0 0 / 0.28);
+        --boot-text: #fffdf8;
+        --boot-muted-text: rgb(255 253 248 / 0.72);
+        --boot-mark-background: #fffdf8;
+        --boot-mark-text: #7e321a;
+        --boot-bar-background: rgb(255 253 248 / 0.16);
+        --boot-bar-fill: #d9fbf4;
+        color: #fffdf8;
+        color-scheme: dark;
+        background: #15110d;
+      }
+
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        overflow: hidden;
+      }
+
+      .boot-screen {
+        display: grid;
+        min-height: 100%;
+        place-items: center;
+        background: var(--boot-background);
+        color: var(--boot-text);
+      }
+
+      .boot-screen__panel {
+        display: flex;
+        width: min(26rem, calc(100vw - 3rem));
+        align-items: center;
+        gap: 0.875rem;
+        border: 1px solid var(--boot-panel-border);
+        border-radius: 0.75rem;
+        background: var(--boot-panel-background);
+        padding: 1rem;
+        box-shadow: var(--boot-panel-shadow);
+      }
+
+      .boot-screen__mark {
+        display: grid;
+        width: 2.5rem;
+        height: 2.5rem;
+        flex: none;
+        place-items: center;
+        border-radius: 0.65rem;
+        background: var(--boot-mark-background);
+        color: var(--boot-mark-text);
+        font-size: 1.125rem;
+        font-weight: 800;
+        line-height: 1;
+      }
+
+      .boot-screen__copy {
+        min-width: 0;
+      }
+
+      .boot-screen__title {
+        margin: 0;
+        font-size: 0.95rem;
+        font-weight: 750;
+        line-height: 1.25;
+      }
+
+      .boot-screen__status {
+        margin: 0.25rem 0 0;
+        color: var(--boot-muted-text);
+        font-size: 0.78rem;
+        font-weight: 600;
+        line-height: 1.45;
+      }
+
+      .boot-screen__bar {
+        position: relative;
+        overflow: hidden;
+        width: 5rem;
+        height: 0.25rem;
+        flex: none;
+        border-radius: 999px;
+        background: var(--boot-bar-background);
+      }
+
+      .boot-screen__bar::after {
+        position: absolute;
+        inset: 0;
+        width: 42%;
+        border-radius: inherit;
+        animation: boot-screen-progress 1.15s ease-in-out infinite;
+        background: var(--boot-bar-fill);
+        content: "";
+      }
+
+      @keyframes boot-screen-progress {
+        0% {
+          transform: translateX(-110%);
+        }
+        100% {
+          transform: translateX(250%);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .boot-screen__bar::after {
+          animation: none;
+          transform: translateX(70%);
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-screen" data-testid="boot-screen" role="status" aria-live="polite" aria-label="AI-Cove-Design loading">
+        <div class="boot-screen__panel">
+          <div class="boot-screen__mark" aria-hidden="true">A</div>
+          <div class="boot-screen__copy">
+            <p class="boot-screen__title">AI-Cove-Design</p>
+            <p class="boot-screen__status">Preparing canvas workspace...</p>
+          </div>
+          <div class="boot-screen__bar" aria-hidden="true"></div>
+        </div>
+      </div>
+    </div>
     <script>
       (() => {
         const cryptoObject = globalThis.crypto;
