@@ -152,6 +152,7 @@ import {
   type RegionPromptItem,
   type RegionSummaryAvailability
 } from "./region-prompt";
+import { referenceAssetIdsForRequest, shouldSendReferenceImages } from "./reference-request";
 
 const AUTOSAVE_DEBOUNCE_MS = 1200;
 const GENERATION_POLL_INTERVAL_MS = 1500;
@@ -485,7 +486,7 @@ interface GenerationSubmitInput {
 }
 
 interface GenerationReferenceInput {
-  referenceImages: ReferenceImageInput[];
+  referenceImages?: ReferenceImageInput[];
   referenceAssetIds?: string[];
 }
 
@@ -865,13 +866,6 @@ function referenceAssetIdsForRecord(record: GenerationRecord): string[] {
   }
 
   return record.referenceAssetId ? [record.referenceAssetId] : [];
-}
-
-function referenceAssetIdsForReferences(references: ReferenceSelectionItem[]): string[] | undefined {
-  const referenceAssetIds = references.map((reference) => reference.localAssetId);
-  return referenceAssetIds.every((referenceAssetId): referenceAssetId is string => Boolean(referenceAssetId))
-    ? referenceAssetIds
-    : undefined;
 }
 
 function regionPromptReferenceKey(reference: Pick<ReferenceSelectionItem, "assetId" | "localAssetId" | "sourceUrl" | "width" | "height">): string {
@@ -2310,26 +2304,6 @@ function manualRegionDraftStyle(draft: ManualRegionDraft): CSSProperties {
   return {
     left: `${Math.max(12, Math.min(draft.x + 14, viewportWidth - width - 12))}px`,
     top: `${Math.max(12, Math.min(draft.y + 14, viewportHeight - height - 12))}px`
-  };
-}
-
-async function readStoredReferenceImage(assetId: string, signal: AbortSignal, t: Translate): Promise<ReferenceImageInput> {
-  const response = await apiFetch(`/api/assets/${encodeURIComponent(assetId)}`, { signal });
-  if (!response.ok) {
-    throw new Error(t("readStoredReferenceFailed"));
-  }
-
-  const blob = await response.blob();
-  if (!isSupportedReferenceImageType(blob.type)) {
-    throw new Error(t("referenceHistoryInvalidType"));
-  }
-  if (blob.size > MAX_REFERENCE_IMAGE_BYTES) {
-    throw new Error(t("referenceHistoryFileTooLarge"));
-  }
-
-  return {
-    dataUrl: await blobToDataUrl(blob, t),
-    fileName: fileNameWithImageExtension(assetId, blob.type)
   };
 }
 
@@ -4625,7 +4599,10 @@ export function App() {
 
     try {
       const referenceForRequest = requestMode === "reference" ? await resolveReference?.(controller.signal) : undefined;
-      if (requestMode === "reference" && (!referenceForRequest || referenceForRequest.referenceImages.length === 0)) {
+      if (
+        requestMode === "reference" &&
+        (!referenceForRequest || (!referenceForRequest.referenceImages?.length && !referenceForRequest.referenceAssetIds?.length))
+      ) {
         throw new Error(t("generationRequireReference", { max: MAX_REFERENCE_IMAGES }));
       }
 
@@ -4641,7 +4618,9 @@ export function App() {
       };
 
       if (requestMode === "reference" && referenceForRequest) {
-        requestBody.referenceImages = referenceForRequest.referenceImages;
+        if (referenceForRequest.referenceImages?.length) {
+          requestBody.referenceImages = referenceForRequest.referenceImages;
+        }
         if (referenceForRequest.referenceAssetIds?.length) {
           requestBody.referenceAssetIds = referenceForRequest.referenceAssetIds;
         }
@@ -5251,13 +5230,18 @@ export function App() {
           return undefined;
         }
 
-        const referenceAssetIds = referenceAssetIdsForReferences(referencesForRequest);
+        const referenceAssetIds = referenceAssetIdsForRequest(referencesForRequest);
+        if (referenceAssetIds && !shouldSendReferenceImages(referencesForRequest)) {
+          return {
+            referenceAssetIds
+          };
+        }
 
         return {
           referenceImages: await Promise.all(referencesForRequest.map((reference) => readReferenceImage(reference, signal, t))),
           referenceAssetIds
         };
-      }, referenceAssetIdsForReferences(referencesForRequest));
+      }, referenceAssetIdsForRequest(referencesForRequest));
       return;
     }
 
@@ -5360,8 +5344,7 @@ export function App() {
       },
       nextGenerationMode,
       referenceAssetIds.length > 0
-        ? async (signal) => ({
-            referenceImages: await Promise.all(referenceAssetIds.map((referenceAssetId) => readStoredReferenceImage(referenceAssetId, signal, t))),
+        ? async (_signal) => ({
             referenceAssetIds
           })
         : undefined,

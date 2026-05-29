@@ -17,10 +17,11 @@ const tinyPngBase64 =
 
 async function main(): Promise<void> {
   try {
-    const [{ executeGenerationPlan, isExecutableGenerationPlan }, { closeDatabase }, imageGeneration] = await Promise.all([
+    const [{ executeGenerationPlan, isExecutableGenerationPlan }, { closeDatabase }, imageGeneration, { parseEditPayload }] = await Promise.all([
       import("../domain/agent/executor.js"),
       import("../infrastructure/database.js"),
-      import("../domain/generation/image-generation.js")
+      import("../domain/generation/image-generation.js"),
+      import("../server/http/validation.js")
     ]);
 
     try {
@@ -157,6 +158,7 @@ async function main(): Promise<void> {
       expect(retryProvider.editCalls === 1, "retry reruns failed downstream job");
 
       await smokeManualGenerationRecords(imageGeneration);
+      await smokeStoredAssetOnlyEditPayload(imageGeneration, parseEditPayload);
 
       const failedProvider = new FakeImageProvider({ failGenerate: true });
       const blocked = await executeGenerationPlan({
@@ -251,6 +253,30 @@ async function smokeManualGenerationRecords(imageGeneration: typeof import("../d
   imageGeneration.markInterruptedGenerationRecordsFailed();
   const interrupted = imageGeneration.getGenerationRecord(stale.id);
   expect(interrupted?.status === "failed", "stale running generation is marked failed on API startup");
+}
+
+async function smokeStoredAssetOnlyEditPayload(
+  imageGeneration: typeof import("../domain/generation/image-generation.js"),
+  parseEditPayload: typeof import("../server/http/validation.js").parseEditPayload
+): Promise<void> {
+  const referenceAsset = await imageGeneration.saveReferenceImageInput({
+    dataUrl: `data:image/png;base64,${tinyPngBase64}`,
+    fileName: "stored-reference.png"
+  });
+
+  const parsed = parseEditPayload({
+    ...editImageProviderInputFixture({ clientRequestId: "stored-asset-only" }),
+    referenceImages: undefined,
+    referenceImage: undefined,
+    referenceAssetIds: [referenceAsset.id]
+  });
+
+  expect(parsed.ok, "edit payload accepts stored reference asset IDs without client base64 images");
+  if (parsed.ok) {
+    expect(parsed.value.referenceImages.length === 1, "stored reference asset IDs hydrate reference image inputs");
+    expect(parsed.value.referenceImages[0]?.dataUrl.startsWith("data:image/png;base64,"), "hydrated reference keeps image data URL format");
+    expect(parsed.value.referenceAssetIds?.[0] === referenceAsset.id, "stored reference asset ID is preserved");
+  }
 }
 
 function imageProviderInputFixture(overrides: Partial<ImageProviderInput> = {}): ImageProviderInput {

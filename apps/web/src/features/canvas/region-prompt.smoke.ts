@@ -28,6 +28,7 @@ import {
   type RegionPromptReference,
   type RegionPromptItem
 } from "./region-prompt.js";
+import { referenceAssetIdsForRequest, shouldSendReferenceImages } from "./reference-request.js";
 
 assert.deepEqual(defaultRegionForPoint(0.02, 0.02), { x: 0, y: 0, width: 0.24, height: 0.24 }, "click region clamps to top-left");
 assert.deepEqual(
@@ -59,6 +60,31 @@ assert.deepEqual(
   regionFromDrag({ x: 0.2, y: 0.2 }, { x: 0.5, y: 0.6 }),
   { x: 0.2, y: 0.2, width: 0.3, height: 0.39999999999999997 },
   "drag region normalizes direction"
+);
+assert.deepEqual(
+  referenceAssetIdsForRequest([
+    { localAssetId: "asset-a" },
+    { localAssetId: "asset-b" }
+  ]),
+  ["asset-a", "asset-b"],
+  "stored reference request can use asset ids only"
+);
+assert.equal(referenceAssetIdsForRequest([]), undefined, "empty reference request does not produce asset ids");
+assert.equal(
+  shouldSendReferenceImages([
+    { localAssetId: "asset-a" },
+    { localAssetId: "asset-b" }
+  ]),
+  false,
+  "stored reference request avoids client base64 images"
+);
+assert.equal(
+  shouldSendReferenceImages([
+    { localAssetId: "asset-a" },
+    {}
+  ]),
+  true,
+  "mixed non-stored references still need image data"
 );
 
 assert.deepEqual(

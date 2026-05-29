@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   GENERATION_COUNTS,
   IMAGE_QUALITIES,
@@ -116,18 +117,35 @@ export function parseEditPayload(input: unknown, hostContext?: HostContext): Par
     };
   }
 
-  const referenceImages = parseReferenceImages(input);
-  if (!referenceImages.ok) {
-    return referenceImages;
+  const parsedReferenceImages = parseReferenceImages(input);
+  if (!parsedReferenceImages.ok) {
+    return parsedReferenceImages;
   }
 
-  const referenceAssetIds = parseReferenceAssetIds(input, referenceImages.value.length);
+  const referenceAssetIds = parseReferenceAssetIds(input, parsedReferenceImages.value?.length);
   if (!referenceAssetIds.ok) {
     return referenceAssetIds;
   }
 
+  const referenceImages: ParseResult<ReferenceImageInput[]> = parsedReferenceImages.value
+    ? {
+        ok: true,
+        value: parsedReferenceImages.value
+      }
+    : storedReferenceImages(referenceAssetIds.value, hostContext);
+  if (!referenceImages.ok) {
+    return referenceImages;
+  }
+
+  if (referenceImages.value.length < 1 || referenceImages.value.length > MAX_REFERENCE_IMAGES) {
+    return {
+      ok: false,
+      error: errorResponse("unsupported_provider_behavior", `参考图像数量必须是 1-${MAX_REFERENCE_IMAGES} 张。`)
+    };
+  }
+
   for (const referenceAssetId of referenceAssetIds.value) {
-    if (!getStoredAssetFile(referenceAssetId, hostContext)) {
+    if (!storedReferenceAssetFile(referenceAssetId, hostContext)) {
       return {
         ok: false,
         error: errorResponse("invalid_request", "找不到可记录的参考图像资源。")
@@ -147,7 +165,7 @@ export function parseEditPayload(input: unknown, hostContext?: HostContext): Par
   };
 }
 
-function parseReferenceImages(input: Record<string, unknown>): ParseResult<ReferenceImageInput[]> {
+function parseReferenceImages(input: Record<string, unknown>): ParseResult<ReferenceImageInput[] | undefined> {
   const rawReferenceImages = Array.isArray(input.referenceImages)
     ? input.referenceImages
     : isRecord(input.referenceImage)
@@ -156,8 +174,8 @@ function parseReferenceImages(input: Record<string, unknown>): ParseResult<Refer
 
   if (!rawReferenceImages) {
     return {
-      ok: false,
-      error: errorResponse("unsupported_provider_behavior", "编辑图像需要提供 1-3 张参考图像。")
+      ok: true,
+      value: undefined
     };
   }
 
@@ -198,7 +216,7 @@ function parseReferenceImages(input: Record<string, unknown>): ParseResult<Refer
   };
 }
 
-function parseReferenceAssetIds(input: Record<string, unknown>, referenceImageCount: number): ParseResult<string[]> {
+function parseReferenceAssetIds(input: Record<string, unknown>, referenceImageCount: number | undefined): ParseResult<string[]> {
   const legacyReferenceAssetId = parseOptionalString(input.referenceAssetId);
   const rawReferenceAssetIds = Array.isArray(input.referenceAssetIds)
     ? input.referenceAssetIds
@@ -208,7 +226,7 @@ function parseReferenceAssetIds(input: Record<string, unknown>, referenceImageCo
 
   if (
     rawReferenceAssetIds.length > MAX_REFERENCE_IMAGES ||
-    (rawReferenceAssetIds.length > 0 && rawReferenceAssetIds.length !== referenceImageCount)
+    (referenceImageCount !== undefined && rawReferenceAssetIds.length > 0 && rawReferenceAssetIds.length !== referenceImageCount)
   ) {
     return {
       ok: false,
@@ -233,6 +251,50 @@ function parseReferenceAssetIds(input: Record<string, unknown>, referenceImageCo
     ok: true,
     value: referenceAssetIds
   };
+}
+
+function storedReferenceImages(referenceAssetIds: string[], hostContext?: HostContext): ParseResult<ReferenceImageInput[]> {
+  if (referenceAssetIds.length < 1) {
+    return {
+      ok: false,
+      error: errorResponse("unsupported_provider_behavior", "编辑图像需要提供 1-3 张参考图像。")
+    };
+  }
+
+  const referenceImages: ReferenceImageInput[] = [];
+  for (const referenceAssetId of referenceAssetIds) {
+    const stored = storedReferenceAssetFile(referenceAssetId, hostContext);
+    if (!stored) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_request", "找不到可记录的参考图像资源。")
+      };
+    }
+
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(stored.filePath);
+    } catch {
+      return {
+        ok: false,
+        error: errorResponse("invalid_request", "找不到可记录的参考图像资源。")
+      };
+    }
+
+    referenceImages.push({
+      dataUrl: `data:${stored.mimeType};base64,${bytes.toString("base64")}`,
+      fileName: stored.fileName
+    });
+  }
+
+  return {
+    ok: true,
+    value: referenceImages
+  };
+}
+
+function storedReferenceAssetFile(referenceAssetId: string, hostContext?: HostContext): ReturnType<typeof getStoredAssetFile> {
+  return getStoredAssetFile(referenceAssetId, hostContext);
 }
 
 export function parseStorageConfigPayload(input: unknown): ParseResult<SaveStorageConfigRequest> {

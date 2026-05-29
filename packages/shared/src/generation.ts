@@ -154,7 +154,7 @@ export interface GenerateImageRequest {
 }
 
 export interface EditImageRequest extends GenerateImageRequest {
-  referenceImages: ReferenceImageInput[];
+  referenceImages?: ReferenceImageInput[];
   referenceImage?: ReferenceImageInput;
   referenceAssetIds?: string[];
   referenceAssetId?: string;
