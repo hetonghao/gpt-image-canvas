@@ -29,6 +29,7 @@ import type {
   PromptPoolMediaType,
   PromptPoolResponse
 } from "@gpt-image-canvas/shared";
+import { apiFetch } from "../../shared/api/host-token";
 import { useI18n } from "../../shared/i18n";
 import {
   createPromptFavorite,
@@ -92,7 +93,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
       setError("");
 
       try {
-        const response = await fetch("/api/pool", { signal: controller.signal });
+        const response = await apiFetch("/api/pool", { signal: controller.signal });
         if (!response.ok) {
           throw new Error(t("poolRequestFailed", { status: response.status }));
         }

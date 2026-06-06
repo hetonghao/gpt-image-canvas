@@ -7,14 +7,15 @@ import type {
   UpdatePromptFavoriteGroupRequest,
   UpdatePromptFavoriteRequest
 } from "@gpt-image-canvas/shared";
+import { apiFetch } from "../../shared/api/host-token";
 
 export async function fetchPromptFavorites(signal?: AbortSignal): Promise<PromptFavoritesResponse> {
-  const response = await fetch("/api/prompt-favorites", { signal });
+  const response = await apiFetch("/api/prompt-favorites", { signal });
   return parseJsonResponse<PromptFavoritesResponse>(response);
 }
 
 export async function createPromptFavorite(input: CreatePromptFavoriteRequest): Promise<PromptFavoriteItem> {
-  const response = await fetch("/api/prompt-favorites", {
+  const response = await apiFetch("/api/prompt-favorites", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -25,7 +26,7 @@ export async function createPromptFavorite(input: CreatePromptFavoriteRequest): 
 }
 
 export async function updatePromptFavorite(favoriteId: string, input: UpdatePromptFavoriteRequest): Promise<PromptFavoriteItem> {
-  const response = await fetch(`/api/prompt-favorites/${encodeURIComponent(favoriteId)}`, {
+  const response = await apiFetch(`/api/prompt-favorites/${encodeURIComponent(favoriteId)}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json"
@@ -36,21 +37,21 @@ export async function updatePromptFavorite(favoriteId: string, input: UpdateProm
 }
 
 export async function deletePromptFavorite(favoriteId: string): Promise<void> {
-  const response = await fetch(`/api/prompt-favorites/${encodeURIComponent(favoriteId)}`, {
+  const response = await apiFetch(`/api/prompt-favorites/${encodeURIComponent(favoriteId)}`, {
     method: "DELETE"
   });
   await parseJsonResponse<{ ok: boolean }>(response);
 }
 
 export async function markPromptFavoriteUsed(favoriteId: string): Promise<PromptFavoriteItem> {
-  const response = await fetch(`/api/prompt-favorites/${encodeURIComponent(favoriteId)}/use`, {
+  const response = await apiFetch(`/api/prompt-favorites/${encodeURIComponent(favoriteId)}/use`, {
     method: "POST"
   });
   return (await parseJsonResponse<{ favorite: PromptFavoriteItem }>(response)).favorite;
 }
 
 export async function createPromptFavoriteGroup(input: CreatePromptFavoriteGroupRequest): Promise<PromptFavoriteGroup> {
-  const response = await fetch("/api/prompt-favorite-groups", {
+  const response = await apiFetch("/api/prompt-favorite-groups", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -61,7 +62,7 @@ export async function createPromptFavoriteGroup(input: CreatePromptFavoriteGroup
 }
 
 export async function updatePromptFavoriteGroup(groupId: string, input: UpdatePromptFavoriteGroupRequest): Promise<PromptFavoriteGroup> {
-  const response = await fetch(`/api/prompt-favorite-groups/${encodeURIComponent(groupId)}`, {
+  const response = await apiFetch(`/api/prompt-favorite-groups/${encodeURIComponent(groupId)}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json"
@@ -72,7 +73,7 @@ export async function updatePromptFavoriteGroup(groupId: string, input: UpdatePr
 }
 
 export async function deletePromptFavoriteGroup(groupId: string): Promise<void> {
-  const response = await fetch(`/api/prompt-favorite-groups/${encodeURIComponent(groupId)}`, {
+  const response = await apiFetch(`/api/prompt-favorite-groups/${encodeURIComponent(groupId)}`, {
     method: "DELETE"
   });
   await parseJsonResponse<{ ok: boolean }>(response);
