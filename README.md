@@ -165,7 +165,7 @@ pnpm --filter @gpt-image-canvas/api rebuild better-sqlite3 --stream
 
 ## Docker
 
-Docker Compose builds shared contracts, the web app, and the API into one image. The API serves both `/api` and the built web bundle from one localhost port. SQLite data and generated assets persist in host `./data`.
+Docker Compose builds shared contracts, the web app, Prompt Pool JSON data, and the API into one image. The API serves both `/api` and the built web bundle from one localhost port. SQLite data and generated assets persist in host `./data`.
 
 Windows PowerShell:
 
@@ -184,6 +184,8 @@ docker compose up --build
 ```
 
 Open [http://localhost:8787](http://localhost:8787) by default. Set `PORT` in `.env` before starting Compose to use a different localhost port.
+
+The `/pool` route reads bundled JSON from `prompt-pool-data/prompts-all.json` and optionally `prompt-pool-data/summary.json`. Images are not bundled, mounted, or copied; card images use GitHub raw URLs from the JSON. Advanced users can set `PROMPT_POOL_DIR` to another directory containing `prompts-all.json`.
 
 Use `docker compose config --quiet --no-env-resolution` when real credentials exist. Plain `docker compose config` expands env files and can print secrets.
 
@@ -233,6 +235,7 @@ If a real API key was ever committed, rotate the key. Git ignore rules prevent f
 - Agent plan cannot execute: confirm the normal image provider is configured; Agent planning and image generation use separate configs.
 - Port conflict: set `PORT` for API/Docker. For web dev, stop the process on `5173` or run `pnpm web:dev -- --port 5174`.
 - Docker cannot pull the base image: restore Docker Hub access or set `NODE_IMAGE` to an equivalent cached Node `24.15.0` image.
+- Docker Prompt Pool is empty: rebuild the image so bundled `prompt-pool-data/prompts-all.json` is copied into the container; if overriding `PROMPT_POOL_DIR`, confirm it points to a directory containing `prompts-all.json`.
 - SQLite `SQLITE_IOERR_SHMOPEN` in Docker: keep the Compose SQLite defaults, rebuild, and make sure no local API process is using the same database.
 - SQLite `SQLITE_CORRUPT`: stop all app processes, back up `data/`, then restore from backup or remove the SQLite files to create a clean database. Files under `data/assets/` can be kept.
 - Stale local state: stop the app and remove files under `data/`. This deletes local project state, history, and generated assets.

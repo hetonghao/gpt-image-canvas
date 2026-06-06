@@ -155,6 +155,33 @@ CREATE TABLE IF NOT EXISTS agent_skills (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS prompt_favorite_groups (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS prompt_favorites (
+  id TEXT PRIMARY KEY NOT NULL,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  group_id TEXT NOT NULL REFERENCES prompt_favorite_groups(id),
+  title TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  model TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  asset_url TEXT NOT NULL,
+  image_width INTEGER,
+  image_height INTEGER,
+  source_url TEXT,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  last_used_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS codex_oauth_tokens (
   id TEXT PRIMARY KEY NOT NULL,
   user_id TEXT NOT NULL DEFAULT 'standalone',
@@ -212,6 +239,9 @@ CREATE INDEX IF NOT EXISTS generation_outputs_asset_id_idx ON generation_outputs
 CREATE INDEX IF NOT EXISTS generation_reference_assets_generation_id_idx ON generation_reference_assets(generation_id);
 CREATE INDEX IF NOT EXISTS generation_reference_assets_asset_id_idx ON generation_reference_assets(asset_id);
 CREATE INDEX IF NOT EXISTS agent_conversations_updated_at_idx ON agent_conversations(updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS prompt_favorites_source_idx ON prompt_favorites(source_type, source_id);
+CREATE INDEX IF NOT EXISTS prompt_favorites_group_id_idx ON prompt_favorites(group_id);
+CREATE INDEX IF NOT EXISTS prompt_favorites_last_used_at_idx ON prompt_favorites(last_used_at);
 `);
 
 ensureUserIdColumn("projects");
@@ -297,6 +327,7 @@ backfillGenerationReferenceAssets();
 ensureProviderConfigRow();
 ensureAgentLlmConfigRow();
 ensureSummaryLlmConfigRow();
+ensurePromptFavoriteDefaultGroup();
 
 export const db = drizzle(sqlite, { schema });
 
@@ -428,4 +459,14 @@ function ensureSummaryLlmConfigRow(): void {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run("active", null, "", "", 60000, 1, now, now);
+}
+
+function ensurePromptFavoriteDefaultGroup(): void {
+  const now = new Date().toISOString();
+  sqlite
+    .prepare(
+      `INSERT OR IGNORE INTO prompt_favorite_groups (id, name, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run("default", "常用", 0, now, now);
 }

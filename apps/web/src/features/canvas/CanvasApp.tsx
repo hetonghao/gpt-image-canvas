@@ -1,6 +1,8 @@
 import {
   AlertTriangle,
   Bot,
+  Bookmark,
+  BookmarkCheck,
   BookOpenCheck,
   BrainCircuit,
   Check,
@@ -19,15 +21,17 @@ import {
   MapPin,
   MessageCirclePlus,
   RotateCcw,
+  Search,
   Send,
   Settings,
   ShieldCheck,
   Sparkles,
   Square,
+  Trash2,
   X,
   XCircle
 } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
   DefaultSnapIndicator,
@@ -116,6 +120,9 @@ import {
   type NormalizedImageRegion,
   type OutputFormat,
   type ProjectState,
+  type PromptFavoriteGroup,
+  type PromptFavoriteItem,
+  type PromptPoolItem,
   type ReferenceImageInput,
   type ResolutionTier,
   type RegionSummaryRequest,
@@ -132,6 +139,11 @@ import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "
 import { normalizeAssetUrl } from "../../shared/api/asset-url";
 import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
 import { apiFetch, appendHostTokenParam } from "../../shared/api/host-token";
+import {
+  deletePromptFavorite,
+  fetchPromptFavorites,
+  markPromptFavoriteUsed
+} from "../prompt-favorites/promptFavoritesApi";
 import {
   createManualRegionPromptItem,
   defaultRegionForPoint,
@@ -353,6 +365,20 @@ const LazyPromptRegionEditor = lazy(() => import("./PromptRegionEditor").then((m
 
 function preloadGalleryPage(): void {
   void loadGalleryPageModule();
+}
+
+type PromptPoolPageModule = { default: typeof import("../pool/PromptPoolPage").PromptPoolPage };
+let promptPoolPageModulePromise: Promise<PromptPoolPageModule> | undefined;
+
+function loadPromptPoolPageModule(): Promise<PromptPoolPageModule> {
+  promptPoolPageModulePromise ??= import("../pool/PromptPoolPage").then((module) => ({ default: module.PromptPoolPage }));
+  return promptPoolPageModulePromise;
+}
+
+const LazyPromptPoolPage = lazy(loadPromptPoolPageModule);
+
+function preloadPromptPoolPage(): void {
+  void loadPromptPoolPageModule();
 }
 
 type PersistedSnapshot = TLEditorSnapshot | TLStoreSnapshot;
@@ -840,6 +866,40 @@ function sizePresetIdForSize(widthValue: number, heightValue: number): string {
   );
 }
 
+function promptLikeSizePreset(item: {
+  mediaType: "image" | "video";
+  aspectRatio?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+}): SizePreset {
+  if (item.mediaType === "video" && item.aspectRatio === "16:9") {
+    return SIZE_PRESETS.find((preset) => preset.id === "video-16-9") ?? DEFAULT_SIZE_PRESET;
+  }
+
+  if (!item.imageWidth || !item.imageHeight) {
+    return DEFAULT_SIZE_PRESET;
+  }
+
+  const targetRatio = item.imageWidth / item.imageHeight;
+  return SIZE_PRESETS.reduce((best, preset) => {
+    const bestDelta = Math.abs(best.width / best.height - targetRatio);
+    const presetDelta = Math.abs(preset.width / preset.height - targetRatio);
+    if (presetDelta < bestDelta) {
+      return preset;
+    }
+
+    return best;
+  }, DEFAULT_SIZE_PRESET);
+}
+
+function promptPoolSizePreset(item: PromptPoolItem): SizePreset {
+  return promptLikeSizePreset(item);
+}
+
+function promptFavoriteSizePreset(item: PromptFavoriteItem): SizePreset {
+  return promptLikeSizePreset(item);
+}
+
 function firstDownloadableAsset(record: GenerationRecord): GeneratedAsset | undefined {
   return record.outputs.find((output) => output.status === "succeeded" && output.asset)?.asset;
 }
@@ -926,6 +986,45 @@ function createTemporaryGenerationRecord(input: {
 function promptExcerpt(promptValue: string): string {
   const compact = promptValue.replace(/\s+/gu, " ").trim();
   return compact.length > 72 ? `${compact.slice(0, 72)}...` : compact;
+}
+
+function countPromptFavoritesByGroup(favorites: PromptFavoriteItem[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const favorite of favorites) {
+    counts.set(favorite.groupId, (counts.get(favorite.groupId) ?? 0) + 1);
+  }
+
+  return counts;
+}
+
+function filterPromptFavorites(favorites: PromptFavoriteItem[], query: string, groupId: string): PromptFavoriteItem[] {
+  const needle = query.trim().toLowerCase();
+  return favorites
+    .filter((favorite) => {
+      if (groupId !== "all" && favorite.groupId !== groupId) {
+        return false;
+      }
+
+      if (!needle) {
+        return true;
+      }
+
+      const haystack = `${favorite.title} ${favorite.prompt} ${favorite.model}`.toLowerCase();
+      return haystack.includes(needle);
+    })
+    .sort((left, right) => promptFavoriteSortTime(right) - promptFavoriteSortTime(left));
+}
+
+function promptFavoriteSortTime(favorite: PromptFavoriteItem): number {
+  const value = favorite.lastUsedAt ?? favorite.updatedAt ?? favorite.createdAt;
+  return Date.parse(value) || 0;
+}
+
+function promptFavoriteMeta(favorite: PromptFavoriteItem, t: Translate): string {
+  const mediaLabel = favorite.mediaType === "video" ? t("poolMediaVideo") : t("poolMediaImage");
+  const sizeLabel =
+    favorite.imageWidth && favorite.imageHeight ? `${favorite.imageWidth}x${favorite.imageHeight}` : mediaLabel;
+  return `${favorite.model} · ${sizeLabel}`;
 }
 
 async function writeClipboardText(text: string): Promise<void> {
@@ -2912,13 +3011,15 @@ function TopNavigation({
   onOpenProviderConfig,
   route,
   onNavigate,
-  onPreloadGallery
+  onPreloadGallery,
+  onPreloadPool
 }: {
   isAiCoveMode: boolean;
   onOpenProviderConfig: () => void;
   route: AppRoute;
   onNavigate: (route: AppRoute) => void;
   onPreloadGallery: () => void;
+  onPreloadPool: () => void;
 }) {
   const { t } = useI18n();
 
@@ -2963,6 +3064,22 @@ function TopNavigation({
             >
               <Square className="size-4" aria-hidden="true" />
               {t("navCanvas")}
+            </a>
+            <a
+              aria-current={route === "pool" ? "page" : undefined}
+              className="top-navigation__link"
+              data-active={route === "pool"}
+              data-testid="nav-pool"
+              href="/pool"
+              onFocus={onPreloadPool}
+              onMouseEnter={onPreloadPool}
+              onClick={(event) => {
+                event.preventDefault();
+                onNavigate("pool");
+              }}
+            >
+              <BookOpenCheck className="size-4" aria-hidden="true" />
+              {t("navPool")}
             </a>
             <a
               aria-current={route === "gallery" ? "page" : undefined}
@@ -3141,6 +3258,180 @@ function ProviderStatusPopover({
   );
 }
 
+function PromptFavoritesFloatingPanel({
+  activeGroupId,
+  copiedFavoriteId,
+  favorites,
+  groupCounts,
+  groups,
+  isMobile,
+  isOpen,
+  query,
+  totalCount,
+  onChangeGroup,
+  onChangeQuery,
+  onClose,
+  onCopy,
+  onRemove,
+  onToggle,
+  onUse,
+  t
+}: {
+  activeGroupId: string;
+  copiedFavoriteId: string | null;
+  favorites: PromptFavoriteItem[];
+  groupCounts: Map<string, number>;
+  groups: PromptFavoriteGroup[];
+  isMobile: boolean;
+  isOpen: boolean;
+  query: string;
+  totalCount: number;
+  onChangeGroup: (groupId: string) => void;
+  onChangeQuery: (query: string) => void;
+  onClose: () => void;
+  onCopy: (favorite: PromptFavoriteItem) => void;
+  onRemove: (favorite: PromptFavoriteItem) => void;
+  onToggle: () => void;
+  onUse: (favorite: PromptFavoriteItem) => void;
+  t: Translate;
+}) {
+  return (
+    <div
+      className="prompt-favorites-float"
+      data-mobile={isMobile}
+      data-open={isOpen}
+      data-testid="prompt-favorites-floating-panel"
+    >
+      {isOpen ? (
+        <section
+          aria-label={t("favoritePanelTitle")}
+          aria-modal={isMobile ? true : undefined}
+          className="prompt-favorites-panel"
+          data-testid="prompt-favorites-panel"
+          id="prompt-favorites-panel"
+          role={isMobile ? "dialog" : "region"}
+        >
+          <header className="prompt-favorites-panel__header">
+            <div>
+              <p>{t("favoritePanelTitle")}</p>
+              <strong>{t("favoritePanelCount", { count: totalCount })}</strong>
+            </div>
+            <button className="history-icon-action" type="button" aria-label={t("favoritePanelClose")} onClick={onClose}>
+              <X className="size-4" aria-hidden="true" />
+            </button>
+          </header>
+
+          <label className="prompt-favorites-panel__search">
+            <Search className="size-4" aria-hidden="true" />
+            <span className="sr-only">{t("favoritePanelSearch")}</span>
+            <input
+              value={query}
+              aria-label={t("favoritePanelSearch")}
+              placeholder={t("favoritePanelSearchPlaceholder")}
+              type="search"
+              onChange={(event) => onChangeQuery(event.currentTarget.value)}
+            />
+          </label>
+
+          <div className="prompt-favorites-panel__groups" role="tablist" aria-label={t("favoriteGroupLabel")}>
+            <button
+              className="prompt-favorites-chip"
+              data-active={activeGroupId === "all"}
+              role="tab"
+              type="button"
+              aria-selected={activeGroupId === "all"}
+              onClick={() => onChangeGroup("all")}
+            >
+              {t("poolAllMedia")}
+              <span>{totalCount}</span>
+            </button>
+            {groups.map((group) => (
+              <button
+                className="prompt-favorites-chip"
+                data-active={activeGroupId === group.id}
+                key={group.id}
+                role="tab"
+                type="button"
+                aria-selected={activeGroupId === group.id}
+                onClick={() => onChangeGroup(group.id)}
+              >
+                {group.name}
+                <span>{groupCounts.get(group.id) ?? 0}</span>
+              </button>
+            ))}
+          </div>
+
+          {favorites.length > 0 ? (
+            <div className="prompt-favorites-panel__list">
+              {favorites.map((favorite) => {
+                const copied = copiedFavoriteId === favorite.id;
+                const copyLabel = copied ? t("agentCopiedMessage") : t("commonCopy");
+                return (
+                  <article className="prompt-favorites-item" key={favorite.id}>
+                    <div className="prompt-favorites-item__media">
+                      <img alt="" loading="lazy" src={favorite.assetUrl} />
+                    </div>
+                    <div className="prompt-favorites-item__body">
+                      <h3>{favorite.title}</h3>
+                      <p>{promptExcerpt(favorite.prompt)}</p>
+                      <span>{promptFavoriteMeta(favorite, t)}</span>
+                    </div>
+                    <div className="prompt-favorites-item__actions">
+                      <button className="primary-action prompt-favorites-item__use" type="button" onClick={() => onUse(favorite)}>
+                        <BookmarkCheck className="size-3.5" aria-hidden="true" />
+                        {t("favoriteUse")}
+                      </button>
+                      <button
+                        className="history-icon-action"
+                        data-copied={copied}
+                        type="button"
+                        aria-label={copyLabel}
+                        title={copyLabel}
+                        onClick={() => onCopy(favorite)}
+                      >
+                        {copied ? <Check className="size-3.5" aria-hidden="true" /> : <Copy className="size-3.5" aria-hidden="true" />}
+                      </button>
+                      <button
+                        className="history-icon-action prompt-favorites-item__remove"
+                        type="button"
+                        aria-label={t("favoriteCancel")}
+                        title={t("favoriteCancel")}
+                        onClick={() => onRemove(favorite)}
+                      >
+                        <Trash2 className="size-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="prompt-favorites-panel__empty">
+              <Bookmark className="size-5" aria-hidden="true" />
+              <strong>{t("favoriteEmpty")}</strong>
+              <p>{t("favoriteEmptyHint")}</p>
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      <button
+        aria-controls="prompt-favorites-panel"
+        aria-expanded={isOpen}
+        aria-label={isOpen ? t("favoritePanelClose") : t("favoritePanelOpen")}
+        className="prompt-favorites-trigger"
+        data-testid="prompt-favorites-trigger"
+        type="button"
+        onClick={onToggle}
+      >
+        <Bookmark className="size-4" aria-hidden="true" />
+        <span>{t("favoritePanelTitle")}</span>
+        <strong>{t("favoritePanelCount", { count: totalCount })}</strong>
+      </button>
+    </div>
+  );
+}
+
 export function App() {
   const { formatDateTime, locale, setLocale, t } = useI18n();
   const tldrawLocale = tldrawLocaleForLocale(locale);
@@ -3197,6 +3488,12 @@ export function App() {
   const [generationMessage, setGenerationMessage] = useState("");
   const [generationWarning, setGenerationWarning] = useState("");
   const [generationHistory, setGenerationHistory] = useState<GenerationRecord[]>([]);
+  const [promptFavoriteGroups, setPromptFavoriteGroups] = useState<PromptFavoriteGroup[]>([]);
+  const [promptFavoriteItems, setPromptFavoriteItems] = useState<PromptFavoriteItem[]>([]);
+  const [isFavoritePanelOpen, setIsFavoritePanelOpen] = useState(false);
+  const [favoritePanelQuery, setFavoritePanelQuery] = useState("");
+  const [favoritePanelGroupId, setFavoritePanelGroupId] = useState("all");
+  const [copiedPromptFavoriteId, setCopiedPromptFavoriteId] = useState<string | null>(null);
   const generationHistoryRef = useRef<GenerationRecord[]>([]);
   generationHistoryRef.current = generationHistory;
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(false);
@@ -3300,6 +3597,7 @@ export function App() {
   const agentUserInputRunIdsRef = useRef<Set<string>>(new Set());
   const saveTimerRef = useRef<number | undefined>();
   const codexPollTimerRef = useRef<number | undefined>();
+  const favoriteCopyTimerRef = useRef<number | undefined>();
   const saveRequestRef = useRef(0);
   const isGenerating = activeGenerationCount > 0;
   const hasGenerationProvider = authStatus?.provider === "openai" || authStatus?.provider === "codex";
@@ -3449,6 +3747,15 @@ export function App() {
   const hiddenHistoryCount = Math.max(0, generationHistory.length - HISTORY_COLLAPSED_LIMIT);
   const hasAdditionalHistory = hiddenHistoryCount > 0;
   const isExtendedCountSelected = EXTENDED_GENERATION_COUNTS.includes(count);
+  const deferredFavoritePanelQuery = useDeferredValue(favoritePanelQuery);
+  const promptFavoriteGroupCounts = useMemo(
+    () => countPromptFavoritesByGroup(promptFavoriteItems),
+    [promptFavoriteItems]
+  );
+  const visiblePromptFavorites = useMemo(
+    () => filterPromptFavorites(promptFavoriteItems, deferredFavoritePanelQuery, favoritePanelGroupId),
+    [deferredFavoritePanelQuery, favoritePanelGroupId, promptFavoriteItems]
+  );
   const loadAgentConfig = useCallback(async (signal?: AbortSignal): Promise<AgentLlmConfigView | null> => {
     setIsAgentConfigLoading(true);
     setAgentConfigError("");
@@ -3659,6 +3966,7 @@ export function App() {
       agentHistorySaveTimerRef.current = undefined;
       window.clearTimeout(agentCopyResetTimerRef.current);
       window.clearTimeout(codexPollTimerRef.current);
+      window.clearTimeout(favoriteCopyTimerRef.current);
     };
   }, []);
 
@@ -3841,6 +4149,31 @@ export function App() {
   });
 
   useEffect(() => {
+    const controller = new AbortController();
+
+    void loadPromptFavoriteState(controller.signal);
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (route !== "canvas") {
+      setIsFavoritePanelOpen(false);
+    }
+  }, [route]);
+
+  useEffect(() => {
+    if (
+      favoritePanelGroupId !== "all" &&
+      !promptFavoriteGroups.some((group) => group.id === favoritePanelGroupId)
+    ) {
+      setFavoritePanelGroupId("all");
+    }
+  }, [favoritePanelGroupId, promptFavoriteGroups]);
+
+  useEffect(() => {
     const transcript = agentTranscriptRef.current;
     if (!transcript) {
       return;
@@ -3881,7 +4214,7 @@ export function App() {
   }, [agentMessages, currentAgentConversationId]);
 
   useEffect(() => {
-    if (route === "gallery") {
+    if (route === "gallery" || route === "pool") {
       return;
     }
 
@@ -5512,6 +5845,108 @@ export function App() {
     }
   }
 
+  function reusePromptPoolItem(item: PromptPoolItem): void {
+    const nextPreset = promptPoolSizePreset(item);
+
+    setPrompt(item.prompt);
+    setStylePreset("none");
+    setSizePresetId(nextPreset.id);
+    setWidth(nextPreset.width);
+    setHeight(nextPreset.height);
+    setQuality(DEFAULT_IMAGE_QUALITY);
+    setOutputFormat("png");
+    setCount(1);
+    setGenerationMode("text");
+    setGenerationError("");
+    setGenerationWarning("");
+    setGenerationMessage(t("generationPoolReused"));
+    navigateToRoute("canvas");
+    if (isMobileDrawer) {
+      setIsAiPanelOpen(true);
+    }
+  }
+
+  async function loadPromptFavoriteState(signal?: AbortSignal): Promise<void> {
+    try {
+      const nextFavorites = await fetchPromptFavorites(signal);
+      if (!signal?.aborted) {
+        setPromptFavoriteGroups(nextFavorites.groups);
+        setPromptFavoriteItems(nextFavorites.favorites);
+      }
+    } catch {
+      if (!signal?.aborted) {
+        setGenerationWarning((current) => current || t("favoriteLoadFailed"));
+      }
+    }
+  }
+
+  function toggleFavoritePanel(): void {
+    const nextOpen = !isFavoritePanelOpen;
+    setIsFavoritePanelOpen(nextOpen);
+    if (nextOpen && isMobileDrawer) {
+      setIsAiPanelOpen(false);
+    }
+  }
+
+  function upsertPromptFavorite(favorite: PromptFavoriteItem): void {
+    setPromptFavoriteItems((current) => [
+      favorite,
+      ...current.filter((item) => item.id !== favorite.id && item.sourceId !== favorite.sourceId)
+    ]);
+  }
+
+  function reusePromptFavoriteItem(favorite: PromptFavoriteItem): void {
+    const nextPreset = promptFavoriteSizePreset(favorite);
+
+    setPrompt(favorite.prompt);
+    setStylePreset("none");
+    setSizePresetId(nextPreset.id);
+    setWidth(nextPreset.width);
+    setHeight(nextPreset.height);
+    setQuality(DEFAULT_IMAGE_QUALITY);
+    setOutputFormat("png");
+    setCount(1);
+    setGenerationMode("text");
+    setPanelTab("manual");
+    setGenerationError("");
+    setGenerationWarning("");
+    setGenerationMessage(t("generationFavoriteReused"));
+    navigateToRoute("canvas");
+    if (isMobileDrawer) {
+      setIsFavoritePanelOpen(false);
+      setIsAiPanelOpen(true);
+    }
+
+    void markPromptFavoriteUsed(favorite.id)
+      .then(upsertPromptFavorite)
+      .catch(() => undefined);
+  }
+
+  async function copyPromptFavoriteItem(favorite: PromptFavoriteItem): Promise<void> {
+    try {
+      await writeClipboardText(favorite.prompt);
+      setGenerationError("");
+      setGenerationMessage(t("generationCopiedPrompt"));
+      window.clearTimeout(favoriteCopyTimerRef.current);
+      setCopiedPromptFavoriteId(favorite.id);
+      favoriteCopyTimerRef.current = window.setTimeout(() => {
+        setCopiedPromptFavoriteId((current) => (current === favorite.id ? null : current));
+      }, 1500);
+    } catch {
+      setGenerationError(t("generationCopyFailed"));
+    }
+  }
+
+  async function removePromptFavoriteItem(favorite: PromptFavoriteItem): Promise<void> {
+    try {
+      await deletePromptFavorite(favorite.id);
+      setPromptFavoriteItems((current) => current.filter((item) => item.id !== favorite.id));
+      setCopiedPromptFavoriteId((current) => (current === favorite.id ? null : current));
+    } catch {
+      setGenerationError(t("favoriteCancelFailed"));
+    }
+  }
+
   async function loadAgentHistorySummaries(signal?: AbortSignal): Promise<void> {
     setIsAgentHistoryLoading(true);
     setAgentHistoryError("");
@@ -6802,7 +7237,7 @@ export function App() {
   return (
     <div
       className="app-root"
-      data-canvas-theme={route !== "home" && isCanvasDarkMode ? "dark" : "light"}
+      data-canvas-theme={route !== "home" && route !== "pool" && isCanvasDarkMode ? "dark" : "light"}
       data-region-annotation-mode={isReferenceMode ? regionAnnotationMode : undefined}
       data-region-modifier-active={
         isRegionAnnotationActive && panelTab === "manual" && isRegionModifierPressed ? "true" : undefined
@@ -6814,6 +7249,7 @@ export function App() {
         onNavigate={navigateToRoute}
         onOpenProviderConfig={() => openProviderConfigDialog()}
         onPreloadGallery={preloadGalleryPage}
+        onPreloadPool={preloadPromptPoolPage}
       />
       {route === "home" ? (
         <Suspense fallback={null}>
@@ -6889,6 +7325,26 @@ export function App() {
         <Sparkles className="size-4" aria-hidden="true" />
         {t("generationStartText")}
       </button>
+
+      <PromptFavoritesFloatingPanel
+        activeGroupId={favoritePanelGroupId}
+        copiedFavoriteId={copiedPromptFavoriteId}
+        favorites={visiblePromptFavorites}
+        groupCounts={promptFavoriteGroupCounts}
+        groups={promptFavoriteGroups}
+        isMobile={isMobileDrawer}
+        isOpen={isFavoritePanelOpen}
+        query={favoritePanelQuery}
+        totalCount={promptFavoriteItems.length}
+        onChangeGroup={setFavoritePanelGroupId}
+        onChangeQuery={setFavoritePanelQuery}
+        onClose={() => setIsFavoritePanelOpen(false)}
+        onCopy={(favorite) => void copyPromptFavoriteItem(favorite)}
+        onRemove={(favorite) => void removePromptFavoriteItem(favorite)}
+        onToggle={toggleFavoritePanel}
+        onUse={reusePromptFavoriteItem}
+        t={t}
+      />
 
       <aside
         aria-label={t("generationPanelAria")}
@@ -8624,6 +9080,20 @@ export function App() {
             onSaved={providerConfigDialogMode === "onboarding" ? closeSavedProviderOnboarding : undefined}
             onStartCodexLogin={startCodexLogin}
           />
+        </Suspense>
+      ) : null}
+      {route === "pool" ? (
+        <Suspense
+          fallback={
+            <main className="pool-page app-view" data-testid="pool-loading-page">
+              <div className="pool-empty-state" role="status">
+                <Loader2 className="size-5 animate-spin" aria-hidden="true" />
+                <p>{t("poolLoading")}</p>
+              </div>
+            </main>
+          }
+        >
+          <LazyPromptPoolPage onUsePrompt={reusePromptPoolItem} />
         </Suspense>
       ) : null}
       {route === "gallery" ? (

@@ -37,6 +37,7 @@ ENV NODE_ENV="production"
 ENV HOST="0.0.0.0"
 ENV PORT="8787"
 ENV DATA_DIR="/app/data"
+ENV PROMPT_POOL_DIR="/app/prompt-pool-data"
 
 RUN mkdir -p /app/data
 
@@ -48,6 +49,7 @@ COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/web/dist ./apps/web/dist
 COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build /app/prompt-pool-data ./prompt-pool-data
 
 EXPOSE 8787
 

@@ -44,6 +44,15 @@ function resolveFromRepo(value: string): string {
   return isAbsolute(value) ? value : resolve(repoRoot, value);
 }
 
+function optionalEnvPath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function defaultPromptPoolDir(): string {
+  return resolve(repoRoot, "prompt-pool-data");
+}
+
 const sqliteJournalModes = ["DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"] as const;
 type SqliteJournalMode = (typeof sqliteJournalModes)[number];
 
@@ -77,6 +86,7 @@ export const runtimePaths = {
   assetsDir: resolve(dataDir, "assets"),
   assetPreviewsDir: resolve(dataDir, "asset-previews"),
   databaseFile: resolve(dataDir, "gpt-image-canvas.sqlite"),
+  promptPoolDir: resolveFromRepo(optionalEnvPath(process.env.PROMPT_POOL_DIR) ?? defaultPromptPoolDir()),
   webDistDir: resolve(repoRoot, "apps/web/dist")
 };
 

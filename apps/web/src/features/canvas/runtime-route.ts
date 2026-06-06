@@ -1,4 +1,4 @@
-export type AppRoute = "home" | "canvas" | "gallery";
+export type AppRoute = "home" | "canvas" | "pool" | "gallery";
 
 export function isAiCoveEmbeddedRuntime(search = currentSearch()): boolean {
   return new URLSearchParams(search).get("ui_mode") === "embedded";
@@ -7,6 +7,10 @@ export function isAiCoveEmbeddedRuntime(search = currentSearch()): boolean {
 export function routeFromLocation(defaultRoute: AppRoute = "home", pathname = currentPathname()): AppRoute {
   if (pathname === "/canvas") {
     return "canvas";
+  }
+
+  if (pathname === "/pool") {
+    return "pool";
   }
 
   return pathname === "/gallery" ? "gallery" : defaultRoute;
@@ -23,6 +27,10 @@ export function initialRouteForCurrentRuntime(): AppRoute {
 export function pathForRoute(route: AppRoute): string {
   if (route === "canvas") {
     return "/canvas";
+  }
+
+  if (route === "pool") {
+    return "/pool";
   }
 
   return route === "gallery" ? "/gallery" : "/";

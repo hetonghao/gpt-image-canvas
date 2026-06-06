@@ -13,5 +13,7 @@
 @import "./styles/agent-skills.css";
 @import "./styles/generation.css";
 @import "./styles/gallery-cards.css";
+@import "./styles/pool.css";
+@import "./styles/prompt-favorites.css";
 @import "./styles/dark.css";
 @import "./styles/responsive.css";

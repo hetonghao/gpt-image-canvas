@@ -1,4 +1,5 @@
 import type { RuntimeImageProvider } from "@gpt-image-canvas/shared";
+import type { AppRoute } from "./runtime-route";
 
 export type GenerationSubmitAction = "generate" | "configure-image-model";
 
@@ -7,7 +8,7 @@ export interface ProviderOnboardingState {
   dismissedInPageSession: boolean;
   isProviderConfigDialogOpen: boolean;
   isAuthLoading: boolean;
-  route: "home" | "canvas" | "gallery";
+  route: AppRoute;
 }
 
 export interface GenerationSubmitActionState {

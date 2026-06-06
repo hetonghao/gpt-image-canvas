@@ -8,6 +8,7 @@ services:
       HOST: 0.0.0.0
       PORT: ${PORT:-8787}
       DATA_DIR: /app/data
+      PROMPT_POOL_DIR: ${PROMPT_POOL_DIR:-/app/prompt-pool-data}
       SQLITE_JOURNAL_MODE: ${SQLITE_JOURNAL_MODE:-DELETE}
       SQLITE_LOCKING_MODE: ${SQLITE_LOCKING_MODE:-EXCLUSIVE}
     ports:
