@@ -29,6 +29,8 @@ for (const [label, html] of [
   assertIncludes(html, /<div id="root">\s*<div class="boot-screen"/u, `${label} HTML should render a boot screen before React starts`);
   assertIncludes(html, /role="status"/u, `${label} boot screen should expose loading status semantics`);
   assertIncludes(html, /data-testid="boot-screen"/u, `${label} boot screen should be testable`);
+  assertIncludes(html, /aria-label="AI-Cove-Design 正在加载"/u, `${label} boot screen status label should be localized`);
+  assertIncludes(html, />准备创作画布\.\.\.</u, `${label} boot screen progress copy should be localized`);
   assertIncludes(html, /background:\s*#fff7e6/u, `${label} boot screen should default to the light canvas surface`);
   assertIncludes(html, /\[data-boot-theme="dark"\]/u, `${label} boot screen should still support an explicit dark theme`);
   assert.ok(!html.includes("<img"), `${label} boot screen should not add image requests before the app loads`);

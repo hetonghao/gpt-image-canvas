@@ -55,6 +55,7 @@ interface ProviderConfigDialogProps {
   initialTab?: ProviderConfigTab;
   isAuthLoading: boolean;
   isCodexStarting: boolean;
+  isHostedRuntime: boolean;
   mode?: "default" | "onboarding";
   onClose: () => void;
   onLogoutCodex: () => Promise<void>;
@@ -116,6 +117,7 @@ export function ProviderConfigDialog({
   initialTab = "image",
   isAuthLoading,
   isCodexStarting,
+  isHostedRuntime,
   mode = "default",
   onClose,
   onLogoutCodex,
@@ -148,7 +150,7 @@ export function ProviderConfigDialog({
   const [message, setMessage] = useState<DialogMessage | null>(null);
   const [draggingSourceId, setDraggingSourceId] = useState<ProviderSourceId | null>(null);
   const [activeTab, setActiveTab] = useState<ProviderConfigTab>(initialTab);
-  const isAiCoveMode = isHostedAiCoveAdapterMode(hostSession?.adapter.mode);
+  const isAiCoveMode = isHostedRuntime || isHostedAiCoveAdapterMode(hostSession?.adapter.mode);
   const gatewayBaseUrl = hostSession?.adapter.gatewayBaseUrl ?? queryBaseUrlSeed;
   const hasHostApiKeys = hostApiKeys.length > 0;
 
@@ -173,6 +175,8 @@ export function ProviderConfigDialog({
   const activeSourceTimeout = activeSource?.details.timeoutMs;
   const showAiCoveCondensedConfig = isAiCoveMode;
   const isOnboarding = mode === "onboarding";
+  const isInitialConfigReady =
+    Boolean(config && agentConfig && summaryConfig) || (!isLoading && !isAgentConfigLoading && !isSummaryConfigLoading);
   const summaryModelApiKeyId = resolveSummaryModelApiKeyId({
     agentApiKeyId: agentForm.apiKeyId,
     firstHostApiKeyId: hostApiKeys[0]?.id ?? "",
@@ -877,7 +881,7 @@ export function ProviderConfigDialog({
       <div
         aria-labelledby="provider-config-title"
         aria-modal="true"
-        className="provider-config-dialog app-modal-surface"
+        className={`provider-config-dialog app-modal-surface${isInitialConfigReady ? "" : " provider-config-dialog--initializing"}`}
         role="dialog"
         onClick={(event) => event.stopPropagation()}
       >
@@ -892,31 +896,35 @@ export function ProviderConfigDialog({
         </header>
 
         <div className="provider-config-dialog__body">
-          {isOnboarding ? (
-            <section className="provider-config-onboarding" data-testid="provider-config-onboarding">
-              <div className="provider-config-onboarding__icon">
-                <KeyRound className="size-4" aria-hidden="true" />
-              </div>
-              <div className="min-w-0">
-                <h3>{t("providerOnboardingTitle")}</h3>
-                <p>{t("providerOnboardingCopy")}</p>
-              </div>
-            </section>
-          ) : null}
+          {!isInitialConfigReady ? (
+            <ProviderConfigSkeleton label={t("providerConfigLoading")} />
+          ) : (
+            <>
+              {isOnboarding ? (
+                <section className="provider-config-onboarding" data-testid="provider-config-onboarding">
+                  <div className="provider-config-onboarding__icon">
+                    <KeyRound className="size-4" aria-hidden="true" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3>{t("providerOnboardingTitle")}</h3>
+                    <p>{t("providerOnboardingCopy")}</p>
+                  </div>
+                </section>
+              ) : null}
 
-          {isLoading ? (
-            <div className="provider-config-loading" data-testid="provider-config-loading" role="status">
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              {t("providerConfigLoading")}
-            </div>
-          ) : null}
+              {isLoading ? (
+                <div className="provider-config-loading" data-testid="provider-config-loading" role="status">
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  {t("providerConfigLoading")}
+                </div>
+              ) : null}
 
-          {message ? (
-            <div className={`provider-config-message provider-config-message--${message.tone}`} role={message.tone === "error" ? "alert" : "status"}>
-              {message.tone === "success" ? <CheckCircle2 className="size-4 shrink-0" aria-hidden="true" /> : <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />}
-              <p>{message.text}</p>
-            </div>
-          ) : null}
+              {message ? (
+                <div className={`provider-config-message provider-config-message--${message.tone}`} role={message.tone === "error" ? "alert" : "status"}>
+                  {message.tone === "success" ? <CheckCircle2 className="size-4 shrink-0" aria-hidden="true" /> : <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />}
+                  <p>{message.text}</p>
+                </div>
+              ) : null}
 
           <nav
             className="provider-config-tabs"
@@ -1207,23 +1215,25 @@ export function ProviderConfigDialog({
 
                           <ProviderSourceMini
                             action={
-                              codex?.available ? (
-                                <button className="secondary-action h-10" disabled={isAuthLoading} data-testid="provider-codex-logout" type="button" onClick={() => void handleLogoutCodex()}>
-                                  {isAuthLoading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <LogOut className="size-4" aria-hidden="true" />}
-                                  {t("providerLogoutCodex")}
-                                </button>
-                              ) : (
-                                <button
-                                  className="secondary-action h-10"
-                                  disabled={isAuthLoading || isCodexStarting}
-                                  data-testid="provider-codex-login"
-                                  type="button"
-                                  onClick={handleStartCodexLogin}
-                                >
-                                  {isCodexStarting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <KeyRound className="size-4" aria-hidden="true" />}
-                                  {t("providerLoginCodex")}
-                                </button>
-                              )
+                              !isAiCoveMode ? (
+                                codex?.available ? (
+                                  <button className="secondary-action h-10" disabled={isAuthLoading} data-testid="provider-codex-logout" type="button" onClick={() => void handleLogoutCodex()}>
+                                    {isAuthLoading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <LogOut className="size-4" aria-hidden="true" />}
+                                    {t("providerLogoutCodex")}
+                                  </button>
+                                ) : (
+                                  <button
+                                    className="secondary-action h-10"
+                                    disabled={isAuthLoading || isCodexStarting}
+                                    data-testid="provider-codex-login"
+                                    type="button"
+                                    onClick={handleStartCodexLogin}
+                                  >
+                                    {isCodexStarting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <KeyRound className="size-4" aria-hidden="true" />}
+                                    {t("providerLoginCodex")}
+                                  </button>
+                                )
+                              ) : undefined
                             }
                             description={codex?.available ? t("providerStatusCodexCopy") : sourceStatusCopy(codexSource, t)}
                             source={codexSource}
@@ -1508,6 +1518,8 @@ export function ProviderConfigDialog({
               </div>
             </div>
           )}
+            </>
+          )}
         </div>
 
         <footer className="provider-config-dialog__footer">
@@ -1534,6 +1546,38 @@ export function ProviderConfigDialog({
   );
 
   return createPortal(dialog, document.body);
+}
+
+function ProviderConfigSkeleton({ label }: { label: string }) {
+  return (
+    <div className="provider-config-skeleton" data-testid="provider-config-skeleton">
+      <div className="provider-config-loading" role="status">
+        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+        {label}
+      </div>
+      <div className="provider-config-skeleton__tabs" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+      <div className="provider-config-skeleton__card" aria-hidden="true">
+        <div className="provider-config-skeleton__header">
+          <span className="provider-config-skeleton__icon" />
+          <div className="provider-config-skeleton__copy">
+            <span />
+            <span />
+          </div>
+          <span className="provider-config-skeleton__pill" />
+        </div>
+        <div className="provider-config-skeleton__grid">
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function providerConfigUrl(): string {

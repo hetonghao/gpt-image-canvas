@@ -29,6 +29,10 @@
     inset 0 1px 0 rgb(255 255 255 / 0.48);
 }
 
+.provider-config-dialog--initializing {
+  min-height: min(35rem, calc(100dvh - 2rem));
+}
+
 .provider-config-dialog__header,
 .provider-config-dialog__footer {
   display: flex;
@@ -109,6 +113,10 @@
   padding: 1rem 1.05rem;
 }
 
+.provider-config-dialog--initializing .provider-config-dialog__body {
+  align-content: start;
+}
+
 .provider-config-loading,
 .provider-config-message {
   display: flex;
@@ -123,6 +131,95 @@
   font-weight: 780;
   line-height: 1.6;
   padding: 0.8rem 0.95rem;
+}
+
+.provider-config-skeleton {
+  display: grid;
+  min-width: 0;
+  gap: 0.85rem;
+}
+
+.provider-config-skeleton__tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.32rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-soft);
+  padding: 0.28rem;
+}
+
+.provider-config-skeleton__tabs span,
+.provider-config-skeleton__card,
+.provider-config-skeleton__grid span,
+.provider-config-skeleton__icon,
+.provider-config-skeleton__copy span,
+.provider-config-skeleton__pill {
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.26), transparent 100%),
+    rgb(126 50 26 / 0.08);
+}
+
+.provider-config-skeleton__tabs span {
+  min-height: 3.35rem;
+}
+
+.provider-config-skeleton__card {
+  display: grid;
+  min-height: 15.5rem;
+  align-content: start;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.26), transparent 54%),
+    var(--paper-soft);
+  padding: 0.95rem;
+}
+
+.provider-config-skeleton__header {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.72rem;
+}
+
+.provider-config-skeleton__icon {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.provider-config-skeleton__copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.46rem;
+}
+
+.provider-config-skeleton__copy span:first-child {
+  width: min(12rem, 72%);
+  height: 1rem;
+}
+
+.provider-config-skeleton__copy span:last-child {
+  width: min(24rem, 92%);
+  height: 0.78rem;
+}
+
+.provider-config-skeleton__pill {
+  width: 4.8rem;
+  height: 1.55rem;
+  border-radius: 999px;
+}
+
+.provider-config-skeleton__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.72rem;
+}
+
+.provider-config-skeleton__grid span {
+  min-height: 4rem;
 }
 
 .provider-config-message p {

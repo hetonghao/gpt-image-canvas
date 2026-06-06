@@ -3008,7 +3008,7 @@ function CanvasThemeSync({ onChange }: { onChange: (isDarkMode: boolean) => void
   return null;
 }
 
-function providerStatusDetails(authStatus: AuthStatusResponse | null, isAuthLoading: boolean, t: Translate): {
+function providerStatusDetails(authStatus: AuthStatusResponse | null, isAuthLoading: boolean, showCodexAuthAction: boolean, t: Translate): {
   copy: string;
   provider: "openai" | "codex" | "loading" | "none";
   title: string;
@@ -3054,7 +3054,7 @@ function providerStatusDetails(authStatus: AuthStatusResponse | null, isAuthLoad
   }
 
   return {
-    copy: t("providerStatusNoneCopy"),
+    copy: showCodexAuthAction ? t("providerStatusNoneCopy") : t("providerStatusNoneAiCoveCopy"),
     provider: "none",
     title: t("providerStatusNoneTitle")
   };
@@ -3065,6 +3065,7 @@ function ProviderStatusPopover({
   authStatus,
   codexLoginStatus,
   isAuthLoading,
+  showCodexAuthAction,
   onLogoutCodex,
   onStartCodexLogin
 }: {
@@ -3072,11 +3073,12 @@ function ProviderStatusPopover({
   authStatus: AuthStatusResponse | null;
   codexLoginStatus: CodexLoginStatus;
   isAuthLoading: boolean;
+  showCodexAuthAction: boolean;
   onLogoutCodex: () => void;
   onStartCodexLogin: () => void;
 }) {
   const { t } = useI18n();
-  const details = providerStatusDetails(authStatus, isAuthLoading, t);
+  const details = providerStatusDetails(authStatus, isAuthLoading, showCodexAuthAction, t);
   const isCodexStarting = codexLoginStatus === "starting";
 
   return (
@@ -3106,7 +3108,7 @@ function ProviderStatusPopover({
           </p>
         ) : null}
 
-        {details.provider === "codex" ? (
+        {details.provider === "codex" && showCodexAuthAction ? (
           <button
             className="provider-status-popover__action"
             type="button"
@@ -3118,7 +3120,7 @@ function ProviderStatusPopover({
             <LogOut className="size-4" aria-hidden="true" />
             {t("providerLogoutCodex")}
           </button>
-        ) : details.provider === "openai" ? null : (
+        ) : details.provider === "openai" ? null : showCodexAuthAction ? (
           <button
             className="provider-status-popover__action"
             type="button"
@@ -3133,7 +3135,7 @@ function ProviderStatusPopover({
             )}
             {t("providerLoginCodex")}
           </button>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -6913,6 +6915,7 @@ export function App() {
                 authStatus={authStatus}
                 codexLoginStatus={codexLoginStatus}
                 isAuthLoading={isAuthLoading}
+                showCodexAuthAction={!isAiCoveMode}
                 onLogoutCodex={logoutCodexSession}
                 onStartCodexLogin={startCodexLogin}
               />
@@ -8611,6 +8614,7 @@ export function App() {
             initialTab={providerConfigInitialTab}
             isAuthLoading={isAuthLoading}
             isCodexStarting={codexLoginStatus === "starting"}
+            isHostedRuntime={isAiCoveMode}
             mode={providerConfigDialogMode}
             onClose={closeProviderConfigDialog}
             onLogoutCodex={logoutCodexSession}

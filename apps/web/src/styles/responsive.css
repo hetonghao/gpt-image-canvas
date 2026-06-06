@@ -336,6 +336,10 @@
     grid-template-columns: 1fr;
   }
 
+  .provider-config-skeleton__grid {
+    grid-template-columns: 1fr;
+  }
+
   .provider-mini-row {
     grid-template-columns: 1fr;
     gap: 0.24rem;
