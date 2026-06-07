@@ -11,7 +11,7 @@ import type {
 } from "../contracts.js";
 import { db } from "../../infrastructure/database.js";
 import { promptFavoriteGroups, promptFavorites } from "../../infrastructure/schema.js";
-import { getPromptPool } from "../prompt-pool/prompt-pool.js";
+import { getPromptPoolItem } from "../prompt-pool/prompt-pool.js";
 
 const DEFAULT_GROUP_ID = "default";
 const DEFAULT_GROUP_NAME = "常用";
@@ -57,8 +57,8 @@ export async function createPromptFavorite(input: CreatePromptFavoriteRequest): 
     throw new PromptFavoriteError("prompt_favorite_group_not_found", "Prompt favorite group was not found.", 404);
   }
 
-  const pool = await getPromptPool();
-  const item = pool.items.find((candidate) => candidate.id === promptPoolItemId);
+  const promptPoolItem = await getPromptPoolItem(promptPoolItemId);
+  const item = promptPoolItem.item;
   if (!item) {
     throw new PromptFavoriteError("prompt_pool_item_not_found", "Prompt pool item was not found.", 404);
   }

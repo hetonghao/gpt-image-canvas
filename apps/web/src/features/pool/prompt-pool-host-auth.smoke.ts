@@ -39,7 +39,8 @@ const favoritesHeaders = new Headers(capturedFetchCalls[0]?.init?.headers);
 assert.equal(favoritesHeaders.get("new-api-user"), "42", "prompt favorites requests should forward the AI Cove user id");
 
 const promptPoolPageSource = await readFile(join(currentDir, "PromptPoolPage.tsx"), "utf8");
-assert.match(promptPoolPageSource, /apiFetch\(["']\/api\/pool["']/u, "Prompt Pool data requests should use apiFetch");
+assert.match(promptPoolPageSource, /apiFetch\(`\/api\/pool\?/u, "Prompt Pool data requests should use apiFetch");
 assert.doesNotMatch(promptPoolPageSource, /fetch\(["']\/api\/pool["']/u, "Prompt Pool data requests should not use bare fetch");
+assert.doesNotMatch(promptPoolPageSource, /poolOpenSource/u, "Prompt Pool detail should not render an X source link");
 
 process.stdout.write("prompt-pool-host-auth.smoke.ts passed\n");

@@ -56,6 +56,8 @@ import {
   useValue
 } from "tldraw";
 import {
+  GENERATION_PLACEHOLDER_MOTION_CHANGE_EVENT,
+  GENERATION_PLACEHOLDER_MOTION_QUIET_CLASS,
   GENERATION_PLACEHOLDER_TYPE,
   GenerationPlaceholderShapeUtil,
   type GenerationPlaceholderShape
@@ -197,6 +199,17 @@ const TLDRAW_LICENSE_KEY =
 const TLDRAW_USER_ID = "gpt-image-canvas-local-user";
 type ProviderConfigTab = "image" | "agent";
 type ProviderConfigDialogMode = "default" | "onboarding";
+
+function setGenerationPlaceholderMotionQuiet(isQuiet: boolean): void {
+  const root = document.documentElement;
+  const wasQuiet = root.classList.contains(GENERATION_PLACEHOLDER_MOTION_QUIET_CLASS);
+
+  root.classList.toggle(GENERATION_PLACEHOLDER_MOTION_QUIET_CLASS, isQuiet);
+
+  if (wasQuiet !== isQuiet) {
+    window.dispatchEvent(new Event(GENERATION_PLACEHOLDER_MOTION_CHANGE_EVENT));
+  }
+}
 
 function tldrawLocaleForLocale(locale: Locale): NonNullable<TLUserPreferences["locale"]> {
   return locale === "zh-CN" ? "zh-cn" : "en";
@@ -3607,6 +3620,8 @@ export function App() {
   const editorRef = useRef<Editor | null>(null);
   const regionCanvasPointerDownRef = useRef<((event: PointerEvent) => void) | null>(null);
   const activeGenerationsRef = useRef<Map<string, ActiveGenerationTask>>(new Map());
+  const generationPlaceholderPointerIdsRef = useRef<Set<number>>(new Set());
+  const generationPlaceholderQuietTimerRef = useRef<number | undefined>();
   const regionFocusFrameTimersRef = useRef<Map<string, number>>(new Map());
   const regionFocusPreviewTimersRef = useRef<Map<string, number>>(new Map());
   const agentRequestRef = useRef(0);
@@ -4001,6 +4016,9 @@ export function App() {
       window.clearTimeout(agentHistorySaveTimerRef.current);
       agentHistorySaveTimerRef.current = undefined;
       window.clearTimeout(agentCopyResetTimerRef.current);
+      window.clearTimeout(generationPlaceholderQuietTimerRef.current);
+      generationPlaceholderPointerIdsRef.current.clear();
+      document.documentElement.classList.remove(GENERATION_PLACEHOLDER_MOTION_QUIET_CLASS);
       window.clearTimeout(codexPollTimerRef.current);
       window.clearTimeout(favoriteCopyTimerRef.current);
     };
@@ -4723,7 +4741,40 @@ export function App() {
     const handleRegionPointerDown = (event: PointerEvent): void => {
       regionCanvasPointerDownRef.current?.(event);
     };
+    const resumeGenerationPlaceholderMotion = (): void => {
+      window.clearTimeout(generationPlaceholderQuietTimerRef.current);
+      generationPlaceholderQuietTimerRef.current = window.setTimeout(() => {
+        if (generationPlaceholderPointerIdsRef.current.size === 0) {
+          setGenerationPlaceholderMotionQuiet(false);
+        }
+      }, 220);
+    };
+    const handleGenerationPlaceholderPointerDown = (event: PointerEvent): void => {
+      if (event.pointerType === "mouse" && event.button !== 0) {
+        return;
+      }
+
+      window.clearTimeout(generationPlaceholderQuietTimerRef.current);
+      generationPlaceholderPointerIdsRef.current.add(event.pointerId);
+      setGenerationPlaceholderMotionQuiet(true);
+    };
+    const handleGenerationPlaceholderPointerDone = (event: PointerEvent): void => {
+      generationPlaceholderPointerIdsRef.current.delete(event.pointerId);
+      if (generationPlaceholderPointerIdsRef.current.size === 0) {
+        resumeGenerationPlaceholderMotion();
+      }
+    };
+    const clearGenerationPlaceholderPointers = (): void => {
+      window.clearTimeout(generationPlaceholderQuietTimerRef.current);
+      generationPlaceholderPointerIdsRef.current.clear();
+      setGenerationPlaceholderMotionQuiet(false);
+    };
+
     editor.getContainer().addEventListener("pointerdown", handleRegionPointerDown, { capture: true });
+    editor.getContainer().addEventListener("pointerdown", handleGenerationPlaceholderPointerDown, { capture: true });
+    window.addEventListener("pointerup", handleGenerationPlaceholderPointerDone, { passive: true });
+    window.addEventListener("pointercancel", handleGenerationPlaceholderPointerDone, { passive: true });
+    window.addEventListener("blur", clearGenerationPlaceholderPointers);
     editor.on("change", updateReferenceSelection);
     deleteAgentPlanNodes(editor);
     commitReferenceSelection();
@@ -4738,6 +4789,11 @@ export function App() {
         editorRef.current = null;
       }
       editor.getContainer().removeEventListener("pointerdown", handleRegionPointerDown, { capture: true });
+      editor.getContainer().removeEventListener("pointerdown", handleGenerationPlaceholderPointerDown, { capture: true });
+      window.removeEventListener("pointerup", handleGenerationPlaceholderPointerDone);
+      window.removeEventListener("pointercancel", handleGenerationPlaceholderPointerDone);
+      window.removeEventListener("blur", clearGenerationPlaceholderPointers);
+      clearGenerationPlaceholderPointers();
       editor.off("change", updateReferenceSelection);
       removeReferenceStoreListener();
       removeListener();

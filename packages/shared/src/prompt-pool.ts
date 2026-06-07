@@ -1,5 +1,6 @@
 export type PromptPoolMediaType = "image" | "video";
-export type PromptPoolErrorCode = "prompt_pool_missing" | "prompt_pool_invalid";
+export type PromptPoolErrorCode = "prompt_pool_missing" | "prompt_pool_invalid" | "prompt_pool_item_not_found";
+export type PromptPoolSortMode = "latest" | "popular" | "ready";
 
 export interface PromptPoolAuthor {
   name: string;
@@ -32,6 +33,16 @@ export interface PromptPoolItem {
   sourceUrl?: string;
 }
 
+export interface PromptPoolListItem extends Omit<PromptPoolItem, "prompt"> {
+  promptExcerpt: string;
+  promptLength: number;
+}
+
+export interface PromptPoolModelOption {
+  count: number;
+  model: string;
+}
+
 export interface PromptPoolSummary {
   builtAt?: string;
   scrapedAt?: string;
@@ -44,7 +55,19 @@ export interface PromptPoolSummary {
 
 export interface PromptPoolResponse {
   available: boolean;
-  items: PromptPoolItem[];
+  items: PromptPoolListItem[];
+  limit: number;
+  modelOptions: PromptPoolModelOption[];
+  nextOffset: number | null;
+  offset: number;
+  readyCount: number;
   summary: PromptPoolSummary;
+  totalCount: number;
+  errorCode?: PromptPoolErrorCode;
+}
+
+export interface PromptPoolItemResponse {
+  available: boolean;
+  item?: PromptPoolItem;
   errorCode?: PromptPoolErrorCode;
 }

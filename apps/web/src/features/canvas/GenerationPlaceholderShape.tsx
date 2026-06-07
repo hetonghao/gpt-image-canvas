@@ -3,6 +3,8 @@ import { BaseBoxShapeUtil, HTMLContainer, RecordProps, T, TLShape } from "tldraw
 import { useI18n } from "../../shared/i18n";
 
 export const GENERATION_PLACEHOLDER_TYPE = "generation-placeholder" as const;
+export const GENERATION_PLACEHOLDER_MOTION_QUIET_CLASS = "generation-placeholder-motion-quiet" as const;
+export const GENERATION_PLACEHOLDER_MOTION_CHANGE_EVENT = "generation-placeholder-motion-change" as const;
 
 export type GenerationPlaceholderStatus = "loading" | "failed";
 
@@ -30,7 +32,8 @@ function conciseError(message: string, fallback: string): string {
   return trimmed.length > 46 ? `${trimmed.slice(0, 46)}...` : trimmed;
 }
 
-const PARTICLE_COUNT = 60;
+const PARTICLE_COUNT = 32;
+const MAX_CANVAS_DPR = 1.5;
 const PARTICLE_COLORS = ["#D4B990", "#E8DCCC", "#C2A373", "#FFFFFF", "#FDFBF7"] as const;
 
 interface ChampagneParticle {
@@ -89,6 +92,15 @@ function drawChampagneParticle(context: CanvasRenderingContext2D, particle: Cham
   context.shadowBlur = 0;
 }
 
+function resizeObserverSize(entry: ResizeObserverEntry | undefined, canvas: HTMLCanvasElement): { width: number; height: number } {
+  const box = Array.isArray(entry?.contentBoxSize) ? entry.contentBoxSize[0] : entry?.contentBoxSize;
+
+  return {
+    width: box?.inlineSize ?? entry?.contentRect.width ?? canvas.clientWidth,
+    height: box?.blockSize ?? entry?.contentRect.height ?? canvas.clientHeight
+  };
+}
+
 function ChampagneParticleCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -99,81 +111,118 @@ function ChampagneParticleCanvas() {
       return;
     }
 
+    const activeCanvas = canvas;
+    const activeContext = context;
     const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let particles: ChampagneParticle[] = [];
     let animationFrame = 0;
     let width = 0;
     let height = 0;
 
-    const rebuildParticles = () => {
+    function rebuildParticles(): void {
       particles = Array.from({ length: PARTICLE_COUNT }, () => createChampagneParticle(width, height));
-    };
+    }
 
-    const resizeCanvas = () => {
-      const rect = canvas.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      const nextWidth = Math.max(1, rect.width);
-      const nextHeight = Math.max(1, rect.height);
-      const displayWidth = Math.max(1, Math.round(nextWidth * dpr));
-      const displayHeight = Math.max(1, Math.round(nextHeight * dpr));
+    function isMotionQuiet(): boolean {
+      return document.documentElement.classList.contains(GENERATION_PLACEHOLDER_MOTION_QUIET_CLASS);
+    }
 
-      if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
-        canvas.width = displayWidth;
-        canvas.height = displayHeight;
+    function shouldAnimate(): boolean {
+      return !prefersReducedMotion && !isMotionQuiet() && document.visibilityState !== "hidden";
+    }
+
+    function resizeCanvas(nextWidth: number, nextHeight: number): void {
+      const dpr = Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR);
+      const normalizedWidth = Math.max(1, nextWidth);
+      const normalizedHeight = Math.max(1, nextHeight);
+      const displayWidth = Math.max(1, Math.round(normalizedWidth * dpr));
+      const displayHeight = Math.max(1, Math.round(normalizedHeight * dpr));
+
+      if (activeCanvas.width !== displayWidth || activeCanvas.height !== displayHeight) {
+        activeCanvas.width = displayWidth;
+        activeCanvas.height = displayHeight;
       }
-      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      activeContext.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      if (width !== nextWidth || height !== nextHeight || particles.length === 0) {
-        width = nextWidth;
-        height = nextHeight;
+      if (width !== normalizedWidth || height !== normalizedHeight || particles.length === 0) {
+        width = normalizedWidth;
+        height = normalizedHeight;
         rebuildParticles();
       }
-    };
+    }
 
-    const renderFrame = (now: number, shouldUpdate: boolean) => {
-      resizeCanvas();
-      context.clearRect(0, 0, width, height);
+    function renderFrame(now: number, shouldUpdate: boolean): void {
+      activeContext.clearRect(0, 0, width, height);
 
       const globalBreath = (Math.sin(now * 0.001) + 1) / 2;
-      const gradient = context.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width * 0.8);
+      const gradient = activeContext.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, width * 0.8);
       gradient.addColorStop(0, `rgba(255, 255, 255, ${0.1 + globalBreath * 0.15})`);
       gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
 
-      context.fillStyle = gradient;
-      context.fillRect(0, 0, width, height);
+      activeContext.fillStyle = gradient;
+      activeContext.fillRect(0, 0, width, height);
 
       for (const particle of particles) {
         if (shouldUpdate) {
           updateChampagneParticle(particle, width, height);
         }
-        drawChampagneParticle(context, particle);
+        drawChampagneParticle(activeContext, particle);
       }
-    };
+    }
 
-    const render = (now: number) => {
+    function render(now: number): void {
       renderFrame(now, true);
-      animationFrame = window.requestAnimationFrame(render);
-    };
+      animationFrame = shouldAnimate() ? window.requestAnimationFrame(render) : 0;
+    }
 
-    const handleResize = () => {
-      resizeCanvas();
-      if (prefersReducedMotion) {
-        renderFrame(performance.now(), false);
+    function stopAnimation(): void {
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
       }
-    };
+    }
 
-    resizeCanvas();
-    if (prefersReducedMotion) {
-      renderFrame(performance.now(), false);
-    } else {
+    function startAnimation(): void {
+      if (animationFrame || !shouldAnimate()) {
+        return;
+      }
       animationFrame = window.requestAnimationFrame(render);
     }
 
-    window.addEventListener("resize", handleResize, { passive: true });
+    function syncAnimationState(): void {
+      if (shouldAnimate()) {
+        startAnimation();
+        return;
+      }
+
+      stopAnimation();
+      if (width > 0 && height > 0) {
+        renderFrame(performance.now(), false);
+      }
+    }
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      const size = resizeObserverSize(entries[0], activeCanvas);
+
+      resizeCanvas(size.width, size.height);
+      if (!shouldAnimate()) {
+        renderFrame(performance.now(), false);
+      }
+    });
+
+    resizeCanvas(activeCanvas.clientWidth, activeCanvas.clientHeight);
+    renderFrame(performance.now(), false);
+    startAnimation();
+
+    resizeObserver.observe(activeCanvas);
+    window.addEventListener(GENERATION_PLACEHOLDER_MOTION_CHANGE_EVENT, syncAnimationState);
+    document.addEventListener("visibilitychange", syncAnimationState);
 
     return () => {
-      window.removeEventListener("resize", handleResize);
-      window.cancelAnimationFrame(animationFrame);
+      resizeObserver.disconnect();
+      window.removeEventListener(GENERATION_PLACEHOLDER_MOTION_CHANGE_EVENT, syncAnimationState);
+      document.removeEventListener("visibilitychange", syncAnimationState);
+      stopAnimation();
     };
   }, []);
 

@@ -21,7 +21,7 @@
   width: 100%;
   height: 100%;
   opacity: 0.9;
-  transition: opacity 1s ease;
+  transition: opacity 140ms ease;
 }
 
 .generation-placeholder-shape__inner-glow {
@@ -49,6 +49,17 @@
 
 .generation-placeholder-shape.is-loading .generation-placeholder-shape__content {
   animation: generation-placeholder-float 3s ease-in-out infinite;
+}
+
+.generation-placeholder-motion-quiet .generation-placeholder-shape__particle-canvas {
+  opacity: 0.18;
+}
+
+.generation-placeholder-motion-quiet .generation-placeholder-shape.is-loading .generation-placeholder-shape__content,
+.generation-placeholder-motion-quiet .generation-placeholder-shape__draw,
+.generation-placeholder-motion-quiet .generation-placeholder-shape__spark,
+.generation-placeholder-motion-quiet .generation-placeholder-shape__dots span {
+  animation-play-state: paused;
 }
 
 .generation-placeholder-shape__art {

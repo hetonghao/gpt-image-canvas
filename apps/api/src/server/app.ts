@@ -43,6 +43,7 @@ export function createApp(): Hono {
 
   app.use("/api/*", hostContextMiddleware);
   app.use("/api/project", compress());
+  app.use("/api/pool", compress());
 
   registerCoreRoutes(app);
   registerHostRoutes(app);

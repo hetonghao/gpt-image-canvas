@@ -53,7 +53,7 @@ writeFileSync(
     {
       id: "prompt-two",
       title: "Prompt two",
-      prompt: "Create a short video prompt.",
+      prompt: `Create a short video prompt. ${"filler ".repeat(30)}hidden-back-half-token`,
       mediaType: "video",
       model: "Seedance 2.0",
       promptReady: false,
@@ -85,15 +85,66 @@ try {
   expect(pool.body.summary.promptCount === 2, "Prompt Pool summary uses bundled summary");
   expect(Array.isArray(pool.body.items), "Prompt Pool response includes items");
   expect(pool.body.items.length === 2, "Prompt Pool filters out invalid items without assets");
+  expect(pool.body.totalCount === 2, "Prompt Pool response includes the filtered total count");
+  expect(pool.body.readyCount === 1, "Prompt Pool response includes the filtered ready count");
+  expect(Array.isArray(pool.body.modelOptions), "Prompt Pool response includes model options");
+  expect(pool.body.nextOffset === null, "Prompt Pool response omits next offset when all items fit");
+
+  const firstPage = await requestJson(app, "/api/pool?limit=1");
+  expect(firstPage.response.status === 200, "Prompt Pool paginated route returns 200");
+  expect(Array.isArray(firstPage.body.items), "Prompt Pool paginated response includes items");
+  expect(firstPage.body.items.length === 1, "Prompt Pool respects the requested page limit");
+  expect(firstPage.body.totalCount === 2, "Prompt Pool paginated response keeps the full filtered total count");
+  expect(firstPage.body.nextOffset === 1, "Prompt Pool response includes the next offset");
+
+  const secondPage = await requestJson(app, "/api/pool?limit=1&offset=1");
+  expect(secondPage.response.status === 200, "Prompt Pool second page route returns 200");
+  expect(Array.isArray(secondPage.body.items), "Prompt Pool second page response includes items");
+  expect(secondPage.body.items.length === 1, "Prompt Pool second page respects the requested page limit");
+  expect(isRecord(secondPage.body.items[0]), "Prompt Pool second page item is an object");
+  expect(secondPage.body.items[0].id === "prompt-two", "Prompt Pool offset returns the next item");
+
+  const promptSearch = await requestJson(app, "/api/pool?q=hidden-back-half-token");
+  expect(promptSearch.response.status === 200, "Prompt Pool search route returns 200");
+  expect(Array.isArray(promptSearch.body.items), "Prompt Pool search response includes items");
+  expect(promptSearch.body.items.length === 1, "Prompt Pool search filters results");
+  expect(isRecord(promptSearch.body.items[0]), "Prompt Pool search item is an object");
+  expect(promptSearch.body.items[0].id === "prompt-two", "Prompt Pool search uses the full prompt, not only the excerpt");
+
+  const mediaFilter = await requestJson(app, "/api/pool?mediaType=image");
+  expect(mediaFilter.response.status === 200, "Prompt Pool media filter route returns 200");
+  expect(Array.isArray(mediaFilter.body.items), "Prompt Pool media filter response includes items");
+  expect(mediaFilter.body.items.length === 1, "Prompt Pool media filter reduces results");
+  expect(isRecord(mediaFilter.body.items[0]), "Prompt Pool media filter item is an object");
+  expect(mediaFilter.body.items[0].id === "prompt-one", "Prompt Pool media filter uses full pool data");
+
+  const compressedPoolResponse = await app.request("/api/pool", {
+    headers: {
+      "Accept-Encoding": "gzip"
+    }
+  });
+  expect(compressedPoolResponse.status === 200, "Prompt Pool compressed route returns 200");
+  expect(compressedPoolResponse.headers.get("content-encoding") === "gzip", "Prompt Pool list supports gzip compression");
 
   const first = pool.body.items[0];
   expect(isRecord(first), "Prompt Pool item is an object");
   expect(first.id === "prompt-one", "Prompt Pool item preserves id");
+  expect(first.prompt === undefined, "Prompt Pool list omits full prompts");
+  expect(first.promptExcerpt === "Create a cinematic product poster.", "Prompt Pool list includes a prompt excerpt");
+  expect(first.promptLength === 34, "Prompt Pool list includes the full prompt length");
   expect(first.imageCount === 2, "Prompt Pool item counts available images");
   expect(
     first.assetUrl === "https://raw.githubusercontent.com/mrslimslim/awesome-prompt/main/images/prompt-one/0.webp",
     "Prompt Pool converts relative image paths to GitHub raw URLs"
   );
+
+  const detail = await requestJson(app, "/api/pool/prompt-one");
+  expect(detail.response.status === 200, "Prompt Pool detail route returns 200");
+  expect(isRecord(detail.body.item), "Prompt Pool detail response includes item");
+  expect(detail.body.item.prompt === "Create a cinematic product poster.", "Prompt Pool detail returns the full prompt");
+
+  const missingDetail = await requestJson(app, "/api/pool/missing-prompt");
+  expect(missingDetail.response.status === 404, "Prompt Pool detail returns 404 for missing items");
 
   const favoritesBefore = await requestJson(app, "/api/prompt-favorites");
   expect(favoritesBefore.response.status === 200, "Prompt favorites list returns 200");

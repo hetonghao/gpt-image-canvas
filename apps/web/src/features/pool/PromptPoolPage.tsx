@@ -4,7 +4,6 @@ import {
   BookmarkCheck,
   CheckCircle2,
   Copy,
-  ExternalLink,
   Eye,
   Heart,
   ImageIcon,
@@ -26,8 +25,12 @@ import type {
   PromptFavoriteGroup,
   PromptFavoriteItem,
   PromptPoolItem,
+  PromptPoolItemResponse,
+  PromptPoolListItem,
   PromptPoolMediaType,
-  PromptPoolResponse
+  PromptPoolModelOption,
+  PromptPoolResponse,
+  PromptPoolSortMode
 } from "@gpt-image-canvas/shared";
 import { apiFetch } from "../../shared/api/host-token";
 import { useI18n } from "../../shared/i18n";
@@ -46,9 +49,8 @@ interface PromptPoolPageProps {
 }
 
 type PromptPoolMediaFilter = "all" | PromptPoolMediaType;
-type PromptPoolSortMode = "latest" | "popular" | "ready";
 type PromptPoolColumnItem = {
-  item: PromptPoolItem;
+  item: PromptPoolListItem;
   priority: boolean;
 };
 
@@ -58,14 +60,18 @@ const PRIORITY_IMAGE_COUNT = 24;
 
 export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
   const { locale, t } = useI18n();
-  const [items, setItems] = useState<PromptPoolItem[]>([]);
+  const [items, setItems] = useState<PromptPoolListItem[]>([]);
   const [summary, setSummary] = useState<PromptPoolResponse["summary"] | null>(null);
   const [query, setQuery] = useState("");
   const [mediaFilter, setMediaFilter] = useState<PromptPoolMediaFilter>("all");
   const [modelFilter, setModelFilter] = useState("all");
   const [sortMode, setSortMode] = useState<PromptPoolSortMode>("latest");
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
+  const [modelOptions, setModelOptions] = useState<PromptPoolModelOption[]>([]);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [readyCount, setReadyCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -81,7 +87,11 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
   const copiedTimerRef = useRef<number | undefined>();
   const statusTimerRef = useRef<number | undefined>();
   const favoriteSparkTimerRef = useRef<number | undefined>();
+  const hydratedItemsRef = useRef(new Map<string, PromptPoolItem>());
   const deferredQuery = useDeferredValue(query);
+  const poolQueryKey = promptPoolSearchParams(deferredQuery, mediaFilter, modelFilter, sortMode).toString();
+  const poolQueryKeyRef = useRef(poolQueryKey);
+  poolQueryKeyRef.current = poolQueryKey;
   const numberFormat = useMemo(() => new Intl.NumberFormat(locale, { maximumFractionDigits: 1, notation: "compact" }), [locale]);
   const columnCount = usePromptPoolColumnCount();
 
@@ -93,20 +103,10 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
       setError("");
 
       try {
-        const response = await apiFetch("/api/pool", { signal: controller.signal });
-        if (!response.ok) {
-          throw new Error(t("poolRequestFailed", { status: response.status }));
-        }
-
-        const body = (await response.json()) as PromptPoolResponse;
-        if (!Array.isArray(body.items) || !body.summary) {
-          throw new Error(t("poolServiceInvalidData"));
-        }
+        const body = await fetchPromptPoolPage(0, INITIAL_VISIBLE_COUNT, controller.signal);
 
         if (!controller.signal.aborted) {
-          setItems(body.items);
-          setSummary(body.summary);
-          setError(body.available ? "" : t("poolDataMissing"));
+          syncPromptPoolPage(body, false);
         }
       } catch (loadError) {
         if (!controller.signal.aborted) {
@@ -124,7 +124,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
     return () => {
       controller.abort();
     };
-  }, [t]);
+  }, [deferredQuery, mediaFilter, modelFilter, sortMode, t]);
 
   useEffect(() => {
     return () => {
@@ -144,10 +144,6 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
   }, []);
 
   useEffect(() => {
-    setVisibleCount(INITIAL_VISIBLE_COUNT);
-  }, [deferredQuery, mediaFilter, modelFilter, sortMode]);
-
-  useEffect(() => {
     if (!selectedItem) {
       return;
     }
@@ -165,14 +161,8 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
     };
   }, [selectedItem]);
 
-  const modelOptions = useMemo(() => modelFilterOptions(items), [items]);
-  const filteredItems = useMemo(
-    () => filterPromptPoolItems(items, deferredQuery, mediaFilter, modelFilter, sortMode),
-    [deferredQuery, items, mediaFilter, modelFilter, sortMode]
-  );
-  const visibleItems = useMemo(() => filteredItems.slice(0, visibleCount), [filteredItems, visibleCount]);
-  const visibleColumns = useMemo(() => distributePromptPoolItems(visibleItems, columnCount), [columnCount, visibleItems]);
-  const hasMoreItems = visibleCount < filteredItems.length;
+  const visibleColumns = useMemo(() => distributePromptPoolItems(items, columnCount), [columnCount, items]);
+  const hasMoreItems = nextOffset !== null;
   const favoriteBySourceId = useMemo(() => new Map(favoriteItems.map((favorite) => [favorite.sourceId, favorite])), [favoriteItems]);
   const favoritePopoverItem = favoritePopoverSourceId ? items.find((item) => item.id === favoritePopoverSourceId) ?? null : null;
   const favoritePopoverFavorite = favoritePopoverSourceId ? favoriteBySourceId.get(favoritePopoverSourceId) ?? null : null;
@@ -201,9 +191,86 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
     }
   }
 
-  async function copyPrompt(item: PromptPoolItem): Promise<void> {
+  async function fetchPromptPoolPage(offset: number, limit: number, signal?: AbortSignal): Promise<PromptPoolResponse> {
+    const params = promptPoolSearchParams(deferredQuery, mediaFilter, modelFilter, sortMode);
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+
+    const response = await apiFetch(`/api/pool?${params.toString()}`, { signal });
+    if (!response.ok) {
+      throw new Error(t("poolRequestFailed", { status: response.status }));
+    }
+
+    const body = (await response.json()) as PromptPoolResponse;
+    if (!Array.isArray(body.items) || !body.summary || !Array.isArray(body.modelOptions)) {
+      throw new Error(t("poolServiceInvalidData"));
+    }
+    return body;
+  }
+
+  function syncPromptPoolPage(body: PromptPoolResponse, appendItems: boolean): void {
+    if (appendItems) {
+      setItems((current) => [...current, ...body.items]);
+    } else {
+      setItems(body.items);
+    }
+    setModelOptions(body.modelOptions);
+    setNextOffset(body.nextOffset);
+    setReadyCount(body.readyCount);
+    setSummary(body.summary);
+    setTotalCount(body.totalCount);
+    setError(body.available ? "" : t("poolDataMissing"));
+  }
+
+  async function loadMorePromptPoolItems(): Promise<void> {
+    if (nextOffset === null || isLoadingMore) {
+      return;
+    }
+
+    setIsLoadingMore(true);
+    setError("");
+    const requestQueryKey = poolQueryKey;
     try {
-      await writeClipboardText(item.prompt);
+      const body = await fetchPromptPoolPage(nextOffset, LOAD_MORE_COUNT);
+      if (poolQueryKeyRef.current !== requestQueryKey) {
+        return;
+      }
+      syncPromptPoolPage(body, true);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : t("poolLoadFailed"));
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }
+
+  async function loadPromptPoolItem(item: PromptPoolListItem | PromptPoolItem): Promise<PromptPoolItem> {
+    if ("prompt" in item) {
+      return item;
+    }
+
+    const cached = hydratedItemsRef.current.get(item.id);
+    if (cached) {
+      return cached;
+    }
+
+    const response = await apiFetch(`/api/pool/${encodeURIComponent(item.id)}`);
+    if (!response.ok) {
+      throw new Error(t("poolRequestFailed", { status: response.status }));
+    }
+
+    const body = (await response.json()) as PromptPoolItemResponse;
+    if (!body.item?.prompt) {
+      throw new Error(t("poolServiceInvalidData"));
+    }
+
+    hydratedItemsRef.current.set(body.item.id, body.item);
+    return body.item;
+  }
+
+  async function copyPrompt(item: PromptPoolListItem | PromptPoolItem): Promise<void> {
+    try {
+      const hydratedItem = await loadPromptPoolItem(item);
+      await writeClipboardText(hydratedItem.prompt);
       window.clearTimeout(copiedTimerRef.current);
       setCopiedId(item.id);
       copiedTimerRef.current = window.setTimeout(() => {
@@ -215,6 +282,22 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
     }
   }
 
+  async function openPromptDetail(item: PromptPoolListItem): Promise<void> {
+    try {
+      setSelectedItem(await loadPromptPoolItem(item));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : t("poolLoadFailed"));
+    }
+  }
+
+  async function usePromptPoolItem(item: PromptPoolListItem | PromptPoolItem): Promise<void> {
+    try {
+      onUsePrompt(await loadPromptPoolItem(item));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : t("poolLoadFailed"));
+    }
+  }
+
   function resetFilters(): void {
     setQuery("");
     setMediaFilter("all");
@@ -222,7 +305,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
     setSortMode("latest");
   }
 
-  async function togglePromptFavorite(item: PromptPoolItem): Promise<void> {
+  async function togglePromptFavorite(item: PromptPoolListItem | PromptPoolItem): Promise<void> {
     const existing = favoriteBySourceId.get(item.id);
     setError("");
     if (existing) {
@@ -369,7 +452,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
                 type="button"
                 onClick={() => setMediaFilter(value)}
               >
-                {value === "all" ? <Images className="size-4" aria-hidden="true" /> : value === "image" ? <ImageIcon className="size-4" aria-hidden="true" /> : <Video className="size-4" aria-hidden="true" />}
+                <PromptPoolMediaFilterIcon value={value} />
                 {mediaFilterLabel(value, t)}
               </button>
             ))}
@@ -421,8 +504,8 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
         ) : null}
 
         <div className="pool-result-strip" aria-live="polite">
-          <span>{t("poolShowingCount", { visible: visibleItems.length, total: filteredItems.length })}</span>
-          <span>{t("poolReadyCount", { count: filteredItems.filter((item) => item.promptReady).length })}</span>
+          <span>{t("poolShowingCount", { visible: items.length, total: totalCount })}</span>
+          <span>{t("poolReadyCount", { count: readyCount })}</span>
         </div>
 
         {isLoading ? (
@@ -430,7 +513,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
             <Loader2 className="size-5 animate-spin" aria-hidden="true" />
             <p>{t("poolLoading")}</p>
           </div>
-        ) : filteredItems.length === 0 ? (
+        ) : totalCount === 0 ? (
           <div className="pool-empty-state" data-testid="pool-empty">
             <WandSparkles className="size-7" aria-hidden="true" />
             <div>
@@ -454,8 +537,8 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
                       priority={priority}
                       onCopy={() => void copyPrompt(item)}
                       onFavorite={() => void togglePromptFavorite(item)}
-                      onOpen={() => setSelectedItem(item)}
-                      onUse={() => onUsePrompt(item)}
+                      onOpen={() => void openPromptDetail(item)}
+                      onUse={() => void usePromptPoolItem(item)}
                     />
                   ))}
                 </div>
@@ -463,9 +546,10 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
             </div>
 
             {hasMoreItems ? (
-              <button className="pool-load-more" type="button" onClick={() => setVisibleCount((current) => current + LOAD_MORE_COUNT)}>
-                {t("poolLoadMore", { count: Math.min(LOAD_MORE_COUNT, filteredItems.length - visibleCount) })}
-                <ArrowRight className="size-4" aria-hidden="true" />
+              <button className="pool-load-more" disabled={isLoadingMore} type="button" onClick={() => void loadMorePromptPoolItems()}>
+                {isLoadingMore ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+                {t("poolLoadMore", { count: Math.min(LOAD_MORE_COUNT, Math.max(0, totalCount - items.length)) })}
+                {!isLoadingMore ? <ArrowRight className="size-4" aria-hidden="true" /> : null}
               </button>
             ) : null}
           </>
@@ -482,7 +566,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
           onClose={() => setSelectedItem(null)}
           onCopy={() => void copyPrompt(selectedItem)}
           onFavorite={() => void togglePromptFavorite(selectedItem)}
-          onUse={() => onUsePrompt(selectedItem)}
+          onUse={() => void usePromptPoolItem(selectedItem)}
         />
       ) : null}
       {favoritePopoverItem && favoritePopoverFavorite ? (
@@ -525,7 +609,7 @@ function PromptPoolCard({
   copied: boolean;
   favorite: PromptFavoriteItem | undefined;
   favoriteSpark: boolean;
-  item: PromptPoolItem;
+  item: PromptPoolListItem;
   numberFormat: Intl.NumberFormat;
   priority: boolean;
   onCopy: () => void;
@@ -534,7 +618,7 @@ function PromptPoolCard({
   onUse: () => void;
 }) {
   const { t } = useI18n();
-  const excerpt = promptExcerpt(item.prompt);
+  const excerpt = item.promptExcerpt;
 
   return (
     <article className="pool-card" data-favorite={Boolean(favorite)} data-media={item.mediaType} data-testid="pool-card">
@@ -586,7 +670,7 @@ function PromptPoolCard({
           <span>{item.promptReady ? t("poolPromptReady") : t("poolPromptDraft")}</span>
         </div>
         <h2>{item.title}</h2>
-        <p className="pool-card__prompt">{item.prompt}</p>
+        <p className="pool-card__prompt">{item.promptExcerpt}</p>
         <footer className="pool-card__footer">
           <div className="pool-card__stats" aria-label={t("poolStatsLabel")}>
             <span title={t("poolViews")}>
@@ -724,12 +808,6 @@ function PromptPoolDetailDialog({
             <WandSparkles className="size-4" aria-hidden="true" />
             {t("poolUseToCanvas")}
           </button>
-          {item.sourceUrl ? (
-            <a className="secondary-action h-10" href={item.sourceUrl} rel="noreferrer" target="_blank">
-              <ExternalLink className="size-4" aria-hidden="true" />
-              {t("poolOpenSource")}
-            </a>
-          ) : null}
         </footer>
       </div>
     </div>
@@ -845,43 +923,41 @@ function PromptFavoritePopover({
   );
 }
 
-function filterPromptPoolItems(
-  items: PromptPoolItem[],
+function PromptPoolMediaFilterIcon({ value }: { value: PromptPoolMediaFilter }) {
+  if (value === "all") {
+    return <Images className="size-4" aria-hidden="true" />;
+  }
+
+  if (value === "image") {
+    return <ImageIcon className="size-4" aria-hidden="true" />;
+  }
+
+  return <Video className="size-4" aria-hidden="true" />;
+}
+
+function promptPoolSearchParams(
   query: string,
   mediaFilter: PromptPoolMediaFilter,
   modelFilter: string,
   sortMode: PromptPoolSortMode
-): PromptPoolItem[] {
-  const normalizedQuery = normalizeSearchText(query);
-  const filtered = items.filter((item) => {
-    if (mediaFilter !== "all" && item.mediaType !== mediaFilter) {
-      return false;
-    }
+): URLSearchParams {
+  const params = new URLSearchParams();
+  const trimmedQuery = query.trim();
 
-    if (modelFilter !== "all" && item.model !== modelFilter) {
-      return false;
-    }
-
-    if (!normalizedQuery) {
-      return true;
-    }
-
-    return normalizeSearchText(`${item.title} ${item.prompt} ${item.model} ${item.author?.name ?? ""} ${item.author?.username ?? ""}`).includes(
-      normalizedQuery
-    );
-  });
-
-  if (sortMode === "latest") {
-    return filtered;
+  if (trimmedQuery) {
+    params.set("q", trimmedQuery);
+  }
+  if (mediaFilter !== "all") {
+    params.set("mediaType", mediaFilter);
+  }
+  if (modelFilter !== "all") {
+    params.set("model", modelFilter);
+  }
+  if (sortMode !== "latest") {
+    params.set("sort", sortMode);
   }
 
-  return [...filtered].sort((a, b) => {
-    if (sortMode === "ready") {
-      return Number(b.promptReady) - Number(a.promptReady) || popularityScore(b) - popularityScore(a);
-    }
-
-    return popularityScore(b) - popularityScore(a);
-  });
+  return params;
 }
 
 function usePromptPoolColumnCount(): number {
@@ -920,7 +996,7 @@ function promptPoolColumnCountForWidth(width: number): number {
   return 4;
 }
 
-function distributePromptPoolItems(items: PromptPoolItem[], columnCount: number): PromptPoolColumnItem[][] {
+function distributePromptPoolItems(items: PromptPoolListItem[], columnCount: number): PromptPoolColumnItem[][] {
   const safeColumnCount = Math.max(1, columnCount);
   const columns = Array.from({ length: safeColumnCount }, () => ({
     items: [] as PromptPoolColumnItem[],
@@ -941,9 +1017,9 @@ function distributePromptPoolItems(items: PromptPoolItem[], columnCount: number)
   return columns.map((column) => column.items);
 }
 
-function estimatePromptPoolCardHeight(item: PromptPoolItem): number {
+function estimatePromptPoolCardHeight(item: PromptPoolListItem): number {
   const mediaRatio = item.imageWidth && item.imageHeight ? item.imageHeight / item.imageWidth : 0.78;
-  const promptWeight = Math.min(1.2, item.prompt.length / 420);
+  const promptWeight = Math.min(1.2, item.promptExcerpt.length / 420);
   const tagWeight = item.imageWidth && item.imageHeight ? 0.18 : 0.08;
   return Math.min(1.85, Math.max(0.56, mediaRatio)) + promptWeight + tagWeight + 0.9;
 }
@@ -954,7 +1030,7 @@ function promptPoolColumnStyle(columnCount: number): CSSProperties {
   } as CSSProperties;
 }
 
-function promptPoolImageRatioStyle(item: PromptPoolItem): CSSProperties | undefined {
+function promptPoolImageRatioStyle(item: PromptPoolListItem | PromptPoolItem): CSSProperties | undefined {
   if (!item.imageWidth || !item.imageHeight) {
     return undefined;
   }
@@ -962,18 +1038,6 @@ function promptPoolImageRatioStyle(item: PromptPoolItem): CSSProperties | undefi
   return {
     "--pool-image-ratio": `${item.imageWidth} / ${item.imageHeight}`
   } as CSSProperties;
-}
-
-function modelFilterOptions(items: PromptPoolItem[]): { count: number; model: string }[] {
-  const counts = new Map<string, number>();
-  items.forEach((item) => {
-    counts.set(item.model, (counts.get(item.model) ?? 0) + 1);
-  });
-  return Array.from(counts, ([model, count]) => ({ count, model })).sort((a, b) => b.count - a.count || a.model.localeCompare(b.model));
-}
-
-function popularityScore(item: PromptPoolItem): number {
-  return item.stats.views + item.stats.likes * 24 + item.stats.retweets * 40;
 }
 
 function mediaFilterLabel(value: PromptPoolMediaFilter, t: ReturnType<typeof useI18n>["t"]): string {
@@ -990,15 +1054,6 @@ function mediaFilterLabel(value: PromptPoolMediaFilter, t: ReturnType<typeof use
 
 function favoriteGroupName(groupId: string, groups: PromptFavoriteGroup[], t: ReturnType<typeof useI18n>["t"]): string {
   return groups.find((group) => group.id === groupId)?.name ?? groups.find((group) => group.isDefault)?.name ?? t("favoriteDefaultGroup");
-}
-
-function promptExcerpt(promptValue: string): string {
-  const compact = promptValue.replace(/\s+/gu, " ").trim();
-  return compact.length > 48 ? `${compact.slice(0, 48)}...` : compact;
-}
-
-function normalizeSearchText(value: string): string {
-  return value.replace(/\s+/gu, " ").trim().toLocaleLowerCase();
 }
 
 async function writeClipboardText(text: string): Promise<void> {

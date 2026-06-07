@@ -2,13 +2,21 @@ import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import type {
   PromptPoolAuthor,
+  PromptPoolErrorCode,
   PromptPoolItem,
+  PromptPoolItemResponse,
+  PromptPoolListItem,
   PromptPoolMediaType,
+  PromptPoolModelOption,
   PromptPoolResponse,
+  PromptPoolSortMode,
   PromptPoolStats,
   PromptPoolSummary
 } from "@gpt-image-canvas/shared";
 import { runtimePaths } from "../../infrastructure/runtime.js";
+
+const DEFAULT_PROMPT_POOL_LIMIT = 72;
+const MAX_PROMPT_POOL_LIMIT = 144;
 
 const EMPTY_SUMMARY: PromptPoolSummary = {
   promptCount: 0,
@@ -17,20 +25,70 @@ const EMPTY_SUMMARY: PromptPoolSummary = {
   assetCount: 0
 };
 
+type LoadedPromptPool =
+  | {
+      available: true;
+      items: PromptPoolItem[];
+      summary: PromptPoolSummary;
+    }
+  | {
+      available: false;
+      errorCode: PromptPoolErrorCode;
+    };
+
+export interface PromptPoolListQuery {
+  limit?: string | number;
+  mediaType?: string;
+  model?: string;
+  offset?: string | number;
+  q?: string;
+  sort?: string;
+}
+
 let cachedPool:
   | {
       mtimeMs: number;
+      pool: LoadedPromptPool;
       promptsPath: string;
-      response: PromptPoolResponse;
     }
   | undefined;
 
-export async function getPromptPool(): Promise<PromptPoolResponse> {
+export async function getPromptPool(query: PromptPoolListQuery = {}): Promise<PromptPoolResponse> {
+  const pool = await loadPromptPool();
+  if (!pool.available) {
+    return unavailablePromptPoolResponse(pool.errorCode);
+  }
+
+  return toPromptPoolResponse(pool, normalizePromptPoolListQuery(query));
+}
+
+export async function getPromptPoolItem(id: string): Promise<PromptPoolItemResponse> {
+  const pool = await loadPromptPool();
+  if (!pool.available) {
+    return pool;
+  }
+
+  const normalizedId = id.trim();
+  const item = pool.items.find((candidate) => candidate.id === normalizedId);
+  if (!item) {
+    return {
+      available: false,
+      errorCode: "prompt_pool_item_not_found"
+    };
+  }
+
+  return {
+    available: true,
+    item
+  };
+}
+
+async function loadPromptPool(): Promise<LoadedPromptPool> {
   try {
     const { promptsPath, promptsStat, summaryPath } = await resolvePromptPoolFiles();
     const promptsMtimeMs = Number(promptsStat.mtimeMs);
     if (cachedPool && cachedPool.promptsPath === promptsPath && cachedPool.mtimeMs === promptsMtimeMs) {
-      return cachedPool.response;
+      return cachedPool.pool;
     }
 
     const [promptsBuffer, summaryBuffer] = await Promise.all([
@@ -44,7 +102,7 @@ export async function getPromptPool(): Promise<PromptPoolResponse> {
 
     const rawSummary = parseOptionalJson(summaryBuffer);
     const rawBase = normalizeRawBase(rawSummary);
-    const response: PromptPoolResponse = {
+    const pool: LoadedPromptPool = {
       available: true,
       items: rawPrompts.flatMap((item) => {
         const normalized = normalizePromptPoolItem(item, rawBase);
@@ -54,10 +112,10 @@ export async function getPromptPool(): Promise<PromptPoolResponse> {
     };
     cachedPool = {
       mtimeMs: promptsMtimeMs,
-      promptsPath,
-      response
+      pool,
+      promptsPath
     };
-    return response;
+    return pool;
   } catch {
     return unavailablePool("prompt_pool_missing");
   }
@@ -82,12 +140,126 @@ async function resolvePromptPoolFiles(): Promise<{ promptsPath: string; promptsS
   throw new Error("Prompt pool data was not found.");
 }
 
-function unavailablePool(errorCode: PromptPoolResponse["errorCode"]): PromptPoolResponse {
+function unavailablePool(errorCode: PromptPoolErrorCode): Extract<LoadedPromptPool, { available: false }> {
+  return {
+    available: false,
+    errorCode
+  };
+}
+
+function unavailablePromptPoolResponse(errorCode: PromptPoolErrorCode): PromptPoolResponse {
   return {
     available: false,
     errorCode,
     items: [],
-    summary: EMPTY_SUMMARY
+    limit: DEFAULT_PROMPT_POOL_LIMIT,
+    modelOptions: [],
+    nextOffset: null,
+    offset: 0,
+    readyCount: 0,
+    summary: EMPTY_SUMMARY,
+    totalCount: 0
+  };
+}
+
+function toPromptPoolResponse(
+  pool: Extract<LoadedPromptPool, { available: true }>,
+  query: NormalizedPromptPoolListQuery
+): PromptPoolResponse {
+  const searchableItems = filterPromptPoolItemsBySearchAndMedia(pool.items, query);
+  const modelOptions = promptPoolModelOptions(searchableItems);
+  const filteredItems = filterPromptPoolItemsByModel(searchableItems, query.model);
+  const sortedItems = sortPromptPoolItems(filteredItems, query.sort);
+  const pageItems = sortedItems.slice(query.offset, query.offset + query.limit);
+  const nextOffset = query.offset + query.limit < sortedItems.length ? query.offset + query.limit : null;
+
+  return {
+    available: true,
+    items: pageItems.map(toPromptPoolListItem),
+    limit: query.limit,
+    modelOptions,
+    nextOffset,
+    offset: query.offset,
+    readyCount: filteredItems.filter((item) => item.promptReady).length,
+    summary: pool.summary,
+    totalCount: filteredItems.length
+  };
+}
+
+interface NormalizedPromptPoolListQuery {
+  limit: number;
+  mediaType: "all" | PromptPoolMediaType;
+  model: string;
+  offset: number;
+  q: string;
+  sort: PromptPoolSortMode;
+}
+
+function normalizePromptPoolListQuery(query: PromptPoolListQuery): NormalizedPromptPoolListQuery {
+  return {
+    limit: readBoundedInteger(query.limit, DEFAULT_PROMPT_POOL_LIMIT, 1, MAX_PROMPT_POOL_LIMIT),
+    mediaType: normalizeMediaFilter(query.mediaType),
+    model: readString(query.model) ?? "all",
+    offset: readBoundedInteger(query.offset, 0, 0, Number.MAX_SAFE_INTEGER),
+    q: readString(query.q) ?? "",
+    sort: normalizeSortMode(query.sort)
+  };
+}
+
+function filterPromptPoolItemsBySearchAndMedia(
+  items: PromptPoolItem[],
+  query: NormalizedPromptPoolListQuery
+): PromptPoolItem[] {
+  const normalizedQuery = normalizeSearchText(query.q);
+
+  return items.filter((item) => {
+    if (query.mediaType !== "all" && item.mediaType !== query.mediaType) {
+      return false;
+    }
+
+    if (!normalizedQuery) {
+      return true;
+    }
+
+    return normalizeSearchText(
+      `${item.title} ${item.prompt} ${item.model} ${item.author?.name ?? ""} ${item.author?.username ?? ""}`
+    ).includes(normalizedQuery);
+  });
+}
+
+function filterPromptPoolItemsByModel(items: PromptPoolItem[], model: string): PromptPoolItem[] {
+  return model === "all" ? items : items.filter((item) => item.model === model);
+}
+
+function sortPromptPoolItems(items: PromptPoolItem[], sort: PromptPoolSortMode): PromptPoolItem[] {
+  if (sort === "latest") {
+    return items;
+  }
+
+  return [...items].sort((a, b) => {
+    if (sort === "ready") {
+      return Number(b.promptReady) - Number(a.promptReady) || popularityScore(b) - popularityScore(a);
+    }
+
+    return popularityScore(b) - popularityScore(a);
+  });
+}
+
+function promptPoolModelOptions(items: PromptPoolItem[]): PromptPoolModelOption[] {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    counts.set(item.model, (counts.get(item.model) ?? 0) + 1);
+  }
+
+  return Array.from(counts, ([model, count]) => ({ count, model })).sort((a, b) => b.count - a.count || a.model.localeCompare(b.model));
+}
+
+function toPromptPoolListItem(item: PromptPoolItem): PromptPoolListItem {
+  const { prompt, ...rest } = item;
+  return {
+    ...rest,
+    promptExcerpt: promptExcerpt(prompt, 96),
+    promptLength: prompt.length
   };
 }
 
@@ -250,6 +422,22 @@ function normalizeMediaType(value: unknown): PromptPoolMediaType {
   return value === "video" ? "video" : "image";
 }
 
+function normalizeMediaFilter(value: string | undefined): "all" | PromptPoolMediaType {
+  return value === "image" || value === "video" ? value : "all";
+}
+
+function normalizeSortMode(value: string | undefined): PromptPoolSortMode {
+  return value === "popular" || value === "ready" ? value : "latest";
+}
+
+function popularityScore(item: PromptPoolItem): number {
+  return item.stats.views + item.stats.likes * 24 + item.stats.retweets * 40;
+}
+
+function normalizeSearchText(value: string): string {
+  return value.replace(/\s+/gu, " ").trim().toLocaleLowerCase();
+}
+
 function githubRawUrlForAssetPath(rawBase: string, value: string): string | undefined {
   const normalized = normalizeRelativeAssetPath(value);
   if (!normalized) {
@@ -300,6 +488,15 @@ function readPositiveNumber(value: unknown): number | undefined {
 
 function readNonNegativeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function readBoundedInteger(value: string | number | undefined, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === "number" ? value : Number.parseInt(value ?? "", 10);
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, parsed));
 }
 
 function firstString(value: string[]): string | undefined {
