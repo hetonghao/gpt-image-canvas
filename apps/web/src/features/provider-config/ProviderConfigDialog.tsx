@@ -20,7 +20,7 @@ import {
   X
 } from "lucide-react";
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useMemo, useState, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import {
   PROVIDER_SOURCE_IDS,
   isHostedAiCoveAdapterMode,
@@ -150,6 +150,7 @@ export function ProviderConfigDialog({
   const [message, setMessage] = useState<DialogMessage | null>(null);
   const [draggingSourceId, setDraggingSourceId] = useState<ProviderSourceId | null>(null);
   const [activeTab, setActiveTab] = useState<ProviderConfigTab>(initialTab);
+  const providerConfigBodyRef = useRef<HTMLDivElement | null>(null);
   const isAiCoveMode = isHostedRuntime || isHostedAiCoveAdapterMode(hostSession?.adapter.mode);
   const gatewayBaseUrl = hostSession?.adapter.gatewayBaseUrl ?? queryBaseUrlSeed;
   const hasHostApiKeys = hostApiKeys.length > 0;
@@ -175,6 +176,9 @@ export function ProviderConfigDialog({
   const activeSourceTimeout = activeSource?.details.timeoutMs;
   const showAiCoveCondensedConfig = isAiCoveMode;
   const isOnboarding = mode === "onboarding";
+  const isSummaryTab = activeTab === "summary";
+  const isSummaryOnboarding = isOnboarding && isSummaryTab;
+  const showOnboardingGuide = isOnboarding && !isSummaryTab;
   const isInitialConfigReady =
     Boolean(config && agentConfig && summaryConfig) || (!isLoading && !isAgentConfigLoading && !isSummaryConfigLoading);
   const summaryModelApiKeyId = resolveSummaryModelApiKeyId({
@@ -384,6 +388,10 @@ export function ProviderConfigDialog({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [onClose]);
+
+  useEffect(() => {
+    providerConfigBodyRef.current?.scrollTo({ top: 0 });
+  }, [activeTab]);
 
   function applyProviderConfig(nextConfig: ProviderConfigResponse, context: HostSessionResponse | null = hostSession): void {
     const nextIsAiCoveMode = isHostedAiCoveAdapterMode(context?.adapter.mode);
@@ -895,12 +903,12 @@ export function ProviderConfigDialog({
           </button>
         </header>
 
-        <div className="provider-config-dialog__body">
+        <div className="provider-config-dialog__body" ref={providerConfigBodyRef}>
           {!isInitialConfigReady ? (
             <ProviderConfigSkeleton label={t("providerConfigLoading")} />
           ) : (
             <>
-              {isOnboarding ? (
+              {showOnboardingGuide ? (
                 <section className="provider-config-onboarding" data-testid="provider-config-onboarding">
                   <div className="provider-config-onboarding__icon">
                     <KeyRound className="size-4" aria-hidden="true" />
@@ -1393,24 +1401,30 @@ export function ProviderConfigDialog({
               role="tabpanel"
             >
               <div className="provider-workspace provider-workspace--agent">
-                <section className="provider-detail-card provider-detail-card--agent" data-testid="provider-summary-section" aria-labelledby="provider-summary-title">
-                  <header className="provider-detail-card__header">
-                    <span className="provider-detail-card__icon">
-                      <CircleHelp className="size-4" aria-hidden="true" />
-                    </span>
-                    <div className="min-w-0">
-                      <h3 id="provider-summary-title">{t("summaryLlmTitle")}</h3>
-                      <p>{t("summaryLlmDescription")}</p>
-                    </div>
-                    <ProviderAvailabilityBadge available={summaryConfig?.configured ?? false} />
-                  </header>
+                <section
+                  className={`provider-detail-card provider-detail-card--agent${isSummaryOnboarding ? " provider-detail-card--summary-onboarding" : ""}`}
+                  data-testid="provider-summary-section"
+                  aria-labelledby="provider-summary-title"
+                >
+                  {isSummaryOnboarding ? null : (
+                    <header className="provider-detail-card__header">
+                      <span className="provider-detail-card__icon">
+                        <CircleHelp className="size-4" aria-hidden="true" />
+                      </span>
+                      <div className="min-w-0">
+                        <h3 id="provider-summary-title">{t("summaryLlmTitle")}</h3>
+                        <p>{t("summaryLlmDescription")}</p>
+                      </div>
+                      <ProviderAvailabilityBadge available={summaryConfig?.configured ?? false} />
+                    </header>
+                  )}
                   {isAiCoveMode && !hasHostApiKeys ? (
                     <div className="provider-secret-pill" role="alert">
                       <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
                       {t("hostApiKeysEmpty")}
                     </div>
                   ) : null}
-                  <p className="provider-config-inline-hint" data-testid="summary-llm-gemini-hint">
+                  <p className={`provider-config-inline-hint${isSummaryOnboarding ? " provider-config-inline-hint--compact" : ""}`} data-testid="summary-llm-gemini-hint">
                     <strong>!</strong>
                     <span>{t("summaryLlmGeminiHint")}</span>
                   </p>

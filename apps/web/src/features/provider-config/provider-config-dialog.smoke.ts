@@ -6,8 +6,13 @@ import { fileURLToPath } from "node:url";
 
 const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "ProviderConfigDialog.tsx");
 const cssPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../styles/provider-config.css");
+const responsiveCssPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../styles/responsive.css");
 
-const [source, styles] = await Promise.all([readFile(sourcePath, "utf8"), readFile(cssPath, "utf8")]);
+const [source, styles, responsiveStyles] = await Promise.all([
+  readFile(sourcePath, "utf8"),
+  readFile(cssPath, "utf8"),
+  readFile(responsiveCssPath, "utf8")
+]);
 
 function cssRule(selector: string): string {
   const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -23,6 +28,39 @@ test("keeps the provider config dialog layout stable during initial data loading
 test("lets the loaded provider config dialog height adapt to its content", () => {
   assert.doesNotMatch(cssRule(".provider-config-dialog"), /min-height/u, "Loaded ProviderConfigDialog should not keep the skeleton min-height");
   assert.match(cssRule(".provider-config-dialog--initializing"), /min-height/u, "Only the initializing ProviderConfigDialog should reserve skeleton height");
+});
+
+test("keeps provider config tab changes inside a stable scrollable dialog body", () => {
+  assert.match(source, /providerConfigBodyRef/u, "ProviderConfigDialog should keep a ref to its scrollable body");
+  assert.match(source, /providerConfigBodyRef\.current\?\.scrollTo\(\{ top: 0 \}\)/u, "ProviderConfigDialog should reset body scroll when tabs change");
+  assert.match(cssRule(".provider-config-dialog__body"), /flex:\s*1 1 auto/u, "ProviderConfigDialog body should own the available vertical space");
+  assert.match(cssRule(".provider-config-dialog__body"), /min-height:\s*0/u, "ProviderConfigDialog body should be allowed to shrink and scroll inside the modal");
+});
+
+test("uses the regular summary layout during provider onboarding", () => {
+  assert.match(source, /const isSummaryTab = activeTab === "summary";/u, "Provider config should name the active Summary tab state once");
+  assert.match(source, /const isSummaryOnboarding = isOnboarding && isSummaryTab;/u, "Provider onboarding should detect the optional Summary tab separately");
+  assert.match(source, /const showOnboardingGuide = isOnboarding && !isSummaryTab;/u, "Provider onboarding should drop the large guide card on the optional Summary tab");
+  assert.match(source, /\{showOnboardingGuide \? \(/u, "Provider onboarding guide visibility should follow the summary-tab check");
+  assert.match(source, /\{isSummaryOnboarding \? null : \(\s*<header className="provider-detail-card__header">/u, "Summary onboarding should remove the duplicated Summary header row");
+  assert.match(source, /provider-config-inline-hint\$\{isSummaryOnboarding \? " provider-config-inline-hint--compact" : ""\}/u, "Summary onboarding should use the compact hint treatment");
+  assert.match(styles, /\.provider-detail-card--summary-onboarding/u, "Summary onboarding should have its own compact header styles");
+  assert.match(styles, /\.provider-config-inline-hint--compact/u, "Summary onboarding should have a compact hint style");
+  assert.match(styles, /\.provider-detail-card--summary-onboarding \.provider-form-grid/u, "Summary onboarding should tighten its field spacing");
+  assert.match(styles, /\.provider-detail-card--summary-onboarding \.provider-toggle-field/u, "Summary onboarding should compact the final toggle row");
+});
+
+test("keeps the mobile provider config footer compact", () => {
+  assert.match(
+    responsiveStyles,
+    /\.provider-config-dialog__footer\s*\{\s*display:\s*grid;\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/u,
+    "Mobile provider config footer should keep Refresh and Save side by side"
+  );
+  assert.match(
+    responsiveStyles,
+    /\.provider-detail-card--agent \.provider-form-grid\s*\{\s*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/u,
+    "Mobile Agent and Summary forms should keep compact fields in two columns"
+  );
 });
 
 test("hides the Codex login action in hosted AI Cove mode", () => {

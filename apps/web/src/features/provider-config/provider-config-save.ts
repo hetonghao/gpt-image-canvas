@@ -96,7 +96,7 @@ export function summaryConfigSaveIntent({
   }
 
   if (isAiCoveMode) {
-    return apiKey || model ? "save" : "skip";
+    return model ? "save" : "skip";
   }
 
   return hasSavedApiKey || apiKey || model || (baseUrl && baseUrl !== queryBaseUrlSeed) ? "save" : "skip";

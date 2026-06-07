@@ -114,6 +114,42 @@ test("saves Summary config when a Gemini model is provided", () => {
   );
 });
 
+test("skips AI Cove Summary config when only an API key is selected", () => {
+  assert.equal(
+    summaryConfigSaveIntent({
+      form: {
+        apiKey: "",
+        apiKeyId: "host-key-1",
+        baseUrl: "https://api.ai-cove.com/v1",
+        model: "",
+        supportsVision: true
+      },
+      hasSavedApiKey: false,
+      isAiCoveMode: true,
+      queryBaseUrlSeed: ""
+    }),
+    "skip"
+  );
+});
+
+test("saves AI Cove Summary config when a model is selected", () => {
+  assert.equal(
+    summaryConfigSaveIntent({
+      form: {
+        apiKey: "",
+        apiKeyId: "host-key-1",
+        baseUrl: "https://api.ai-cove.com/v1",
+        model: "gemini-2.5-flash",
+        supportsVision: true
+      },
+      hasSavedApiKey: false,
+      isAiCoveMode: true,
+      queryBaseUrlSeed: ""
+    }),
+    "save"
+  );
+});
+
 test("clears saved Summary config when all editable fields are blank", () => {
   assert.equal(
     summaryConfigSaveIntent({

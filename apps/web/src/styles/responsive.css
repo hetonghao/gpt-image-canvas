@@ -255,7 +255,7 @@
 
   .provider-config-dialog__footer {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .provider-config-dialog__body {
@@ -334,6 +334,16 @@
 
   .provider-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .provider-detail-card--agent .provider-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .provider-detail-card--agent .provider-field--span,
+  .provider-detail-card--agent .provider-toggle-field {
+    grid-column: 1 / -1;
   }
 
   .provider-config-skeleton__grid {
