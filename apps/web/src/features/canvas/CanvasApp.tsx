@@ -146,6 +146,8 @@ import {
   fetchPromptFavorites,
   markPromptFavoriteUsed
 } from "../prompt-favorites/promptFavoritesApi";
+import magicWandAutoIconUrl from "../../assets/magic-wand-auto.png";
+import magicWandManualIconUrl from "../../assets/magic-wand-manual.png";
 import {
   createManualRegionPromptItem,
   defaultRegionForPoint,
@@ -199,6 +201,26 @@ const TLDRAW_LICENSE_KEY =
 const TLDRAW_USER_ID = "gpt-image-canvas-local-user";
 type ProviderConfigTab = "image" | "agent";
 type ProviderConfigDialogMode = "default" | "onboarding";
+type MagicWandRegionIconVariant = "auto" | "manual";
+
+function MagicWandRegionIcon({
+  className,
+  variant
+}: {
+  className?: string;
+  variant: MagicWandRegionIconVariant;
+}) {
+  return (
+    <img
+      alt=""
+      aria-hidden="true"
+      className={className ? `magic-wand-icon ${className}` : "magic-wand-icon"}
+      data-variant={variant}
+      draggable={false}
+      src={variant === "manual" ? magicWandManualIconUrl : magicWandAutoIconUrl}
+    />
+  );
+}
 
 function setGenerationPlaceholderMotionQuiet(isQuiet: boolean): void {
   const root = document.documentElement;
@@ -7595,7 +7617,7 @@ export function App() {
                     data-testid="region-mode-auto"
                     onClick={() => selectRegionAnnotationMode("auto")}
                   >
-                    <Sparkles className="size-3.5" aria-hidden="true" />
+                    <MagicWandRegionIcon className="size-3.5" variant="auto" />
                     {t("regionPromptAutoMode")}
                   </button>
                   <button
@@ -7605,7 +7627,7 @@ export function App() {
                     data-testid="region-mode-manual"
                     onClick={() => selectRegionAnnotationMode("manual")}
                   >
-                    <MapPin className="size-3.5" aria-hidden="true" />
+                    <MagicWandRegionIcon className="size-3.5" variant="manual" />
                     {t("regionPromptManualMode")}
                   </button>
                 </div>
@@ -9062,7 +9084,7 @@ export function App() {
                 >
                   <header className="region-focus-card__head">
                     <span className="region-focus-card__icon" aria-hidden="true">
-                      {preview.status === "ready" ? <CheckCircle2 className="size-4" /> : <Sparkles className="size-3.5" />}
+                      {preview.status === "ready" ? <CheckCircle2 className="size-4" /> : <MagicWandRegionIcon className="size-3.5" variant="auto" />}
                     </span>
                     <div>
                       <strong>{preview.label || t("regionPromptFocusTitle")}</strong>
@@ -9105,7 +9127,7 @@ export function App() {
                   style={regionPromptFlightStyle(flight)}
                   onAnimationEnd={() => finishRegionPromptFlight(flight)}
                 >
-                  <Sparkles className="size-4" aria-hidden="true" />
+                  <MagicWandRegionIcon className="size-4" variant="auto" />
                 </span>
               ))}
             </div>,

@@ -19,6 +19,7 @@
     "smoke:web:provider-config-dialog": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/provider-config/provider-config-dialog.smoke.ts",
     "smoke:web:provider-status-popover": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/provider-status-popover.smoke.ts",
     "smoke:web:region-prompt": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/region-prompt.smoke.ts",
+    "smoke:web:region-prompt-icons": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/region-prompt-icons.smoke.ts",
     "smoke:web:deferred-dialog-dependencies": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/deferred-dialog-dependencies.smoke.ts",
     "smoke:web:deferred-canvas-startup-dependencies": "pnpm --filter @gpt-image-canvas/web build && pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/deferred-canvas-startup-dependencies.smoke.ts",
     "smoke:web:generation-placeholder-motion": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/generation-placeholder-motion.smoke.ts",

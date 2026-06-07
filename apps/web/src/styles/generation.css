@@ -554,6 +554,27 @@
   stroke-width: 2.15;
 }
 
+.magic-wand-icon {
+  display: block;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 auto;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 1px rgb(126 50 26 / 0.2));
+  pointer-events: none;
+}
+
+.region-annotation-switch__button .magic-wand-icon,
+.region-focus-card__icon .magic-wand-icon,
+.region-prompt-flight-star .magic-wand-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.region-annotation-switch__button .magic-wand-icon[data-variant="manual"] {
+  transform: translateY(0.02rem);
+}
+
 .region-focus-card[data-status="ready"] .region-focus-card__icon {
   background: #dcfce7;
   color: #15803d;
@@ -829,11 +850,11 @@
 }
 
 .app-root[data-region-modifier-active="true"][data-region-annotation-mode="auto"] .tl-canvas {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='30' height='30' viewBox='0 0 30 30'%3E%3Cpath d='M7 7L23 23' stroke='%23fffaf2' stroke-width='6' stroke-linecap='round'/%3E%3Cpath d='M7 7L23 23' stroke='%230f766e' stroke-width='3.1' stroke-linecap='round'/%3E%3Cpath d='M6 3l1.2 2.7L10 7 7.2 8.2 6 11 4.8 8.2 2 7l2.8-1.3L6 3z' fill='%23f59e0b' stroke='%23fffaf2' stroke-width='0.7'/%3E%3Cpath d='M22 6l0.8 1.8L25 8.6l-2.2 0.8L22 12l-0.8-2.6L19 8.6l2.2-0.8L22 6z' fill='%23fbbf24'/%3E%3C/svg%3E") 7 7, crosshair !important;
+  cursor: url("../assets/magic-wand-cursor-auto.png") 8 8, crosshair !important;
 }
 
 .app-root[data-region-modifier-active="true"][data-region-annotation-mode="manual"] .tl-canvas {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='30' height='30' viewBox='0 0 30 30'%3E%3Cpath d='M14 3c-4.1 0-7.4 3.1-7.4 7 0 5.2 7.4 13.7 7.4 13.7S21.4 15.2 21.4 10c0-3.9-3.3-7-7.4-7z' fill='%23fffaf2' stroke='%237e321a' stroke-width='2'/%3E%3Ccircle cx='14' cy='10' r='2.8' fill='%230f766e'/%3E%3Cpath d='M8 25h12' stroke='%230f766e' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E") 14 24, crosshair !important;
+  cursor: url("../assets/magic-wand-cursor-manual.png") 22 22, crosshair !important;
 }
 
 .app-root[data-region-modifier-active="true"] .ai-panel-backdrop {
