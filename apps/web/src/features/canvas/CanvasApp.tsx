@@ -306,14 +306,50 @@ const defaultStorageConfigForm: StorageConfigFormState = {
 
 const canvasAssetStore: TLAssetStore = {
   async upload(_asset, file) {
-    return {
-      src: await blobToDataUrl(file)
-    };
+    return uploadCanvasAsset(file);
   },
   resolve(asset, context) {
     return resolveCanvasAssetUrl(asset, context);
   }
 };
+
+async function uploadCanvasAsset(file: File): Promise<{ src: string; meta: { localAssetId: string } }> {
+  const response = await apiFetch("/api/assets", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      dataUrl: await blobToDataUrl(file),
+      fileName: file.name
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(await readAssetUploadError(response));
+  }
+
+  const asset = (await response.json()) as GeneratedAsset;
+  return {
+    src: normalizeAssetUrl(asset.url),
+    meta: {
+      localAssetId: asset.id
+    }
+  };
+}
+
+async function readAssetUploadError(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: { message?: unknown } };
+    if (typeof body.error?.message === "string" && body.error.message.trim()) {
+      return body.error.message;
+    }
+  } catch {
+    // Fall through to the generic upload error.
+  }
+
+  return `Asset upload failed (${response.status}).`;
+}
 
 const promptStarters = [
   {

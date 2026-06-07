@@ -306,6 +306,14 @@ function persistedReferenceAssetIdCandidates(assetId: string): string[] {
 }
 
 export async function saveReferenceImageInput(input: ReferenceImageInput, hostContext?: HostContext): Promise<GeneratedAsset> {
+  return saveImageAssetInput(input, hostContext);
+}
+
+export async function saveUploadedImageAsset(input: ReferenceImageInput, hostContext?: HostContext): Promise<GeneratedAsset> {
+  return saveImageAssetInput(input, hostContext);
+}
+
+async function saveImageAssetInput(input: ReferenceImageInput, hostContext?: HostContext): Promise<GeneratedAsset> {
   const parsed = referenceDataUrlToBytes(input);
   const imageSize = await readImageSize(parsed.bytes);
   if (!imageSize) {
@@ -314,8 +322,8 @@ export async function saveReferenceImageInput(input: ReferenceImageInput, hostCo
 
   const assetId = randomUUID();
   const extension = extensionForMimeType(parsed.mimeType);
-  const fileName = `${assetId}.${extension}`;
-  const relativePath = `assets/${fileName}`;
+  const fileName = fileNameForAsset(input.fileName, assetId, extension);
+  const relativePath = `assets/${assetId}.${extension}`;
   const filePath = resolve(runtimePaths.dataDir, relativePath);
   const createdAt = new Date().toISOString();
 
@@ -341,6 +349,22 @@ export async function saveReferenceImageInput(input: ReferenceImageInput, hostCo
     width: imageSize.width,
     height: imageSize.height
   };
+}
+
+function fileNameForAsset(inputFileName: string | undefined, assetId: string, extension: string): string {
+  const fallback = `${assetId}.${extension}`;
+  const baseName = inputFileName?.trim().split(/[\\/]/u).filter(Boolean).at(-1);
+  if (!baseName) {
+    return fallback;
+  }
+
+  const cleaned = baseName.replace(/[\u0000-\u001f\u007f]/gu, "").trim();
+  if (!cleaned) {
+    return fallback;
+  }
+
+  const withoutExtension = cleaned.replace(/\.[a-z0-9]{1,8}$/iu, "").trim();
+  return `${(withoutExtension || assetId).slice(0, 120)}.${extension}`;
 }
 
 function referenceDataUrlToBytes(input: ReferenceImageInput): { bytes: Buffer; mimeType: string } {

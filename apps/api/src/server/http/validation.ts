@@ -42,6 +42,10 @@ export interface ProjectPayload {
   snapshotJson: string;
 }
 
+export interface AssetUploadPayload extends ReferenceImageInput {
+  dataUrl: string;
+}
+
 export function logProjectSaveRejected(error: ErrorResponseBody, request: Request): void {
   console.warn(
     `Project save rejected: ${error.error.code}. ${error.error.message}${formatRequestBodySummary(request)}`
@@ -1093,6 +1097,32 @@ export function parseProjectPayload(input: unknown):
     ok: true,
     value: {
       snapshotJson
+    }
+  };
+}
+
+export function parseAssetUploadPayload(input: unknown): ParseResult<AssetUploadPayload> {
+  if (!isRecord(input)) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_asset_upload", "Asset upload payload must be a JSON object.")
+    };
+  }
+
+  const dataUrl = input.dataUrl;
+  if (typeof dataUrl !== "string" || dataUrl.trim().length === 0) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_asset_upload", "Asset upload payload must include image dataUrl.")
+    };
+  }
+
+  const fileName = parseOptionalString(input.fileName);
+  return {
+    ok: true,
+    value: {
+      dataUrl,
+      fileName
     }
   };
 }

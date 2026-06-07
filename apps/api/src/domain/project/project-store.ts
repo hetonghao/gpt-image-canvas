@@ -46,6 +46,85 @@ function parseSnapshot(snapshotJson: string): unknown | null {
   return JSON.parse(snapshotJson) as unknown;
 }
 
+function cleanSnapshotJson(snapshotJson: string): string {
+  const snapshot = parseSnapshot(snapshotJson);
+  const cleanedSnapshot = removeUnreferencedAssetsFromSnapshot(snapshot);
+  return cleanedSnapshot === snapshot ? snapshotJson : JSON.stringify(cleanedSnapshot);
+}
+
+function removeUnreferencedAssetsFromSnapshot<TSnapshot>(snapshot: TSnapshot): TSnapshot {
+  if (!isRecord(snapshot)) {
+    return snapshot;
+  }
+
+  if (isRecord(snapshot.document)) {
+    const document = removeUnreferencedAssetsFromStoreSnapshot(snapshot.document);
+    return document === snapshot.document ? snapshot : ({ ...snapshot, document } as TSnapshot);
+  }
+
+  return removeUnreferencedAssetsFromStoreSnapshot(snapshot);
+}
+
+function removeUnreferencedAssetsFromStoreSnapshot<TSnapshot>(snapshot: TSnapshot): TSnapshot {
+  if (!isRecord(snapshot) || !isRecord(snapshot.store)) {
+    return snapshot;
+  }
+
+  const assetIds = new Set(
+    Object.entries(snapshot.store)
+      .filter(([id, record]) => isAssetSnapshotRecord(id, record))
+      .map(([id]) => id)
+  );
+  if (assetIds.size === 0) {
+    return snapshot;
+  }
+
+  const referencedAssetIds = new Set<string>();
+  for (const [id, record] of Object.entries(snapshot.store)) {
+    if (!isAssetSnapshotRecord(id, record)) {
+      collectAssetReferences(record, assetIds, referencedAssetIds);
+    }
+  }
+
+  let changed = false;
+  const store: Record<string, unknown> = {};
+  for (const [id, record] of Object.entries(snapshot.store)) {
+    if (isAssetSnapshotRecord(id, record) && !referencedAssetIds.has(id)) {
+      changed = true;
+      continue;
+    }
+
+    store[id] = record;
+  }
+
+  return changed ? ({ ...snapshot, store } as TSnapshot) : snapshot;
+}
+
+function collectAssetReferences(value: unknown, assetIds: Set<string>, referencedAssetIds: Set<string>): void {
+  if (typeof value === "string") {
+    if (assetIds.has(value)) {
+      referencedAssetIds.add(value);
+    }
+    return;
+  }
+
+  if (!isRecord(value)) {
+    return;
+  }
+
+  for (const child of Object.values(value)) {
+    collectAssetReferences(child, assetIds, referencedAssetIds);
+  }
+}
+
+function isAssetSnapshotRecord(id: string, value: unknown): boolean {
+  return isRecord(value) && (value.typeName === "asset" || id.startsWith("asset:"));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function ensureDefaultProject(hostContext?: HostContext): void {
   const existing = getDefaultProjectRow(hostContext);
 
@@ -73,11 +152,12 @@ export function saveProjectSnapshot(input: ProjectSnapshotInput, hostContext?: H
   const updatedAt = nowIso();
   const current = getDefaultProjectRow(hostContext);
   const projectId = scopedSingletonId(DEFAULT_PROJECT_ID, hostContext);
+  const snapshotJson = cleanSnapshotJson(input.snapshotJson);
 
   db.update(projects)
     .set({
       name: input.name ?? current?.name ?? DEFAULT_PROJECT_NAME,
-      snapshotJson: input.snapshotJson,
+      snapshotJson,
       updatedAt
     })
     .where(and(eq(projects.id, projectId), eq(projects.userId, hostUserId(hostContext))))
@@ -116,7 +196,7 @@ export function getProjectState(hostContext?: HostContext): ProjectState {
   return {
     id: project.id,
     name: project.name,
-    snapshot: parseSnapshot(project.snapshotJson),
+    snapshot: removeUnreferencedAssetsFromSnapshot(parseSnapshot(project.snapshotJson)),
     history: getGenerationHistory(hostContext),
     updatedAt: project.updatedAt
   };

@@ -55,6 +55,60 @@ try {
     assert.equal(largePayload.ok, true);
   });
 
+  test("project snapshots omit unreferenced asset records", () => {
+    const snapshot = {
+      document: {
+        store: {
+          "document:document": {
+            id: "document:document",
+            typeName: "document"
+          },
+          "page:page": {
+            id: "page:page",
+            typeName: "page"
+          },
+          "asset:visible": {
+            id: "asset:visible",
+            typeName: "asset",
+            type: "image",
+            props: {
+              src: "/api/assets/visible",
+              w: 1,
+              h: 1
+            }
+          },
+          "asset:orphan": {
+            id: "asset:orphan",
+            typeName: "asset",
+            type: "image",
+            props: {
+              src: "data:image/png;base64,AAAA",
+              w: 1,
+              h: 1
+            }
+          },
+          "shape:visible": {
+            id: "shape:visible",
+            typeName: "shape",
+            type: "image",
+            props: {
+              assetId: "asset:visible",
+              w: 1,
+              h: 1
+            }
+          }
+        }
+      }
+    };
+
+    saveProjectSnapshot({ snapshotJson: JSON.stringify(snapshot) }, hostContext);
+
+    const project = getProjectState(hostContext);
+    const store = (project.snapshot as typeof snapshot).document.store;
+    assert.ok(store["asset:visible"], "referenced assets should be preserved");
+    assert.ok(!("asset:orphan" in store), "unreferenced assets should be removed from project snapshots");
+  });
+
   console.log("project-store.smoke.ts passed");
 } finally {
   rmSync(dataDir, { recursive: true, force: true });
