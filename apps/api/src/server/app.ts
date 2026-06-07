@@ -1,5 +1,6 @@
 import { relative } from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { compress } from "hono/compress";
 import { Hono, type MiddlewareHandler } from "hono";
 import { WebSocketServer } from "ws";
 import { runtimePaths } from "../infrastructure/runtime.js";
@@ -41,6 +42,7 @@ export function createApp(): Hono {
   });
 
   app.use("/api/*", hostContextMiddleware);
+  app.use("/api/project", compress());
 
   registerCoreRoutes(app);
   registerHostRoutes(app);

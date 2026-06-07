@@ -3857,7 +3857,7 @@ export function App() {
       });
 
       if (!response.ok) {
-        throw new Error(`Project save failed with ${response.status}`);
+        throw new Error(await readErrorMessage(response, locale, t));
       }
 
       if (saveRequestRef.current === requestId) {

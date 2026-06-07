@@ -17,11 +17,18 @@ import type { HostContext } from "../host/host-adapter.js";
 
 export const DEFAULT_PROJECT_ID = "default";
 const DEFAULT_PROJECT_NAME = "Default Project";
+const LARGE_PROJECT_SNAPSHOT_WARNING_BYTES = 1024 * 1024;
 const fallbackWarnings = new Set<string>();
 
 interface ProjectSnapshotInput {
   name?: string;
   snapshotJson: string;
+}
+
+interface ProjectSaveResult {
+  id: string;
+  ok: true;
+  updatedAt: string;
 }
 
 export interface GalleryExportAsset {
@@ -60,11 +67,12 @@ export function ensureDefaultProject(hostContext?: HostContext): void {
     .run();
 }
 
-export function saveProjectSnapshot(input: ProjectSnapshotInput, hostContext?: HostContext): ProjectState {
+export function saveProjectSnapshot(input: ProjectSnapshotInput, hostContext?: HostContext): ProjectSaveResult {
   ensureDefaultProject(hostContext);
 
   const updatedAt = nowIso();
   const current = getDefaultProjectRow(hostContext);
+  const projectId = scopedSingletonId(DEFAULT_PROJECT_ID, hostContext);
 
   db.update(projects)
     .set({
@@ -72,10 +80,14 @@ export function saveProjectSnapshot(input: ProjectSnapshotInput, hostContext?: H
       snapshotJson: input.snapshotJson,
       updatedAt
     })
-    .where(and(eq(projects.id, scopedSingletonId(DEFAULT_PROJECT_ID, hostContext)), eq(projects.userId, hostUserId(hostContext))))
+    .where(and(eq(projects.id, projectId), eq(projects.userId, hostUserId(hostContext))))
     .run();
 
-  return getProjectState(hostContext);
+  return {
+    id: projectId,
+    ok: true,
+    updatedAt
+  };
 }
 
 export function getProjectState(hostContext?: HostContext): ProjectState {
@@ -91,6 +103,14 @@ export function getProjectState(hostContext?: HostContext): ProjectState {
       history: getGenerationHistory(hostContext),
       updatedAt: nowIso()
     };
+  }
+
+  const snapshotBytes = Buffer.byteLength(project.snapshotJson, "utf8");
+  if (snapshotBytes > LARGE_PROJECT_SNAPSHOT_WARNING_BYTES) {
+    warnOnce(
+      `project-snapshot-large:${project.userId}`,
+      `Project snapshot for user ${project.userId} is large (${snapshotBytes} bytes); project load may be slow.`
+    );
   }
 
   return {
