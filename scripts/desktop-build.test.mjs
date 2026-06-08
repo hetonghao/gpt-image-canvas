@@ -77,7 +77,7 @@ assert.deepEqual(
     platforms: {
       "darwin-aarch64": {
         signature: "mac-signature",
-        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-macos-aarch64.app.tar.gz"
+        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-macos-aarch64.app.tar.gz?v=0.2.0"
       }
     }
   }
@@ -92,7 +92,7 @@ assert.deepEqual(
       platforms: {
         "windows-x86_64": {
           signature: "windows-signature",
-          url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows.exe"
+          url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows.exe?v=0.1.9"
         }
       }
     },
@@ -117,11 +117,11 @@ assert.deepEqual(
     platforms: {
       "windows-x86_64": {
         signature: "windows-signature",
-        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows.exe"
+        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows.exe?v=0.1.9"
       },
       "darwin-aarch64": {
         signature: "mac-signature",
-        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-macos-aarch64.app.tar.gz"
+        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-macos-aarch64.app.tar.gz?v=0.2.0"
       }
     }
   }

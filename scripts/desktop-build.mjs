@@ -36,6 +36,7 @@ export function releaseArtifactNames(platform = process.platform, arch = process
 
 export function buildLatestManifest({ version, downloadBaseUrl, notes, publishedAt, platforms }) {
   const baseUrl = downloadBaseUrl.replace(/\/+$/u, "");
+  const versionQuery = `v=${encodeURIComponent(version)}`;
   return {
     version,
     notes,
@@ -45,7 +46,7 @@ export function buildLatestManifest({ version, downloadBaseUrl, notes, published
         platform.platform,
         {
           signature: platform.signature,
-          url: `${baseUrl}/${platform.updaterArchiveName}`
+          url: `${baseUrl}/${platform.updaterArchiveName}?${versionQuery}`
         }
       ])
     )
