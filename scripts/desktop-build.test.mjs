@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { buildLatestManifest, mergeLatestManifest, releaseArtifactNames } from "./desktop-build.mjs";
 
 assert.deepEqual(releaseArtifactNames("darwin", "arm64"), {
@@ -14,6 +15,12 @@ assert.deepEqual(releaseArtifactNames("win32", "x64"), {
   updaterSignature: "ai-cove-design-desktop-windows-x86_64.nsis.zip.sig",
   updaterPlatform: "windows-x86_64"
 });
+
+const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+assert.ok(
+  tauriConfig.bundle?.targets?.includes("nsis"),
+  "Windows desktop release requires the Tauri NSIS bundle target"
+);
 
 assert.deepEqual(
   buildLatestManifest({
