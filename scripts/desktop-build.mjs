@@ -25,8 +25,8 @@ export function releaseArtifactNames(platform = process.platform, arch = process
     const archName = arch === "arm64" ? "aarch64" : "x86_64";
     return {
       installer: "ai-cove-design-desktop-windows.exe",
-      updaterArchive: `ai-cove-design-desktop-windows-${archName}.nsis.zip`,
-      updaterSignature: `ai-cove-design-desktop-windows-${archName}.nsis.zip.sig`,
+      updaterArchive: "ai-cove-design-desktop-windows.exe",
+      updaterSignature: "ai-cove-design-desktop-windows.exe.sig",
       updaterPlatform: archName === "aarch64" ? "windows-aarch64" : "windows-x86_64"
     };
   }
@@ -124,11 +124,13 @@ async function collectCurrentPlatformArtifacts({ profile, version, releaseDir })
 
   if (process.platform === "win32") {
     const installer = await findFirstExisting([path.join(bundleDir, "nsis", `AI-Cove-Design_${version}_x64-setup.exe`)]);
-    const updaterArchive = await findFirstExisting([path.join(bundleDir, "nsis", `AI-Cove-Design_${version}_x64-setup.nsis.zip`)]);
-    const updaterSignature = `${updaterArchive}.sig`;
+    const updaterArchive = installer;
+    const updaterSignature = `${installer}.sig`;
 
     await cp(installer, path.join(releaseDir, names.installer));
-    await cp(updaterArchive, path.join(releaseDir, names.updaterArchive));
+    if (names.updaterArchive !== names.installer) {
+      await cp(updaterArchive, path.join(releaseDir, names.updaterArchive));
+    }
     await cp(updaterSignature, path.join(releaseDir, names.updaterSignature));
 
     return {

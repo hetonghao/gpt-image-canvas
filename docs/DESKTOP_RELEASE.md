@@ -63,8 +63,7 @@ macOS builds write:
 Windows builds write:
 
 - `desktop-release/ai-cove-design-desktop-windows.exe`
-- `desktop-release/ai-cove-design-desktop-windows-x86_64.nsis.zip`
-- `desktop-release/ai-cove-design-desktop-windows-x86_64.nsis.zip.sig`
+- `desktop-release/ai-cove-design-desktop-windows.exe.sig`
 - `desktop-release/latest.json`
 
 The public Web download button expects installers under:

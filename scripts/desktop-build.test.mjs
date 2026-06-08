@@ -11,8 +11,8 @@ assert.deepEqual(releaseArtifactNames("darwin", "arm64"), {
 
 assert.deepEqual(releaseArtifactNames("win32", "x64"), {
   installer: "ai-cove-design-desktop-windows.exe",
-  updaterArchive: "ai-cove-design-desktop-windows-x86_64.nsis.zip",
-  updaterSignature: "ai-cove-design-desktop-windows-x86_64.nsis.zip.sig",
+  updaterArchive: "ai-cove-design-desktop-windows.exe",
+  updaterSignature: "ai-cove-design-desktop-windows.exe.sig",
   updaterPlatform: "windows-x86_64"
 });
 
@@ -58,7 +58,7 @@ assert.deepEqual(
       platforms: {
         "windows-x86_64": {
           signature: "windows-signature",
-          url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows-x86_64.nsis.zip"
+          url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows.exe"
         }
       }
     },
@@ -83,7 +83,7 @@ assert.deepEqual(
     platforms: {
       "windows-x86_64": {
         signature: "windows-signature",
-        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows-x86_64.nsis.zip"
+        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows.exe"
       },
       "darwin-aarch64": {
         signature: "mac-signature",

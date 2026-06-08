@@ -40,13 +40,12 @@ await writeJson(path.join(windowsDir, "latest.json"), {
   platforms: {
     "windows-x86_64": {
       signature: "windows-signature",
-      url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows-x86_64.nsis.zip"
+      url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows.exe"
     }
   }
 });
 await writeFile(path.join(windowsDir, "ai-cove-design-desktop-windows.exe"), "windows installer");
-await writeFile(path.join(windowsDir, "ai-cove-design-desktop-windows-x86_64.nsis.zip"), "windows updater");
-await writeFile(path.join(windowsDir, "ai-cove-design-desktop-windows-x86_64.nsis.zip.sig"), "windows signature");
+await writeFile(path.join(windowsDir, "ai-cove-design-desktop-windows.exe.sig"), "windows signature");
 
 const assembled = await assembleDesktopRelease({ inputRoot, outputDir });
 assert.deepEqual(assembled.platforms, ["darwin-aarch64", "windows-x86_64"]);
@@ -54,9 +53,8 @@ assert.deepEqual(assembled.artifacts, [
   "ai-cove-design-desktop-macos-aarch64.app.tar.gz",
   "ai-cove-design-desktop-macos-aarch64.app.tar.gz.sig",
   "ai-cove-design-desktop-macos.dmg",
-  "ai-cove-design-desktop-windows-x86_64.nsis.zip",
-  "ai-cove-design-desktop-windows-x86_64.nsis.zip.sig",
-  "ai-cove-design-desktop-windows.exe"
+  "ai-cove-design-desktop-windows.exe",
+  "ai-cove-design-desktop-windows.exe.sig"
 ]);
 
 const mergedManifest = JSON.parse(await readFile(path.join(outputDir, "latest.json"), "utf8"));

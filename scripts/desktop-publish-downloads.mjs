@@ -17,6 +17,7 @@ function isReleaseArtifact(fileName) {
     fileName === "latest.json" ||
     fileName.endsWith(".dmg") ||
     fileName.endsWith(".exe") ||
+    fileName.endsWith(".exe.sig") ||
     fileName.endsWith(".app.tar.gz") ||
     fileName.endsWith(".app.tar.gz.sig") ||
     fileName.endsWith(".nsis.zip") ||

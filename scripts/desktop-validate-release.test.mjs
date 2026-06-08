@@ -17,7 +17,7 @@ await writeFile(path.join(releaseDir, "latest.json"), JSON.stringify({
     },
     "windows-x86_64": {
       signature: "windows-signature",
-      url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows-x86_64.nsis.zip"
+      url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows.exe"
     }
   }
 }, null, 2));
@@ -25,8 +25,7 @@ await writeFile(path.join(releaseDir, "ai-cove-design-desktop-macos.dmg"), "mac 
 await writeFile(path.join(releaseDir, "ai-cove-design-desktop-windows.exe"), "windows installer");
 await writeFile(path.join(releaseDir, "ai-cove-design-desktop-macos-aarch64.app.tar.gz"), "mac updater");
 await writeFile(path.join(releaseDir, "ai-cove-design-desktop-macos-aarch64.app.tar.gz.sig"), "mac-signature");
-await writeFile(path.join(releaseDir, "ai-cove-design-desktop-windows-x86_64.nsis.zip"), "windows updater");
-await writeFile(path.join(releaseDir, "ai-cove-design-desktop-windows-x86_64.nsis.zip.sig"), "windows-signature");
+await writeFile(path.join(releaseDir, "ai-cove-design-desktop-windows.exe.sig"), "windows-signature");
 
 const valid = await validateDesktopRelease({
   releaseDir,
