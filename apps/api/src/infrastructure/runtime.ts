@@ -78,6 +78,9 @@ function parseSqliteLockingMode(value: string | undefined): SqliteLockingMode {
 }
 
 const dataDir = resolveFromRepo(process.env.DATA_DIR ?? "./data");
+const webDistDir = process.env.AI_COVE_DESIGN_WEB_DIST_DIR?.trim()
+  ? resolveFromRepo(process.env.AI_COVE_DESIGN_WEB_DIST_DIR)
+  : resolve(repoRoot, "apps/web/dist");
 
 export const runtimePaths = {
   repoRoot,
@@ -87,7 +90,7 @@ export const runtimePaths = {
   assetPreviewsDir: resolve(dataDir, "asset-previews"),
   databaseFile: resolve(dataDir, "gpt-image-canvas.sqlite"),
   promptPoolDir: resolveFromRepo(optionalEnvPath(process.env.PROMPT_POOL_DIR) ?? defaultPromptPoolDir()),
-  webDistDir: resolve(repoRoot, "apps/web/dist")
+  webDistDir
 };
 
 export const serverConfig = {

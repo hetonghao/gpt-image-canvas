@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 const capturedFetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+const storage = new Map<string, string>();
 
 globalThis.window = {
   location: {
@@ -9,16 +10,20 @@ globalThis.window = {
     search: "?token=query-token&user_id=42"
   },
   sessionStorage: {
-    getItem() {
-      return null;
+    getItem(key: string) {
+      return storage.get(key) ?? null;
     },
-    setItem() {}
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    }
   },
   localStorage: {
-    getItem() {
-      return null;
+    getItem(key: string) {
+      return storage.get(key) ?? null;
     },
-    setItem() {}
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    }
   }
 } as unknown as Window & typeof globalThis;
 
@@ -27,7 +32,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return new Response("{}", { status: 200 });
 }) as typeof fetch;
 
-const { apiFetch, appendHostTokenParam, withHostTokenParam } = await import("./host-token.js");
+const { apiFetch, appendHostTokenParam, saveHostCredentials, withHostTokenParam } = await import("./host-token.js");
 
 await apiFetch("/api/host/session");
 
@@ -44,5 +49,9 @@ const socketUrl = new URL("ws://127.0.0.1:8787/api/agent/ws");
 appendHostTokenParam(socketUrl);
 assert.equal(socketUrl.searchParams.get("token"), "query-token");
 assert.equal(socketUrl.searchParams.get("user_id"), "42");
+
+saveHostCredentials("saved-token", "84");
+assert.equal(window.sessionStorage.getItem("ai-cove-design.hostToken"), "saved-token");
+assert.equal(window.sessionStorage.getItem("ai-cove-design.hostUserId"), "84");
 
 process.stdout.write("host-token.smoke.ts passed\n");

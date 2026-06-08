@@ -12,6 +12,7 @@ import { registerAgentWebSocketRoutes } from "./routes/agent-ws.js";
 import { registerAssetRoutes } from "./routes/assets.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCoreRoutes } from "./routes/core.js";
+import { registerDesktopAuthRoutes } from "./routes/desktop-auth.js";
 import { registerGalleryRoutes } from "./routes/gallery.js";
 import { registerHostRoutes } from "./routes/host.js";
 import { registerImageRoutes } from "./routes/images.js";
@@ -46,6 +47,7 @@ export function createApp(): Hono {
   app.use("/api/pool", compress());
 
   registerCoreRoutes(app);
+  registerDesktopAuthRoutes(app);
   registerHostRoutes(app);
   registerAuthRoutes(app);
   registerProviderConfigRoutes(app);

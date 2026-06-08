@@ -19,6 +19,9 @@ assets/generated/
 dist/
 build/
 coverage/
+desktop-release/
 apps/web/dist/
 apps/api/dist/
 packages/shared/dist/
+src-tauri/resources/
+src-tauri/target/

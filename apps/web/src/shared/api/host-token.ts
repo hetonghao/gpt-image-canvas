@@ -8,6 +8,19 @@ export function hasHostToken(): boolean {
   return Boolean(getHostToken());
 }
 
+export function saveHostCredentials(token: string, userId: string | number): void {
+  const normalizedToken = token.trim();
+  const normalizedUserId = String(userId).trim();
+  if (!normalizedToken || !normalizedUserId) {
+    return;
+  }
+
+  cachedHostToken = normalizedToken;
+  cachedHostUserId = normalizedUserId;
+  persistHostToken(normalizedToken);
+  persistHostUserId(normalizedUserId);
+}
+
 export function getHostToken(): string | null {
   if (cachedHostToken !== undefined) {
     return cachedHostToken;

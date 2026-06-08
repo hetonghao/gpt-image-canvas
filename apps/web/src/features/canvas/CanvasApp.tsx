@@ -21,6 +21,7 @@ import {
   MapPin,
   MessageCirclePlus,
   RotateCcw,
+  RefreshCw,
   Search,
   Send,
   Settings,
@@ -141,6 +142,10 @@ import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "
 import { normalizeAssetUrl } from "../../shared/api/asset-url";
 import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
 import { apiFetch, appendHostTokenParam } from "../../shared/api/host-token";
+import { DesktopUpdateDialog } from "../../shared/desktop/DesktopUpdateDialog";
+import { isDesktopAuthSupported, restoreDesktopAuthSession, startDesktopAuthLogin, waitForDesktopAuthSession } from "../../shared/desktop/desktop-auth";
+import { useDesktopUpdater } from "../../shared/desktop/useDesktopUpdater";
+import type { DesktopUpdateStatus } from "../../shared/desktop/desktop-updater";
 import {
   deletePromptFavorite,
   fetchPromptFavorites,
@@ -3079,6 +3084,9 @@ function BrandName() {
 
 function TopNavigation({
   isAiCoveMode,
+  desktopUpdateStatus,
+  isDesktopUpdateSupported,
+  onCheckDesktopUpdate,
   onOpenProviderConfig,
   route,
   onNavigate,
@@ -3086,6 +3094,9 @@ function TopNavigation({
   onPreloadPool
 }: {
   isAiCoveMode: boolean;
+  desktopUpdateStatus: DesktopUpdateStatus;
+  isDesktopUpdateSupported: boolean;
+  onCheckDesktopUpdate: () => void;
   onOpenProviderConfig: () => void;
   route: AppRoute;
   onNavigate: (route: AppRoute) => void;
@@ -3093,6 +3104,7 @@ function TopNavigation({
   onPreloadPool: () => void;
 }) {
   const { t } = useI18n();
+  const isCheckingUpdate = desktopUpdateStatus === "checking";
 
   return (
     <header className="top-navigation">
@@ -3169,6 +3181,20 @@ function TopNavigation({
               {t("navGallery")}
             </a>
           </nav>
+          {isDesktopUpdateSupported ? (
+            <button
+              aria-label={t("desktopUpdateCheck")}
+              className="top-navigation__settings"
+              data-testid="desktop-update-check"
+              disabled={isCheckingUpdate}
+              title={t("desktopUpdateCheck")}
+              type="button"
+              onClick={onCheckDesktopUpdate}
+            >
+              <RefreshCw className={`size-4 ${isCheckingUpdate ? "animate-spin" : ""}`} aria-hidden="true" />
+              <span>{isCheckingUpdate ? t("desktopUpdateChecking") : t("desktopUpdateCheck")}</span>
+            </button>
+          ) : null}
           <button
             aria-label={t("navOpenProviderConfig")}
             className="top-navigation__settings"
@@ -3505,6 +3531,8 @@ function PromptFavoritesFloatingPanel({
 
 export function App() {
   const { formatDateTime, locale, setLocale, t } = useI18n();
+  const desktopUpdater = useDesktopUpdater();
+  const desktopAuthSupported = isDesktopAuthSupported();
   const tldrawLocale = tldrawLocaleForLocale(locale);
   const [tldrawUserPreferences, setTldrawUserPreferences] = useState<TLUserPreferences>(() => ({
     id: TLDRAW_USER_ID,
@@ -3613,6 +3641,8 @@ export function App() {
   const [summaryConfigError, setSummaryConfigError] = useState("");
   const [isHostSessionChecked, setIsHostSessionChecked] = useState(false);
   const [hostSessionError, setHostSessionError] = useState("");
+  const [desktopAuthError, setDesktopAuthError] = useState("");
+  const [isDesktopAuthStarting, setIsDesktopAuthStarting] = useState(false);
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
   const [currentAgentConversationId, setCurrentAgentConversationId] = useState<string | null>(null);
   const [isAgentHistoryOpen, setIsAgentHistoryOpen] = useState(false);
@@ -3854,7 +3884,7 @@ export function App() {
         setIsAgentConfigLoading(false);
       }
     }
-  }, [locale, t]);
+  }, [desktopAuthSupported, locale, t]);
   const loadSummaryConfig = useCallback(async (signal?: AbortSignal): Promise<SummaryLlmConfigView | null> => {
     setIsSummaryConfigLoading(true);
     setSummaryConfigError("");
@@ -3907,6 +3937,29 @@ export function App() {
       }
     }
   }, [locale, t]);
+
+  const startDesktopAuth = useCallback(async (): Promise<void> => {
+    if (!desktopAuthSupported) {
+      return;
+    }
+
+    setIsDesktopAuthStarting(true);
+    setDesktopAuthError("");
+    try {
+      await startDesktopAuthLogin();
+      setHostSessionError(t("desktopAuthWaiting"));
+      const restored = await waitForDesktopAuthSession();
+      if (restored) {
+        window.location.reload();
+        return;
+      }
+      setDesktopAuthError(t("desktopAuthTimedOut"));
+    } catch {
+      setDesktopAuthError(t("desktopAuthStartFailed"));
+    } finally {
+      setIsDesktopAuthStarting(false);
+    }
+  }, [desktopAuthSupported, t]);
 
   const saveProjectSnapshot = useCallback(async (editor: Editor): Promise<void> => {
     if (isHostSessionBlocked) {
@@ -4051,6 +4104,10 @@ export function App() {
 
     async function loadHostSession(): Promise<void> {
       try {
+        if (desktopAuthSupported) {
+          await restoreDesktopAuthSession().catch(() => false);
+        }
+
         const response = await apiFetch("/api/host/session", { signal: controller.signal });
         if (!response.ok) {
           const message = response.status === 401 ? await readErrorMessage(response, locale, t) : t("hostSessionLoadFailed");
@@ -7358,12 +7415,21 @@ export function App() {
       }
     >
       <TopNavigation
+        desktopUpdateStatus={desktopUpdater.state.status}
         isAiCoveMode={isAiCoveMode}
+        isDesktopUpdateSupported={desktopUpdater.isSupported}
         route={route}
+        onCheckDesktopUpdate={() => void desktopUpdater.checkForUpdates()}
         onNavigate={navigateToRoute}
         onOpenProviderConfig={() => openProviderConfigDialog()}
         onPreloadGallery={preloadGalleryPage}
         onPreloadPool={preloadPromptPoolPage}
+      />
+      <DesktopUpdateDialog
+        state={desktopUpdater.dialogState}
+        onClose={desktopUpdater.closeDialog}
+        onDownload={() => void desktopUpdater.downloadUpdate()}
+        onInstall={() => void desktopUpdater.installUpdate()}
       />
       {route === "home" ? (
         <Suspense fallback={null}>
@@ -7392,6 +7458,21 @@ export function App() {
             <div className="min-w-0">
               <p className="text-sm font-semibold text-neutral-800">{t("hostSessionRequired")}</p>
               <p className="mt-1 text-xs text-neutral-500">{hostSessionError}</p>
+              {desktopAuthError ? (
+                <p className="mt-2 text-xs font-medium text-red-600" role="alert">
+                  {desktopAuthError}
+                </p>
+              ) : null}
+              {desktopAuthSupported ? (
+                <button
+                  className="mt-3 rounded-md bg-neutral-900 px-3 py-2 text-xs font-semibold text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isDesktopAuthStarting}
+                  type="button"
+                  onClick={() => void startDesktopAuth()}
+                >
+                  {isDesktopAuthStarting ? t("desktopAuthOpening") : t("desktopAuthLogin")}
+                </button>
+              ) : null}
             </div>
           </div>
         ) : isProjectLoaded ? (

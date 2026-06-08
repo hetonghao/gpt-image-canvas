@@ -1,0 +1,89 @@
+import assert from "node:assert/strict";
+import { buildLatestManifest, mergeLatestManifest, releaseArtifactNames } from "./desktop-build.mjs";
+
+assert.deepEqual(releaseArtifactNames("darwin", "arm64"), {
+  installer: "ai-cove-design-desktop-macos.dmg",
+  updaterArchive: "ai-cove-design-desktop-macos-aarch64.app.tar.gz",
+  updaterSignature: "ai-cove-design-desktop-macos-aarch64.app.tar.gz.sig",
+  updaterPlatform: "darwin-aarch64"
+});
+
+assert.deepEqual(releaseArtifactNames("win32", "x64"), {
+  installer: "ai-cove-design-desktop-windows.exe",
+  updaterArchive: "ai-cove-design-desktop-windows-x86_64.nsis.zip",
+  updaterSignature: "ai-cove-design-desktop-windows-x86_64.nsis.zip.sig",
+  updaterPlatform: "windows-x86_64"
+});
+
+assert.deepEqual(
+  buildLatestManifest({
+    version: "0.2.0",
+    downloadBaseUrl: "https://ai-cove.com/downloads/",
+    notes: "AI-Cove-Design desktop update",
+    publishedAt: "2026-06-08T00:00:00.000Z",
+    platforms: [
+      {
+        platform: "darwin-aarch64",
+        signature: "mac-signature",
+        updaterArchiveName: "ai-cove-design-desktop-macos-aarch64.app.tar.gz"
+      }
+    ]
+  }),
+  {
+    version: "0.2.0",
+    notes: "AI-Cove-Design desktop update",
+    pub_date: "2026-06-08T00:00:00.000Z",
+    platforms: {
+      "darwin-aarch64": {
+        signature: "mac-signature",
+        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-macos-aarch64.app.tar.gz"
+      }
+    }
+  }
+);
+
+assert.deepEqual(
+  mergeLatestManifest(
+    {
+      version: "0.1.9",
+      notes: "old notes",
+      pub_date: "2026-06-07T00:00:00.000Z",
+      platforms: {
+        "windows-x86_64": {
+          signature: "windows-signature",
+          url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows-x86_64.nsis.zip"
+        }
+      }
+    },
+    buildLatestManifest({
+      version: "0.2.0",
+      downloadBaseUrl: "https://ai-cove.com/downloads",
+      notes: "AI-Cove-Design 0.2.0",
+      publishedAt: "2026-06-08T00:00:00.000Z",
+      platforms: [
+        {
+          platform: "darwin-aarch64",
+          signature: "mac-signature",
+          updaterArchiveName: "ai-cove-design-desktop-macos-aarch64.app.tar.gz"
+        }
+      ]
+    })
+  ),
+  {
+    version: "0.2.0",
+    notes: "AI-Cove-Design 0.2.0",
+    pub_date: "2026-06-08T00:00:00.000Z",
+    platforms: {
+      "windows-x86_64": {
+        signature: "windows-signature",
+        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows-x86_64.nsis.zip"
+      },
+      "darwin-aarch64": {
+        signature: "mac-signature",
+        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-macos-aarch64.app.tar.gz"
+      }
+    }
+  }
+);
+
+process.stdout.write("desktop-build.test.mjs passed\n");

@@ -12,7 +12,7 @@ export type HostHonoEnv = { Variables: HostVariables };
 export type HostHonoContext = Context<HostHonoEnv>;
 
 export const hostContextMiddleware: MiddlewareHandler<{ Variables: HostVariables }> = async (c, next) => {
-  if (c.req.path === "/api/health") {
+  if (c.req.path === "/api/health" || c.req.path.startsWith("/api/desktop-auth/")) {
     await next();
     return;
   }
