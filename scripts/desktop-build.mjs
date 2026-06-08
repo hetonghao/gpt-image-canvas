@@ -68,10 +68,11 @@ export function mergeLatestManifest(existingManifest, currentManifest) {
   };
 }
 
-function run(command, args) {
+function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: root,
     encoding: "utf8",
+    env: options.env ?? process.env,
     shell: process.platform === "win32",
     stdio: "inherit"
   });
@@ -83,6 +84,22 @@ function run(command, args) {
 
 function bundleProfile(args) {
   return args.includes("--debug") ? "debug" : "release";
+}
+
+export function resolveMacSigningIdentity(env = process.env) {
+  const explicitIdentity = env.APPLE_SIGNING_IDENTITY?.trim();
+  return explicitIdentity || "-";
+}
+
+export function tauriBuildEnvironment(env = process.env, platform = process.platform) {
+  if (platform !== "darwin") {
+    return env;
+  }
+
+  return {
+    ...env,
+    APPLE_SIGNING_IDENTITY: resolveMacSigningIdentity(env)
+  };
 }
 
 async function findFirstExisting(candidates) {
@@ -143,6 +160,15 @@ async function collectCurrentPlatformArtifacts({ profile, version, releaseDir })
   throw new Error(`Unsupported desktop release platform: ${process.platform}`);
 }
 
+function verifyMacAppBundle({ profile }) {
+  if (process.platform !== "darwin") {
+    return;
+  }
+
+  const appPath = path.join(root, "src-tauri", "target", profile, "bundle", "macos", "AI-Cove-Design.app");
+  run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
+}
+
 export async function main(rawArgs = process.argv.slice(2)) {
   const tauriArgs = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
   const profile = bundleProfile(tauriArgs);
@@ -157,7 +183,8 @@ export async function main(rawArgs = process.argv.slice(2)) {
   await mkdir(releaseDir, { recursive: true });
 
   run("pnpm", ["desktop:sync-version"]);
-  run("pnpm", ["exec", "tauri", "build", ...tauriArgs]);
+  run("pnpm", ["exec", "tauri", "build", ...tauriArgs], { env: tauriBuildEnvironment() });
+  verifyMacAppBundle({ profile });
 
   const platform = await collectCurrentPlatformArtifacts({
     profile,

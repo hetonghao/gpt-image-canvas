@@ -23,7 +23,7 @@ The updater private key must stay outside the repository. The current local deve
 
 Do not commit private keys, passwords, cookies, sessions, or generated release artifacts.
 
-The macOS desktop package currently follows the same lightweight distribution mode as Two Sides: updater artifacts are signed for Tauri updates, while the app itself is not Developer ID notarized. On first open, macOS may require allowing the app in System Settings.
+The macOS desktop package currently follows the same lightweight distribution mode as Two Sides: updater artifacts are signed for Tauri updates, and the `.app` bundle defaults to ad-hoc signing (`APPLE_SIGNING_IDENTITY=-`) instead of Developer ID notarization. On first open, macOS may require allowing the app in System Settings.
 
 ## Build
 
@@ -48,8 +48,9 @@ pnpm desktop:build -- --debug
 1. `desktop:sync-version`
 2. Tauri build
 3. `desktop:prepare-sidecar` through Tauri `beforeBuildCommand`
-4. release artifact collection into `desktop-release/`
-5. release `latest.json` generation, merged with an existing manifest when present
+4. macOS `.app` code-signature verification with `codesign --verify --deep --strict`
+5. release artifact collection into `desktop-release/`
+6. release `latest.json` generation, merged with an existing manifest when present
 
 The API sidecar uses `pnpm deploy --config.node-linker=hoisted` so Tauri can copy a Node-resolvable dependency tree into the app bundle. On macOS, the copied Node binary is stripped before Tauri signs/packages the app. This keeps the packaged Node runtime smaller without changing API dependencies.
 

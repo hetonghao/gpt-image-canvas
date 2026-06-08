@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { buildLatestManifest, mergeLatestManifest, releaseArtifactNames } from "./desktop-build.mjs";
+import {
+  buildLatestManifest,
+  mergeLatestManifest,
+  releaseArtifactNames,
+  resolveMacSigningIdentity,
+  tauriBuildEnvironment
+} from "./desktop-build.mjs";
 
 assert.deepEqual(releaseArtifactNames("darwin", "arm64"), {
   installer: "ai-cove-design-desktop-macos.dmg",
@@ -31,6 +37,23 @@ assert.deepEqual(
     "icons/icon.ico"
   ],
   "desktop release must package the AI-Cove-Design icon"
+);
+
+assert.equal(resolveMacSigningIdentity({}), "-", "macOS release should default to ad-hoc app signing");
+assert.equal(
+  resolveMacSigningIdentity({ APPLE_SIGNING_IDENTITY: "Developer ID Application: Example" }),
+  "Developer ID Application: Example",
+  "explicit macOS signing identities must be preserved"
+);
+assert.equal(
+  tauriBuildEnvironment({ TAURI_SIGNING_PRIVATE_KEY: "key" }, "darwin").APPLE_SIGNING_IDENTITY,
+  "-",
+  "macOS Tauri builds must receive an app signing identity"
+);
+assert.deepEqual(
+  tauriBuildEnvironment({ TAURI_SIGNING_PRIVATE_KEY: "key" }, "linux"),
+  { TAURI_SIGNING_PRIVATE_KEY: "key" },
+  "non-macOS Tauri builds should not receive macOS signing env"
 );
 
 assert.deepEqual(
