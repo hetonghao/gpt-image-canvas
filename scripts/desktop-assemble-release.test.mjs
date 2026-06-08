@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { assembleDesktopRelease } from "./desktop-assemble-release.mjs";
 
 async function writeJson(filePath, value) {
@@ -102,7 +103,10 @@ await assert.rejects(
   /duplicate updater platform/u
 );
 
-const workflow = await readFile(path.join(path.dirname(new URL(import.meta.url).pathname), "..", ".github", "workflows", "desktop-release.yml"), "utf8");
+const workflow = await readFile(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows", "desktop-release.yml"),
+  "utf8"
+);
 assert.match(workflow, /windows-latest/u);
 assert.match(workflow, /macos-14/u);
 assert.match(workflow, /desktop:assemble-release/u);

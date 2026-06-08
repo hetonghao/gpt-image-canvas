@@ -58,6 +58,10 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Prepare Tauri test resources
+        shell: bash
+        run: mkdir -p src-tauri/resources/sidecar
+
       - name: Test Tauri shell
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
