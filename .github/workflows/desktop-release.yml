@@ -60,7 +60,7 @@ jobs:
 
       - name: Prepare Tauri test resources
         shell: bash
-        run: mkdir -p src-tauri/resources/sidecar
+        run: mkdir -p apps/web/dist src-tauri/resources/sidecar
 
       - name: Test Tauri shell
         run: cargo test --manifest-path src-tauri/Cargo.toml
