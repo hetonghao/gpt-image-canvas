@@ -21,7 +21,9 @@ The updater private key must stay outside the repository. The current local deve
 /Users/hetonghao/.codex/tmp/ai-cove-design-updater.key
 ```
 
-Do not commit private keys, passwords, notarization credentials, or generated release artifacts.
+Do not commit private keys, passwords, cookies, sessions, or generated release artifacts.
+
+The macOS desktop package currently follows the same lightweight distribution mode as Two Sides: updater artifacts are signed for Tauri updates, while the app itself is not Developer ID notarized. On first open, macOS may require allowing the app in System Settings.
 
 ## Build
 
@@ -49,7 +51,7 @@ pnpm desktop:build -- --debug
 4. release artifact collection into `desktop-release/`
 5. release `latest.json` generation, merged with an existing manifest when present
 
-The API sidecar uses `pnpm deploy --config.node-linker=hoisted` so Tauri can copy a Node-resolvable dependency tree into the app bundle.
+The API sidecar uses `pnpm deploy --config.node-linker=hoisted` so Tauri can copy a Node-resolvable dependency tree into the app bundle. On macOS, the copied Node binary is stripped before Tauri signs/packages the app. This keeps the packaged Node runtime smaller without changing API dependencies.
 
 ## Artifacts
 
@@ -168,8 +170,17 @@ pnpm desktop:publish-downloads
 
 Then verify the generated app can start the packaged sidecar and that `/api/health` returns `{"status":"ok"}`.
 
+## Size Notes
+
+The macOS DMG and updater archive are already compressed package formats. The largest current payload is the local Node/API sidecar:
+
+- copied Node runtime
+- production API `node_modules`
+- built Web assets
+
+The first safe reduction is stripping the copied macOS Node binary during `desktop:prepare-sidecar`. Further reductions should avoid deleting third-party dependency contents unless a runtime import test proves the packaged API still works.
+
 ## Remaining Release Risks
 
 - Windows packaging must be validated on a Windows runner before publishing the Windows installer.
-- macOS production distribution still needs the project-specific Apple signing/notarization path if Gatekeeper distribution is required.
 - Production publishing still needs a release run that uploads both platform artifacts and the merged `latest.json` to the public downloads directory.

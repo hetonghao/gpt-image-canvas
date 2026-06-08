@@ -25,6 +25,14 @@ export function apiDeployArgs(targetRoot) {
   ];
 }
 
+export function nodeStripArgs(nodePath, platform = process.platform) {
+  if (platform !== "darwin") {
+    return null;
+  }
+
+  return ["-x", nodePath];
+}
+
 function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: root,
@@ -38,6 +46,24 @@ function run(command, args) {
   }
 }
 
+function stripCopiedNodeBinary(nodePath) {
+  const args = nodeStripArgs(nodePath);
+  if (!args) {
+    return;
+  }
+
+  const result = spawnSync("strip", args, {
+    cwd: root,
+    encoding: "utf8",
+    shell: false
+  });
+
+  if (result.status !== 0) {
+    const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+    throw new Error(`strip ${args.join(" ")} failed: ${output || result.status || "unknown error"}`);
+  }
+}
+
 export async function main() {
   await rm(sidecarRoot, { force: true, recursive: true });
   await mkdir(sidecarRoot, { recursive: true });
@@ -47,9 +73,11 @@ export async function main() {
 
   await cp(path.join(root, "apps", "web", "dist"), webDistRoot, { recursive: true });
   await mkdir(nodeRoot, { recursive: true });
-  await cp(process.execPath, path.join(nodeRoot, nodeFileName));
+  const copiedNodePath = path.join(nodeRoot, nodeFileName);
+  await cp(process.execPath, copiedNodePath);
+  stripCopiedNodeBinary(copiedNodePath);
   if (process.platform !== "win32") {
-    await chmod(path.join(nodeRoot, nodeFileName), 0o755);
+    await chmod(copiedNodePath, 0o755);
   }
 
   await writeFile(

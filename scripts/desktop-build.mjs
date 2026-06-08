@@ -164,6 +164,7 @@ export async function main(rawArgs = process.argv.slice(2)) {
     releaseDir,
     version
   });
+
   const manifest = mergeLatestManifest(existingManifest, buildLatestManifest({
     version,
     downloadBaseUrl,

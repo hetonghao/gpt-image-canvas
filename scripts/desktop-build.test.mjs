@@ -21,6 +21,17 @@ assert.ok(
   tauriConfig.bundle?.targets?.includes("nsis"),
   "Windows desktop release requires the Tauri NSIS bundle target"
 );
+assert.deepEqual(
+  tauriConfig.bundle?.icon,
+  [
+    "icons/32x32.png",
+    "icons/128x128.png",
+    "icons/128x128@2x.png",
+    "icons/icon.icns",
+    "icons/icon.ico"
+  ],
+  "desktop release must package the AI-Cove-Design icon"
+);
 
 assert.deepEqual(
   buildLatestManifest({
