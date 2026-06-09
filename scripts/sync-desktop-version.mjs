@@ -33,4 +33,4 @@ if (nextCargoToml !== cargoToml) {
   fs.writeFileSync(cargoTomlPath, nextCargoToml);
 }
 
-process.stdout.write(`[desktop:sync-version] AI-Cove-Design desktop version ${version}\n`);
+process.stdout.write(`[desktop:sync-version] AI Cove Design desktop version ${version}\n`);

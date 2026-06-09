@@ -1,7 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default AI-Cove-Design desktop capability",
+  "description": "Default AI Cove Design desktop capability",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
   "permissions": ["core:default", "opener:default", "process:default", "updater:default"]
 }

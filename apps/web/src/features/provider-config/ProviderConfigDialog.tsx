@@ -108,6 +108,8 @@ const emptyAgentLlmForm: AgentLlmFormState = {
 
 const DEFAULT_SUMMARY_TIMEOUT_MS = 60000;
 const SUMMARY_LLM_RECOMMENDED_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"] as const;
+const hostedModelOptionsCache = new Map<string, HostModelSummary[]>();
+const hostedModelOptionsRequestCache = new Map<string, Promise<HostModelSummary[]>>();
 
 const queryBaseUrlSeed = readQueryBaseUrlSeed();
 
@@ -133,6 +135,7 @@ export function ProviderConfigDialog({
   const [summaryConfig, setSummaryConfig] = useState<SummaryLlmConfigView | null>(null);
   const [hostSession, setHostSession] = useState<HostSessionResponse | null>(null);
   const [hostApiKeys, setHostApiKeys] = useState<HostApiKeySummary[]>([]);
+  const [isHostApiKeysLoading, setIsHostApiKeysLoading] = useState(false);
   const [imageModels, setImageModels] = useState<HostModelSummary[]>([]);
   const [agentModels, setAgentModels] = useState<HostModelSummary[]>([]);
   const [summaryModels, setSummaryModels] = useState<HostModelSummary[]>([]);
@@ -179,8 +182,7 @@ export function ProviderConfigDialog({
   const isSummaryTab = activeTab === "summary";
   const isSummaryOnboarding = isOnboarding && isSummaryTab;
   const showOnboardingGuide = isOnboarding && !isSummaryTab;
-  const isInitialConfigReady =
-    Boolean(config && agentConfig && summaryConfig) || (!isLoading && !isAgentConfigLoading && !isSummaryConfigLoading);
+  const isInitialConfigReady = Boolean(config) || !isLoading;
   const summaryModelApiKeyId = resolveSummaryModelApiKeyId({
     agentApiKeyId: agentForm.apiKeyId,
     firstHostApiKeyId: hostApiKeys[0]?.id ?? "",
@@ -218,18 +220,37 @@ export function ProviderConfigDialog({
         setHostSession(session);
         if (!isHostedAiCoveAdapterMode(session.adapter.mode)) {
           setHostApiKeys([]);
+          setIsHostApiKeysLoading(false);
           return session;
         }
 
-        const keysResponse = await apiFetch("/api/host/api-keys", { signal });
-        if (!keysResponse.ok) {
-          throw new Error(await readProviderConfigError(keysResponse, locale, t));
-        }
-
-        const keysBody = (await keysResponse.json()) as HostApiKeysResponse;
-        if (!signal?.aborted) {
-          setHostApiKeys(keysBody.items);
-        }
+        setIsHostApiKeysLoading(true);
+        void apiFetch("/api/host/api-keys", { signal })
+          .then(async (keysResponse) => {
+            if (!keysResponse.ok) {
+              throw new Error(await readProviderConfigError(keysResponse, locale, t));
+            }
+            return (await keysResponse.json()) as HostApiKeysResponse;
+          })
+          .then((keysBody) => {
+            if (!signal?.aborted) {
+              setHostApiKeys(keysBody.items);
+            }
+          })
+          .catch((error) => {
+            if (!signal?.aborted) {
+              setHostApiKeys([]);
+              setMessage({
+                tone: "error",
+                text: error instanceof Error ? error.message : t("hostSessionLoadFailed")
+              });
+            }
+          })
+          .finally(() => {
+            if (!signal?.aborted) {
+              setIsHostApiKeysLoading(false);
+            }
+          });
         return session;
       } catch (error) {
         if (!signal?.aborted) {
@@ -511,15 +532,9 @@ export function ProviderConfigDialog({
   ): Promise<void> {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ apiKeyId });
-      const response = await apiFetch(`/api/host/models?${params.toString()}`, { signal });
-      if (!response.ok) {
-        throw new Error(await readProviderConfigError(response, locale, t));
-      }
-
-      const body = (await response.json()) as HostModelsResponse;
+      const bodyItems = await readCachedHostModels(apiKeyId);
       if (!signal?.aborted) {
-        const filtered = body.items.filter((model) => isModelAllowedForTab(model.id, usage));
+        const filtered = bodyItems.filter((model) => isModelAllowedForTab(model.id, usage));
         setModels(filtered.length > 0 ? filtered : fallbackHostModels(currentModelId, usage));
       }
     } catch {
@@ -531,6 +546,35 @@ export function ProviderConfigDialog({
         setLoading(false);
       }
     }
+  }
+
+  async function readCachedHostModels(apiKeyId: string): Promise<HostModelSummary[]> {
+    const cached = hostedModelOptionsCache.get(apiKeyId);
+    if (cached) {
+      return cached;
+    }
+
+    const pending = hostedModelOptionsRequestCache.get(apiKeyId);
+    if (pending) {
+      return pending;
+    }
+
+    const request = (async () => {
+      const params = new URLSearchParams({ apiKeyId });
+      const response = await apiFetch(`/api/host/models?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(await readProviderConfigError(response, locale, t));
+      }
+
+      const body = (await response.json()) as HostModelsResponse;
+      hostedModelOptionsCache.set(apiKeyId, body.items);
+      return body.items;
+    })().finally(() => {
+      hostedModelOptionsRequestCache.delete(apiKeyId);
+    });
+
+    hostedModelOptionsRequestCache.set(apiKeyId, request);
+    return request;
   }
 
   function moveSource(sourceId: ProviderSourceId, direction: -1 | 1): void {
@@ -632,7 +676,7 @@ export function ProviderConfigDialog({
     if (isAiCoveMode && !hasHostApiKeys) {
       setMessage({
         tone: "error",
-        text: t("hostApiKeysEmpty")
+        text: isHostApiKeysLoading ? t("hostApiKeysLoading") : t("hostApiKeysEmpty")
       });
       return;
     }
@@ -1032,7 +1076,7 @@ export function ProviderConfigDialog({
               <div className={`provider-workspace${showAiCoveCondensedConfig ? " provider-workspace--agent provider-workspace--condensed" : ""}`}>
                 <section className="provider-detail-card provider-detail-card--local" data-testid="provider-local-section" aria-labelledby="provider-local-title">
                   <ProviderDetailHeader description={t("providerCardLocalHint")} source={localSource} sourceId="local-openai" titleId="provider-local-title" />
-                  {isAiCoveMode && !hasHostApiKeys ? (
+                  {isAiCoveMode && !hasHostApiKeys && !isHostApiKeysLoading ? (
                     <div className="provider-secret-pill" role="alert">
                       <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
                       {t("hostApiKeysEmpty")}
@@ -1058,6 +1102,7 @@ export function ProviderConfigDialog({
                       <HostApiKeySelect
                         keys={hostApiKeys}
                         label={t("hostApiKeyLabel")}
+                        isLoading={isHostApiKeysLoading}
                         onboardingState={onboardingFieldStates?.image.apiKey}
                         name="localOpenAIKeyId"
                         testId="provider-local-api-key"
@@ -1082,7 +1127,7 @@ export function ProviderConfigDialog({
                         />
                       </label>
                     )}
-                    <label className="provider-field provider-field--compact">
+                    <label className={isAiCoveMode ? "provider-field provider-field--select provider-field--hosted-model" : "provider-field provider-field--compact provider-field--select"}>
                       <span>
                         {t("providerFieldModel")}
                         <OnboardingFieldStatusBadge state={onboardingFieldStates?.image.model} />
@@ -1108,7 +1153,7 @@ export function ProviderConfigDialog({
                         />
                       )}
                     </label>
-                    <label className="provider-field provider-field--compact">
+                    <label className="provider-field provider-field--compact provider-field--select">
                       <span>{t("providerTimeoutMs")}</span>
                       <input
                         className="provider-field__control"
@@ -1280,7 +1325,7 @@ export function ProviderConfigDialog({
                     </div>
                     <ProviderAvailabilityBadge available={agentConfig?.configured ?? false} />
                   </header>
-                  {isAiCoveMode && !hasHostApiKeys ? (
+                  {isAiCoveMode && !hasHostApiKeys && !isHostApiKeysLoading ? (
                     <div className="provider-secret-pill" role="alert">
                       <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
                       {t("hostApiKeysEmpty")}
@@ -1306,6 +1351,7 @@ export function ProviderConfigDialog({
                       <HostApiKeySelect
                         keys={hostApiKeys}
                         label={t("hostApiKeyLabel")}
+                        isLoading={isHostApiKeysLoading}
                         onboardingState={onboardingFieldStates?.agent.apiKey}
                         name="agentLlmKeyId"
                         testId="provider-agent-api-key"
@@ -1330,7 +1376,7 @@ export function ProviderConfigDialog({
                         />
                       </label>
                     )}
-                    <label className="provider-field provider-field--compact">
+                    <label className={isAiCoveMode ? "provider-field provider-field--select provider-field--hosted-model" : "provider-field provider-field--compact provider-field--select"}>
                       <span>
                         {t("providerFieldModel")}
                         <OnboardingFieldStatusBadge state={onboardingFieldStates?.agent.model} />
@@ -1418,7 +1464,7 @@ export function ProviderConfigDialog({
                       <ProviderAvailabilityBadge available={summaryConfig?.configured ?? false} />
                     </header>
                   )}
-                  {isAiCoveMode && !hasHostApiKeys ? (
+                  {isAiCoveMode && !hasHostApiKeys && !isHostApiKeysLoading ? (
                     <div className="provider-secret-pill" role="alert">
                       <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
                       {t("hostApiKeysEmpty")}
@@ -1445,6 +1491,7 @@ export function ProviderConfigDialog({
                       <HostApiKeySelect
                         keys={hostApiKeys}
                         label={t("hostApiKeyLabel")}
+                        isLoading={isHostApiKeysLoading}
                         name="summaryLlmKeyId"
                         testId="provider-summary-api-key"
                         value={summaryForm.apiKeyId}
@@ -1465,7 +1512,7 @@ export function ProviderConfigDialog({
                         />
                       </label>
                     )}
-                    <label className="provider-field provider-field--compact">
+                    <label className={isAiCoveMode ? "provider-field provider-field--select provider-field--hosted-model" : "provider-field provider-field--compact"}>
                       <span>
                         {t("providerFieldModel")}
                         <span className="provider-config-field-bang" title={t("summaryLlmGeminiHint")}>
@@ -1714,6 +1761,7 @@ function OnboardingFieldStatusBadge({ state }: { state?: OnboardingFieldState })
 }
 
 function HostApiKeySelect({
+  isLoading,
   keys,
   label,
   onboardingState,
@@ -1722,6 +1770,7 @@ function HostApiKeySelect({
   value,
   onChange
 }: {
+  isLoading: boolean;
   keys: HostApiKeySummary[];
   label: string;
   onboardingState?: OnboardingFieldState;
@@ -1733,7 +1782,7 @@ function HostApiKeySelect({
   const { t } = useI18n();
 
   return (
-    <label className="provider-field provider-field--span">
+    <label className="provider-field provider-field--span provider-field--select provider-field--hosted-api-key">
       <span>
         {label}
         <OnboardingFieldStatusBadge state={onboardingState} />
@@ -1741,12 +1790,12 @@ function HostApiKeySelect({
       <select
         className="provider-field__control"
         data-testid={testId}
-        disabled={keys.length === 0}
+        disabled={isLoading || keys.length === 0}
         name={name}
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >
-        <option value="">{keys.length > 0 ? t("hostApiKeySelectPlaceholder") : t("hostApiKeysEmptyShort")}</option>
+        <option value="">{isLoading ? t("hostApiKeysLoading") : keys.length > 0 ? t("hostApiKeySelectPlaceholder") : t("hostApiKeysEmptyShort")}</option>
         {keys.map((key) => (
           <option key={key.id} value={key.id}>
             {hostApiKeyLabel(key)}
@@ -1787,7 +1836,7 @@ function HostModelSelect({
       value={value}
       onChange={(event) => onChange(event.target.value)}
     >
-      <option value="">{isLoading ? t("hostModelsLoading") : t("hostModelSelectPlaceholder")}</option>
+      <option value="">{isLoading ? t("hostModelsLoading") : placeholder ?? t("hostModelSelectPlaceholder")}</option>
       {hasSavedUnknownModel ? <option value={value}>{value}</option> : null}
       {models.map((model) => (
         <option key={model.id} value={model.id}>

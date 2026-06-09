@@ -39,7 +39,10 @@ try {
     `http://127.0.0.1:8787/api/desktop-auth/callback?nonce=${startBody.nonce}&token=desktop-token&user_id=42`
   );
   assert.equal(callbackResponse.status, 200);
-  assert.match(await callbackResponse.text(), /AI-Cove-Design/u);
+  const callbackHtml = await callbackResponse.text();
+  assert.match(callbackHtml, /AI Cove Design/u);
+  assert.match(callbackHtml, /brand-logo\.png/u);
+  assert.match(callbackHtml, /desktop-auth-complete/u);
 
   const savedSessionResponse = await app.request("http://127.0.0.1:8787/api/desktop-auth/session");
   assert.equal(savedSessionResponse.status, 200);

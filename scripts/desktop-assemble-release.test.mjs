@@ -20,7 +20,7 @@ await import("node:fs/promises").then(({ mkdir }) => mkdir(windowsDir, { recursi
 
 await writeJson(path.join(macDir, "latest.json"), {
   version: "0.2.0",
-  notes: "AI-Cove-Design 0.2.0",
+  notes: "AI Cove Design 0.2.0",
   pub_date: "2026-06-08T00:00:00.000Z",
   platforms: {
     "darwin-aarch64": {
@@ -35,7 +35,7 @@ await writeFile(path.join(macDir, "ai-cove-design-desktop-macos-aarch64.app.tar.
 
 await writeJson(path.join(windowsDir, "latest.json"), {
   version: "0.2.0",
-  notes: "AI-Cove-Design 0.2.0",
+  notes: "AI Cove Design 0.2.0",
   pub_date: "2026-06-08T00:00:01.000Z",
   platforms: {
     "windows-x86_64": {
@@ -66,7 +66,7 @@ const mismatchDir = path.join(inputRoot, "mismatch");
 await import("node:fs/promises").then(({ mkdir }) => mkdir(mismatchDir, { recursive: true }));
 await writeJson(path.join(mismatchDir, "latest.json"), {
   version: "0.3.0",
-  notes: "AI-Cove-Design 0.3.0",
+  notes: "AI Cove Design 0.3.0",
   pub_date: "2026-06-08T00:00:02.000Z",
   platforms: {
     "linux-x86_64": {
@@ -86,7 +86,7 @@ const duplicateDir = path.join(inputRoot, "duplicate");
 await import("node:fs/promises").then(({ mkdir }) => mkdir(duplicateDir, { recursive: true }));
 await writeJson(path.join(duplicateDir, "latest.json"), {
   version: "0.2.0",
-  notes: "AI-Cove-Design 0.2.0",
+  notes: "AI Cove Design 0.2.0",
   pub_date: "2026-06-08T00:00:02.000Z",
   platforms: {
     "darwin-aarch64": {

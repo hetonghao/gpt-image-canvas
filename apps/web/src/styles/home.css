@@ -600,11 +600,6 @@
   transform: scaleX(1);
 }
 
-.home-gallery-link--wide {
-  width: auto;
-  justify-self: start;
-}
-
 .home-section-heading {
   display: grid;
   max-width: 48rem;

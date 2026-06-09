@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AI-Cove-Design",
-  "version": "0.2.2",
+  "productName": "AI Cove Design",
+  "version": "1.0.0",
   "identifier": "com.aicove.design",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "AI-Cove-Design",
+        "title": "AI Cove Design",
         "width": 1440,
         "height": 960,
         "minWidth": 1024,

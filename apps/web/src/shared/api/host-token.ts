@@ -8,6 +8,10 @@ export function hasHostToken(): boolean {
   return Boolean(getHostToken());
 }
 
+export function hasHostCredentials(): boolean {
+  return Boolean(getHostToken() || getHostUserId());
+}
+
 export function saveHostCredentials(token: string, userId: string | number): void {
   const normalizedToken = token.trim();
   const normalizedUserId = String(userId).trim();
@@ -19,6 +23,13 @@ export function saveHostCredentials(token: string, userId: string | number): voi
   cachedHostUserId = normalizedUserId;
   persistHostToken(normalizedToken);
   persistHostUserId(normalizedUserId);
+}
+
+export function clearHostCredentials(): void {
+  cachedHostToken = null;
+  cachedHostUserId = null;
+  removeStoredHostCredential(HOST_TOKEN_STORAGE_KEY);
+  removeStoredHostCredential(HOST_USER_ID_STORAGE_KEY);
 }
 
 export function getHostToken(): string | null {
@@ -199,6 +210,24 @@ function persistHostUserId(userId: string): void {
 
   try {
     window.localStorage.setItem(HOST_USER_ID_STORAGE_KEY, userId);
+  } catch {
+    // sessionStorage is preferred; localStorage is only a refresh fallback.
+  }
+}
+
+function removeStoredHostCredential(key: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    // Ignore storage failures; in-memory credentials were already cleared.
+  }
+
+  try {
+    window.localStorage.removeItem(key);
   } catch {
     // sessionStorage is preferred; localStorage is only a refresh fallback.
   }

@@ -51,7 +51,7 @@ fn wait_for_api_port(port: u16) -> io::Result<()> {
 
     Err(io::Error::new(
         io::ErrorKind::TimedOut,
-        "AI-Cove-Design API sidecar did not start in time",
+        "AI Cove Design API sidecar did not start in time",
     ))
 }
 
@@ -102,7 +102,7 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<(Child, Url)>, Box<dyn s
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!(
-                "AI-Cove-Design sidecar resources are missing in {}",
+                "AI Cove Design sidecar resources are missing in {}",
                 sidecar_dir.display()
             ),
         )
@@ -126,7 +126,7 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<(Child, Url)>, Box<dyn s
         .env("DATA_DIR", data_dir)
         .env(
             "PROMPT_POOL_DIR",
-            app.path().app_data_dir()?.join("prompt-pool-data"),
+            sidecar_dir.join("prompt-pool-data"),
         )
         .env("HOST_ADAPTER", "ai-cove-new-api")
         .env("AI_COVE_API_BASE_URL", ai_cove_api_base_url)
@@ -165,7 +165,7 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running AI-Cove-Design desktop app");
+        .expect("error while running AI Cove Design desktop app");
 }
 
 #[cfg(test)]

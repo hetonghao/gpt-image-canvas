@@ -23,6 +23,9 @@ assert.deepEqual(releaseArtifactNames("win32", "x64"), {
 });
 
 const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+const defaultCapability = JSON.parse(await readFile(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"));
+assert.equal(tauriConfig.productName, "AI Cove Design", "desktop app display name should use AI Cove Design");
+assert.equal(tauriConfig.app?.windows?.[0]?.title, "AI Cove Design", "desktop window title should use AI Cove Design");
 assert.ok(
   tauriConfig.bundle?.targets?.includes("nsis"),
   "Windows desktop release requires the Tauri NSIS bundle target"
@@ -36,7 +39,12 @@ assert.deepEqual(
     "icons/icon.icns",
     "icons/icon.ico"
   ],
-  "desktop release must package the AI-Cove-Design icon"
+  "desktop release must package the AI Cove Design icon"
+);
+assert.deepEqual(
+  defaultCapability.remote?.urls,
+  ["http://127.0.0.1:*", "http://localhost:*"],
+  "desktop sidecar origin must be allowed to use Tauri opener permissions"
 );
 
 assert.equal(resolveMacSigningIdentity({}), "-", "macOS release should default to ad-hoc app signing");
@@ -60,7 +68,7 @@ assert.deepEqual(
   buildLatestManifest({
     version: "0.2.0",
     downloadBaseUrl: "https://ai-cove.com/downloads/",
-    notes: "AI-Cove-Design desktop update",
+    notes: "AI Cove Design desktop update",
     publishedAt: "2026-06-08T00:00:00.000Z",
     platforms: [
       {
@@ -72,7 +80,7 @@ assert.deepEqual(
   }),
   {
     version: "0.2.0",
-    notes: "AI-Cove-Design desktop update",
+    notes: "AI Cove Design desktop update",
     pub_date: "2026-06-08T00:00:00.000Z",
     platforms: {
       "darwin-aarch64": {
@@ -99,7 +107,7 @@ assert.deepEqual(
     buildLatestManifest({
       version: "0.2.0",
       downloadBaseUrl: "https://ai-cove.com/downloads",
-      notes: "AI-Cove-Design 0.2.0",
+      notes: "AI Cove Design 0.2.0",
       publishedAt: "2026-06-08T00:00:00.000Z",
       platforms: [
         {
@@ -112,7 +120,7 @@ assert.deepEqual(
   ),
   {
     version: "0.2.0",
-    notes: "AI-Cove-Design 0.2.0",
+    notes: "AI Cove Design 0.2.0",
     pub_date: "2026-06-08T00:00:00.000Z",
     platforms: {
       "windows-x86_64": {

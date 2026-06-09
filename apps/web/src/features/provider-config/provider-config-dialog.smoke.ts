@@ -21,6 +21,7 @@ function cssRule(selector: string): string {
 
 test("keeps the provider config dialog layout stable during initial data loading", () => {
   assert.match(source, /isInitialConfigReady/u, "ProviderConfigDialog should gate first render behind a stable initialization state");
+  assert.match(source, /const isInitialConfigReady = Boolean\(config\) \|\| !isLoading;/u, "ProviderConfigDialog should render once the primary provider config is ready");
   assert.match(styles, /\.provider-config-dialog--initializing/u, "ProviderConfigDialog should reserve stable space while initial data loads");
   assert.match(styles, /\.provider-config-skeleton/u, "ProviderConfigDialog should show a fixed skeleton instead of streaming rows into the dialog");
 });
@@ -67,4 +68,23 @@ test("hides the Codex login action in hosted AI Cove mode", () => {
   assert.match(source, /isHostedRuntime: boolean/u, "ProviderConfigDialog should accept the parent hosted-runtime signal");
   assert.match(source, /isHostedRuntime \|\| isHostedAiCoveAdapterMode/u, "Hosted runtime should stay in AI Cove mode even if host session fails");
   assert.match(source, /!isAiCoveMode[\s\S]*data-testid="provider-codex-login"/u, "Hosted AI Cove mode should not render the provider Codex login action");
+});
+
+test("keeps AI Cove hosted selects wide and avoids duplicate model requests", () => {
+  assert.match(source, /hostedModelOptionsCache/u, "ProviderConfigDialog should cache AI Cove model options across dialog instances");
+  assert.match(source, /provider-field--select/u, "ProviderConfigDialog should mark hosted select fields for wider styling");
+  assert.match(source, /provider-field--hosted-api-key/u, "ProviderConfigDialog should expand hosted API key selects to the full form width");
+  assert.match(source, /provider-field--hosted-model/u, "ProviderConfigDialog should expand hosted model selects to the full form width");
+  assert.doesNotMatch(source, /provider-field--compact[^"\n]*provider-field--hosted-model/u, "Hosted model selects should not keep compact field styling");
+  assert.match(cssRule(".provider-field--select"), /min-width:\s*0/u, "Hosted select fields should be allowed to fill their grid track");
+  assert.match(cssRule(".provider-field--hosted-api-key"), /grid-column:\s*1 \/ -1/u, "Hosted API key selects should not be squeezed into a compact column");
+  assert.match(cssRule(".provider-field--hosted-model"), /grid-column:\s*1 \/ -1/u, "Hosted model selects should not be squeezed into a compact column");
+  assert.match(cssRule(".provider-field--select .provider-field__control"), /width:\s*100%/u, "Hosted select controls should fill their field");
+  assert.match(cssRule(".provider-field--select select.provider-field__control"), /height:\s*2\.55rem/u, "Hosted native select controls should keep the same visual height as text inputs");
+});
+
+test("does not block the whole provider config dialog on hosted API keys", () => {
+  assert.match(source, /isHostApiKeysLoading/u, "ProviderConfigDialog should track hosted API key loading separately");
+  assert.ok(source.includes('void apiFetch("/api/host/api-keys"'), "Hosted API key loading should be launched without blocking config forms");
+  assert.match(source, /hostApiKeysLoading/u, "Hosted API key selects should have a loading placeholder");
 });

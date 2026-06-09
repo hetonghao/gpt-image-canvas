@@ -1,8 +1,8 @@
-# AI-Cove-Design Desktop Release
+# AI Cove Design Desktop Release
 
 ## Scope
 
-The desktop app is a Tauri wrapper around the shared AI-Cove-Design Web/API code:
+The desktop app is a Tauri wrapper around the shared AI Cove Design Web/API code:
 
 - Web UI: `apps/web`
 - Local API sidecar: `apps/api`

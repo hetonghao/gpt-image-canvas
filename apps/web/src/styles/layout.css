@@ -161,3 +161,333 @@
   color: #171717;
   transform: translateY(-1px);
 }
+
+.account-menu {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.account-menu__trigger {
+  display: inline-flex;
+  height: 2.55rem;
+  max-width: 16rem;
+  min-width: 2.55rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #171717;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 0.56rem;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.account-menu__trigger[data-desktop="true"] {
+  width: 2.55rem;
+  max-width: 2.55rem;
+  padding: 0;
+}
+
+.account-menu__trigger:hover,
+.account-menu:focus-within .account-menu__trigger {
+  border-color: #d6d3d1;
+  background: #fffdf8;
+  box-shadow: 0 10px 24px rgb(15 23 42 / 0.08);
+  transform: translateY(-1px);
+}
+
+.account-menu__trigger:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+.account-menu__avatar {
+  display: inline-flex;
+  width: 1.9rem;
+  height: 1.9rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid rgb(15 118 110 / 0.18);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgb(198 95 50 / 0.16), rgb(15 118 110 / 0.16)),
+    #fff7ed;
+  color: #0f5f58;
+  font-size: 0.78rem;
+  font-weight: 900;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.account-menu__avatar--large {
+  width: 2.4rem;
+  height: 2.4rem;
+  font-size: 0.9rem;
+}
+
+.account-menu__summary {
+  display: grid;
+  min-width: 0;
+  max-width: 9.4rem;
+  gap: 0.16rem;
+  text-align: left;
+}
+
+.account-menu__summary strong,
+.account-menu__summary span,
+.account-menu__identity-copy strong,
+.account-menu__identity-copy span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-menu__summary strong {
+  color: #171717;
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.account-menu__summary span {
+  color: #78716c;
+  font-size: 0.68rem;
+  font-weight: 720;
+}
+
+.account-menu__content {
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  right: 0;
+  z-index: 120;
+  display: grid;
+  width: min(19rem, calc(100vw - 2rem));
+  gap: 0.62rem;
+  border: 1px solid #e5dfd5;
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 24px 60px rgb(51 36 24 / 0.18);
+  opacity: 0;
+  padding: 0.72rem;
+  pointer-events: none;
+  transform: translateY(-0.25rem) scale(0.98);
+  transform-origin: top right;
+  visibility: hidden;
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease,
+    visibility 0s linear 150ms;
+}
+
+.account-menu__content::before {
+  content: "";
+  position: absolute;
+  top: -0.55rem;
+  right: 0;
+  width: 5rem;
+  height: 0.6rem;
+}
+
+.account-menu:hover .account-menu__content,
+.account-menu:focus-within .account-menu__content {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.account-menu__identity {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.65rem;
+  border-bottom: 1px solid #eee2d2;
+  padding: 0.18rem 0.1rem 0.72rem;
+}
+
+.account-menu__identity-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.account-menu__identity-copy strong {
+  display: block;
+  color: #171717;
+  font-size: 0.9rem;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.account-menu__identity-copy span {
+  display: block;
+  color: #78716c;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.account-menu__actions {
+  display: grid;
+  gap: 0.38rem;
+}
+
+.account-menu__action {
+  display: inline-flex;
+  width: 100%;
+  min-height: 2.3rem;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #33241d;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 830;
+  line-height: 1;
+  padding: 0 0.58rem;
+  text-align: left;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.account-menu__action:hover {
+  border-color: #eadfce;
+  background: #f9f1e5;
+  color: #15110d;
+}
+
+.account-menu__action:focus-visible {
+  outline: 2px solid rgb(15 118 110 / 0.28);
+  outline-offset: 2px;
+}
+
+.account-menu__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.account-menu__action--danger {
+  color: #a33624;
+}
+
+.account-menu__action--login {
+  border-color: rgb(15 118 110 / 0.22);
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
+.account-menu__action--login:hover {
+  border-color: rgb(15 118 110 / 0.34);
+  background: #dff9ed;
+  color: #0f5f58;
+}
+
+.account-menu__action--danger:hover {
+  border-color: #f2b8ad;
+  background: #fff1ed;
+  color: #8f2418;
+}
+
+.account-menu__confirm {
+  display: grid;
+  gap: 0.68rem;
+  border: 1px solid #f2b8ad;
+  border-radius: 8px;
+  background: #fff7f3;
+  padding: 0.72rem;
+}
+
+.account-menu__confirm p {
+  display: grid;
+  gap: 0.22rem;
+  margin: 0;
+}
+
+.account-menu__confirm strong {
+  color: #8f2418;
+  font-size: 0.84rem;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.account-menu__confirm span {
+  color: #7c4a3d;
+  font-size: 0.74rem;
+  font-weight: 680;
+  line-height: 1.45;
+}
+
+.account-menu__confirm-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.42rem;
+}
+
+.account-menu__confirm-cancel,
+.account-menu__confirm-submit {
+  display: inline-flex;
+  min-height: 2.05rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #eadfce;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 850;
+  line-height: 1;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.account-menu__confirm-cancel {
+  background: #fffdf8;
+  color: #33241d;
+}
+
+.account-menu__confirm-submit {
+  border-color: #c45100;
+  background: #c45100;
+  color: #fffdf8;
+}
+
+.account-menu__confirm-cancel:hover {
+  background: #f9f1e5;
+  color: #15110d;
+}
+
+.account-menu__confirm-submit:hover {
+  border-color: #8f3500;
+  background: #8f3500;
+}
+
+.account-menu__confirm-cancel:focus-visible,
+.account-menu__confirm-submit:focus-visible {
+  outline: 2px solid rgb(196 81 0 / 0.28);
+  outline-offset: 2px;
+}
+
+@media (max-width: 860px) {
+  .account-menu__summary {
+    display: none;
+  }
+}

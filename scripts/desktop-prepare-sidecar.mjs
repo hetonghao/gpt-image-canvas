@@ -14,6 +14,13 @@ const webDistRoot = path.join(sidecarRoot, "web-dist");
 const nodeRoot = path.join(sidecarRoot, "node");
 const nodeFileName = process.platform === "win32" ? "node.exe" : "node";
 
+export function promptPoolResourcePaths(rootDir = root) {
+  return {
+    source: path.join(rootDir, "prompt-pool-data"),
+    target: path.join(rootDir, "src-tauri", "resources", "sidecar", "prompt-pool-data")
+  };
+}
+
 export function apiDeployArgs(targetRoot) {
   return [
     "--filter",
@@ -72,6 +79,8 @@ export async function main() {
   run("pnpm", apiDeployArgs(apiRoot));
 
   await cp(path.join(root, "apps", "web", "dist"), webDistRoot, { recursive: true });
+  const promptPool = promptPoolResourcePaths(root);
+  await cp(promptPool.source, promptPool.target, { recursive: true });
   await mkdir(nodeRoot, { recursive: true });
   const copiedNodePath = path.join(nodeRoot, nodeFileName);
   await cp(process.execPath, copiedNodePath);

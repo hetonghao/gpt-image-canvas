@@ -9,6 +9,8 @@ import { spawnSync } from "node:child_process";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
+const DESKTOP_APP_NAME = "AI Cove Design";
+const LEGACY_DESKTOP_APP_NAME = "AI-Cove-Design";
 
 export function releaseArtifactNames(platform = process.platform, arch = process.arch) {
   if (platform === "darwin") {
@@ -125,8 +127,14 @@ async function collectCurrentPlatformArtifacts({ profile, version, releaseDir })
   const bundleDir = path.join(root, "src-tauri", "target", profile, "bundle");
 
   if (process.platform === "darwin") {
-    const installer = await findFirstExisting([path.join(bundleDir, "dmg", `AI-Cove-Design_${version}_aarch64.dmg`)]);
-    const updaterArchive = await findFirstExisting([path.join(bundleDir, "macos", "AI-Cove-Design.app.tar.gz")]);
+    const installer = await findFirstExisting([
+      path.join(bundleDir, "dmg", `${DESKTOP_APP_NAME}_${version}_aarch64.dmg`),
+      path.join(bundleDir, "dmg", `${LEGACY_DESKTOP_APP_NAME}_${version}_aarch64.dmg`)
+    ]);
+    const updaterArchive = await findFirstExisting([
+      path.join(bundleDir, "macos", `${DESKTOP_APP_NAME}.app.tar.gz`),
+      path.join(bundleDir, "macos", `${LEGACY_DESKTOP_APP_NAME}.app.tar.gz`)
+    ]);
     const updaterSignature = `${updaterArchive}.sig`;
 
     await cp(installer, path.join(releaseDir, names.installer));
@@ -141,7 +149,10 @@ async function collectCurrentPlatformArtifacts({ profile, version, releaseDir })
   }
 
   if (process.platform === "win32") {
-    const installer = await findFirstExisting([path.join(bundleDir, "nsis", `AI-Cove-Design_${version}_x64-setup.exe`)]);
+    const installer = await findFirstExisting([
+      path.join(bundleDir, "nsis", `${DESKTOP_APP_NAME}_${version}_x64-setup.exe`),
+      path.join(bundleDir, "nsis", `${LEGACY_DESKTOP_APP_NAME}_${version}_x64-setup.exe`)
+    ]);
     const updaterArchive = installer;
     const updaterSignature = `${installer}.sig`;
 
@@ -166,7 +177,7 @@ function verifyMacAppBundle({ profile }) {
     return;
   }
 
-  const appPath = path.join(root, "src-tauri", "target", profile, "bundle", "macos", "AI-Cove-Design.app");
+  const appPath = path.join(root, "src-tauri", "target", profile, "bundle", "macos", `${DESKTOP_APP_NAME}.app`);
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
 }
 
@@ -196,7 +207,7 @@ export async function main(rawArgs = process.argv.slice(2)) {
   const manifest = mergeLatestManifest(existingManifest, buildLatestManifest({
     version,
     downloadBaseUrl,
-    notes: `AI-Cove-Design ${version}`,
+    notes: `AI Cove Design ${version}`,
     publishedAt: new Date().toISOString(),
     platforms: [platform]
   }));

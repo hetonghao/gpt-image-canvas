@@ -32,7 +32,8 @@ import type {
   PromptPoolResponse,
   PromptPoolSortMode
 } from "@gpt-image-canvas/shared";
-import { apiFetch } from "../../shared/api/host-token";
+import { apiFetch, hasHostCredentials } from "../../shared/api/host-token";
+import { isDesktopAuthSupported } from "../../shared/desktop/desktop-auth";
 import { useI18n } from "../../shared/i18n";
 import {
   createPromptFavorite,
@@ -94,6 +95,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
   poolQueryKeyRef.current = poolQueryKey;
   const numberFormat = useMemo(() => new Intl.NumberFormat(locale, { maximumFractionDigits: 1, notation: "compact" }), [locale]);
   const columnCount = usePromptPoolColumnCount();
+  const canUseFavorites = !isDesktopAuthSupported() || hasHostCredentials();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -135,13 +137,19 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
   }, []);
 
   useEffect(() => {
+    if (!canUseFavorites) {
+      setFavoriteGroups([]);
+      setFavoriteItems([]);
+      return;
+    }
+
     const controller = new AbortController();
     void loadFavoriteState(controller.signal);
 
     return () => {
       controller.abort();
     };
-  }, []);
+  }, [canUseFavorites]);
 
   useEffect(() => {
     if (!selectedItem) {
@@ -306,6 +314,11 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
   }
 
   async function togglePromptFavorite(item: PromptPoolListItem | PromptPoolItem): Promise<void> {
+    if (!canUseFavorites) {
+      showStatus(t("favoriteLoginRequired"));
+      return;
+    }
+
     const existing = favoriteBySourceId.get(item.id);
     setError("");
     if (existing) {
@@ -535,6 +548,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
                       key={item.id}
                       numberFormat={numberFormat}
                       priority={priority}
+                      showFavorite={canUseFavorites}
                       onCopy={() => void copyPrompt(item)}
                       onFavorite={() => void togglePromptFavorite(item)}
                       onOpen={() => void openPromptDetail(item)}
@@ -563,6 +577,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
           favoriteSpark={favoriteSparkSourceId === selectedItem.id}
           item={selectedItem}
           numberFormat={numberFormat}
+          showFavorite={canUseFavorites}
           onClose={() => setSelectedItem(null)}
           onCopy={() => void copyPrompt(selectedItem)}
           onFavorite={() => void togglePromptFavorite(selectedItem)}
@@ -601,6 +616,7 @@ function PromptPoolCard({
   item,
   numberFormat,
   priority,
+  showFavorite,
   onCopy,
   onFavorite,
   onOpen,
@@ -612,6 +628,7 @@ function PromptPoolCard({
   item: PromptPoolListItem;
   numberFormat: Intl.NumberFormat;
   priority: boolean;
+  showFavorite: boolean;
   onCopy: () => void;
   onFavorite: () => void;
   onOpen: () => void;
@@ -646,21 +663,23 @@ function PromptPoolCard({
           </span>
           {item.imageCount > 1 ? <span className="pool-card__stack">+{item.imageCount - 1}</span> : null}
         </button>
-        <button
-          aria-label={favorite ? t("favoriteSaved") : t("favoriteSave")}
-          className="pool-favorite-button"
-          data-active={Boolean(favorite)}
-          data-spark={favoriteSpark}
-          title={favorite ? t("favoriteSaved") : t("favoriteSave")}
-          type="button"
-          onClick={onFavorite}
-        >
-          <span className="pool-favorite-button__icon-stack" aria-hidden="true">
-            <Bookmark className="pool-favorite-button__icon pool-favorite-button__icon--off size-4" />
-            <BookmarkCheck className="pool-favorite-button__icon pool-favorite-button__icon--on size-4" />
-          </span>
-          <span className="pool-favorite-button__spark" aria-hidden="true" />
-        </button>
+        {showFavorite ? (
+          <button
+            aria-label={favorite ? t("favoriteSaved") : t("favoriteSave")}
+            className="pool-favorite-button"
+            data-active={Boolean(favorite)}
+            data-spark={favoriteSpark}
+            title={favorite ? t("favoriteSaved") : t("favoriteSave")}
+            type="button"
+            onClick={onFavorite}
+          >
+            <span className="pool-favorite-button__icon-stack" aria-hidden="true">
+              <Bookmark className="pool-favorite-button__icon pool-favorite-button__icon--off size-4" />
+              <BookmarkCheck className="pool-favorite-button__icon pool-favorite-button__icon--on size-4" />
+            </span>
+            <span className="pool-favorite-button__spark" aria-hidden="true" />
+          </button>
+        ) : null}
       </div>
 
       <div className="pool-card__body">
@@ -713,6 +732,7 @@ function PromptPoolDetailDialog({
   favoriteSpark,
   item,
   numberFormat,
+  showFavorite,
   onClose,
   onCopy,
   onFavorite,
@@ -723,6 +743,7 @@ function PromptPoolDetailDialog({
   favoriteSpark: boolean;
   item: PromptPoolItem;
   numberFormat: Intl.NumberFormat;
+  showFavorite: boolean;
   onClose: () => void;
   onCopy: () => void;
   onFavorite: () => void;
@@ -739,21 +760,23 @@ function PromptPoolDetailDialog({
             <h2 id="pool-detail-title">{t("poolDetailTitle")}</h2>
           </div>
           <div className="pool-modal__header-actions">
-            <button
-              aria-label={favorite ? t("favoriteSaved") : t("favoriteSave")}
-              className="pool-favorite-button pool-favorite-button--modal"
-              data-active={Boolean(favorite)}
-              data-spark={favoriteSpark}
-              title={favorite ? t("favoriteSaved") : t("favoriteSave")}
-              type="button"
-              onClick={onFavorite}
-            >
-              <span className="pool-favorite-button__icon-stack" aria-hidden="true">
-                <Bookmark className="pool-favorite-button__icon pool-favorite-button__icon--off size-4" />
-                <BookmarkCheck className="pool-favorite-button__icon pool-favorite-button__icon--on size-4" />
-              </span>
-              <span className="pool-favorite-button__spark" aria-hidden="true" />
-            </button>
+            {showFavorite ? (
+              <button
+                aria-label={favorite ? t("favoriteSaved") : t("favoriteSave")}
+                className="pool-favorite-button pool-favorite-button--modal"
+                data-active={Boolean(favorite)}
+                data-spark={favoriteSpark}
+                title={favorite ? t("favoriteSaved") : t("favoriteSave")}
+                type="button"
+                onClick={onFavorite}
+              >
+                <span className="pool-favorite-button__icon-stack" aria-hidden="true">
+                  <Bookmark className="pool-favorite-button__icon pool-favorite-button__icon--off size-4" />
+                  <BookmarkCheck className="pool-favorite-button__icon pool-favorite-button__icon--on size-4" />
+                </span>
+                <span className="pool-favorite-button__spark" aria-hidden="true" />
+              </button>
+            ) : null}
             <button aria-label={t("commonClose")} className="pool-icon-action pool-modal__close" type="button" onClick={onClose}>
               <X className="size-4" aria-hidden="true" />
             </button>

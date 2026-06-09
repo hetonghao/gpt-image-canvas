@@ -60,6 +60,61 @@
   color: #99f6e4;
 }
 
+.app-root[data-canvas-theme="dark"] .account-menu__trigger,
+.app-root[data-canvas-theme="dark"] .account-menu__content {
+  border-color: rgb(255 255 255 / 0.1);
+  background: #211c18;
+  box-shadow: none;
+  color: var(--ink);
+}
+
+.app-root[data-canvas-theme="dark"] .account-menu__trigger:hover,
+.app-root[data-canvas-theme="dark"] .account-menu:focus-within .account-menu__trigger {
+  border-color: rgb(45 212 191 / 0.35);
+  background: rgb(20 184 166 / 0.13);
+  color: #99f6e4;
+}
+
+.app-root[data-canvas-theme="dark"] .account-menu__avatar {
+  border-color: rgb(45 212 191 / 0.28);
+  background: rgb(20 184 166 / 0.13);
+  color: #99f6e4;
+}
+
+.app-root[data-canvas-theme="dark"] .account-menu__summary strong,
+.app-root[data-canvas-theme="dark"] .account-menu__identity strong {
+  color: var(--ink);
+}
+
+.app-root[data-canvas-theme="dark"] .account-menu__summary span,
+.app-root[data-canvas-theme="dark"] .account-menu__identity span {
+  color: var(--muted-ink);
+}
+
+.app-root[data-canvas-theme="dark"] .account-menu__identity {
+  border-bottom-color: var(--line);
+}
+
+.app-root[data-canvas-theme="dark"] .account-menu__action {
+  color: #e8d9ca;
+}
+
+.app-root[data-canvas-theme="dark"] .account-menu__action:hover {
+  border-color: var(--line-strong);
+  background: #241d19;
+  color: var(--ink);
+}
+
+.app-root[data-canvas-theme="dark"] .account-menu__action--danger {
+  color: #fca5a5;
+}
+
+.app-root[data-canvas-theme="dark"] .account-menu__action--danger:hover {
+  border-color: rgb(248 113 113 / 0.35);
+  background: rgb(127 29 29 / 0.22);
+  color: #fecaca;
+}
+
 .app-root[data-canvas-theme="dark"] .top-navigation__link[data-active="true"] {
   background: #2d211c;
   box-shadow:

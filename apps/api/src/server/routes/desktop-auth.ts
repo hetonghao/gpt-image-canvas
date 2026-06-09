@@ -76,12 +76,117 @@ export function registerDesktopAuthRoutes(app: Hono): void {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>AI-Cove-Design</title>
+  <title>AI Cove Design 登录完成</title>
+  <style>
+    :root {
+      color: #15110d;
+      background: #fff7e6;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 18% 14%, rgb(198 95 50 / 0.13), transparent 30%),
+        radial-gradient(circle at 82% 12%, rgb(15 118 110 / 0.13), transparent 28%),
+        #fff7e6;
+    }
+
+    .desktop-auth-complete {
+      width: min(720px, calc(100vw - 32px));
+      border: 1px solid #e5d7c3;
+      border-radius: 14px;
+      background:
+        linear-gradient(180deg, rgb(255 255 255 / 0.42), transparent 55%),
+        #fffdf8;
+      box-shadow: 0 28px 70px rgb(51 36 24 / 0.14);
+      padding: clamp(28px, 5vw, 44px);
+    }
+
+    .desktop-auth-complete__brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+
+    .desktop-auth-complete__logo {
+      width: 52px;
+      height: 52px;
+      border-radius: 12px;
+      box-shadow: 0 12px 28px rgb(126 50 26 / 0.18);
+    }
+
+    .desktop-auth-complete__name {
+      margin: 0;
+      color: #15110d;
+      font-size: 18px;
+      font-weight: 900;
+      line-height: 1.15;
+    }
+
+    h1 {
+      max-width: 720px;
+      margin: 0;
+      color: #15110d;
+      font-size: clamp(30px, 5vw, 44px);
+      font-weight: 950;
+      letter-spacing: 0;
+      line-height: 1.08;
+      text-wrap: balance;
+    }
+
+    p {
+      max-width: 60ch;
+      margin: 16px 0 0;
+      color: #5f554b;
+      font-size: 16px;
+      font-weight: 650;
+      line-height: 1.7;
+      text-wrap: pretty;
+    }
+
+    .desktop-auth-complete__status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 26px;
+      border: 1px solid rgb(15 118 110 / 0.22);
+      border-radius: 999px;
+      background: rgb(15 118 110 / 0.1);
+      color: #0f5f58;
+      font-size: 14px;
+      font-weight: 850;
+      line-height: 1;
+      padding: 10px 14px;
+    }
+
+    .desktop-auth-complete__status::before {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: #0f766e;
+      box-shadow: 0 0 0 4px rgb(15 118 110 / 0.12);
+    }
+  </style>
 </head>
 <body>
-  <main>
-    <h1>AI-Cove-Design 登录完成</h1>
-    <p>可以关闭这个页面并返回桌面端。</p>
+  <main class="desktop-auth-complete">
+    <div class="desktop-auth-complete__brand">
+      <img class="desktop-auth-complete__logo" src="/brand-logo.png" alt="" draggable="false">
+      <p class="desktop-auth-complete__name">AI Cove Design</p>
+    </div>
+    <h1>登录完成</h1>
+    <p>桌面端已经收到 AI Cove 授权。可以关闭这个页面，回到 AI Cove Design 继续创作。</p>
+    <div class="desktop-auth-complete__status">已连接桌面端</div>
   </main>
 </body>
 </html>`);

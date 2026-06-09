@@ -6,20 +6,23 @@ import {
   Loader2,
   ShieldCheck,
   Sparkles,
-  Terminal
+  UserRound
 } from "lucide-react";
 import type { AuthStatusResponse } from "@gpt-image-canvas/shared";
 import productPreviewUrl from "../../../../../docs/assets/app-preview.png";
-import { useI18n } from "../../shared/i18n";
+import { useI18n, type Translate } from "../../shared/i18n";
 
 interface HomePageProps {
   authError: string;
   authStatus: AuthStatusResponse | null;
   isAuthLoading: boolean;
   isCodexStarting: boolean;
+  isDesktopAuthStarting: boolean;
+  isDesktopRuntime: boolean;
   onOpenProviderConfig: () => void;
   onOpenGallery: () => void;
   onStartCodexLogin: () => void;
+  onStartDesktopAuth: () => void;
 }
 
 export function HomePage({
@@ -27,13 +30,15 @@ export function HomePage({
   authStatus,
   isAuthLoading,
   isCodexStarting,
+  isDesktopAuthStarting,
+  isDesktopRuntime,
   onOpenProviderConfig,
   onOpenGallery,
-  onStartCodexLogin
+  onStartCodexLogin,
+  onStartDesktopAuth
 }: HomePageProps) {
   const { t } = useI18n();
-  const providerLabel =
-    authStatus?.provider === "openai" ? t("homeProviderOpenAI") : authStatus?.provider === "codex" ? t("homeProviderCodex") : t("homeProviderNone");
+  const providerLabel = homeProviderLabel(authStatus, t);
   const proofItems = [
     {
       copy: t("homeStatPromptCopy"),
@@ -81,9 +86,11 @@ export function HomePage({
   ];
   const plateSteps = workflowSteps.map((step) => step.title);
   const wireItems = [t("homeWirePrompt"), t("homeWireReference"), t("homeWireProvider"), t("homeWireGallery")];
+  const isDesktopSignedIn = isDesktopRuntime && authStatus?.provider !== "none" && Boolean(authStatus);
+  const homeProviderState = isDesktopRuntime && !isDesktopSignedIn ? "desktop" : authStatus?.provider ?? "loading";
 
   return (
-    <main className="home-page app-view" data-testid="home-page">
+    <main className="home-page app-view" data-desktop={isDesktopRuntime} data-testid="home-page">
       <section className="home-hero" aria-labelledby="home-title">
         <div className="home-hero__copy">
           <p className="home-kicker">
@@ -95,9 +102,11 @@ export function HomePage({
           <p className="home-deck">{t("homeDeck")}</p>
 
           <div className="home-command-strip" aria-label={t("homeEntryAria")}>
-            <div className="home-command-state" data-provider={authStatus?.provider ?? "loading"} data-testid="home-provider-state" role="status">
+            <div className="home-command-state" data-provider={homeProviderState} data-testid="home-provider-state" role="status">
               <span className="home-command-state__icon">
-                {isAuthLoading ? (
+                {isDesktopRuntime && !isDesktopSignedIn ? (
+                  <UserRound className="size-4" aria-hidden="true" />
+                ) : isAuthLoading ? (
                   <Loader2 className="size-4 animate-spin" aria-hidden="true" />
                 ) : authStatus?.provider === "none" || !authStatus ? (
                   <KeyRound className="size-4" aria-hidden="true" />
@@ -105,24 +114,39 @@ export function HomePage({
                   <ShieldCheck className="size-4" aria-hidden="true" />
                 )}
               </span>
-              <span className="home-command-state__copy">{isAuthLoading ? t("homeAuthChecking") : providerLabel}</span>
+              <span className="home-command-state__copy">{isDesktopRuntime && !isDesktopSignedIn ? t("homeDesktopProviderNone") : isAuthLoading ? t("homeAuthChecking") : providerLabel}</span>
             </div>
             <div className="home-command-actions">
-              <span aria-hidden="true">/</span>
-              <button
-                className="home-command-action home-command-action--primary"
-                data-testid="home-codex-login"
-                disabled={isAuthLoading || isCodexStarting}
-                type="button"
-                onClick={onStartCodexLogin}
-              >
-                {isCodexStarting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <KeyRound className="size-4" aria-hidden="true" />}
-                {t("homeStartCodex")}
-              </button>
-              <button className="home-command-action" data-testid="home-api-setup" type="button" onClick={onOpenProviderConfig}>
-                <Terminal className="size-4" aria-hidden="true" />
-                {t("homeApiSetup")}
-              </button>
+              {isDesktopRuntime && !isDesktopSignedIn ? (
+                <button
+                  className="home-command-action home-command-action--primary"
+                  data-testid="home-ai-cove-login"
+                  disabled={isDesktopAuthStarting}
+                  type="button"
+                  onClick={onStartDesktopAuth}
+                >
+                  {isDesktopAuthStarting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <KeyRound className="size-4" aria-hidden="true" />}
+                  {t("homeStartAiCove")}
+                </button>
+              ) : (
+                <>
+                  <span aria-hidden="true">/</span>
+                  <button
+                    className="home-command-action home-command-action--primary"
+                    data-testid="home-codex-login"
+                    disabled={isAuthLoading || isCodexStarting}
+                    type="button"
+                    onClick={onStartCodexLogin}
+                  >
+                    {isCodexStarting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <KeyRound className="size-4" aria-hidden="true" />}
+                    {t("homeStartCodex")}
+                  </button>
+                  <button className="home-command-action" data-testid="home-api-setup" type="button" onClick={onOpenProviderConfig}>
+                    <KeyRound className="size-4" aria-hidden="true" />
+                    {t("homeApiSetup")}
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -227,13 +251,20 @@ export function HomePage({
               </li>
             ))}
           </ul>
-          <button className="home-gallery-link home-gallery-link--wide" type="button" onClick={onOpenGallery}>
-            <ImageIcon className="size-4" aria-hidden="true" />
-            {t("homeGalleryReview")}
-            <ArrowRight className="size-4" aria-hidden="true" />
-          </button>
         </div>
       </section>
     </main>
   );
+}
+
+function homeProviderLabel(authStatus: AuthStatusResponse | null, t: Translate): string {
+  if (authStatus?.provider === "openai") {
+    return t("homeProviderOpenAI");
+  }
+
+  if (authStatus?.provider === "codex") {
+    return t("homeProviderCodex");
+  }
+
+  return t("homeProviderNone");
 }

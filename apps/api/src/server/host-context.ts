@@ -12,7 +12,7 @@ export type HostHonoEnv = { Variables: HostVariables };
 export type HostHonoContext = Context<HostHonoEnv>;
 
 export const hostContextMiddleware: MiddlewareHandler<{ Variables: HostVariables }> = async (c, next) => {
-  if (c.req.path === "/api/health" || c.req.path.startsWith("/api/desktop-auth/")) {
+  if (isPublicApiPath(c.req.path)) {
     await next();
     return;
   }
@@ -32,6 +32,10 @@ export const hostContextMiddleware: MiddlewareHandler<{ Variables: HostVariables
   c.set("hostContext", resolved.context);
   await next();
 };
+
+function isPublicApiPath(path: string): boolean {
+  return path === "/api/health" || path.startsWith("/api/desktop-auth/") || path === "/api/pool" || path.startsWith("/api/pool/");
+}
 
 export function requireHostContext(c: Context): HostContext {
   const context = (c as Context & { get: (key: string) => unknown }).get("hostContext");

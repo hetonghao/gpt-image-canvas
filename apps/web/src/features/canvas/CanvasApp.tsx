@@ -117,6 +117,7 @@ import {
   type GenerationResponse,
   type GenerationStatus,
   type GeneratedAsset,
+  type HostSessionResponse,
   type ImageQuality,
   type ImageSize,
   type ImageSizeValidationReason,
@@ -141,7 +142,7 @@ import {
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
 import { normalizeAssetUrl } from "../../shared/api/asset-url";
 import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
-import { apiFetch, appendHostTokenParam } from "../../shared/api/host-token";
+import { apiFetch, appendHostTokenParam, clearHostCredentials } from "../../shared/api/host-token";
 import { DesktopUpdateDialog } from "../../shared/desktop/DesktopUpdateDialog";
 import { isDesktopAuthSupported, restoreDesktopAuthSession, startDesktopAuthLogin, waitForDesktopAuthSession } from "../../shared/desktop/desktop-auth";
 import { useDesktopUpdater } from "../../shared/desktop/useDesktopUpdater";
@@ -3072,39 +3073,200 @@ function BrandMark({ className = "" }: { className?: string }) {
 
 function BrandName() {
   return (
-    <p className="brand-name" title="AI-Cove-Design">
+    <p className="brand-name" title="AI Cove Design">
       <span className="brand-name__prefix">AI</span>
-      <span className="brand-name__dash">-</span>
+      <span className="brand-name__space"> </span>
       <span className="brand-name__image">Cove</span>
-      <span className="brand-name__dash">-</span>
+      <span className="brand-name__space"> </span>
       <span className="brand-name__canvas">Design</span>
     </p>
   );
 }
 
-function TopNavigation({
-  isAiCoveMode,
+function accountDisplayName(hostSession: HostSessionResponse | null, t: Translate): string {
+  return hostSession?.user.displayName?.trim() || hostSession?.user.email?.trim() || t("accountGuestName");
+}
+
+function accountSubtitle(hostSession: HostSessionResponse | null, t: Translate): string {
+  return hostSession?.user.email?.trim() || (hostSession?.user.id ? t("accountUserId", { id: hostSession.user.id }) : t("accountGuestHint"));
+}
+
+function accountInitial(name: string): string {
+  return name.trim().slice(0, 1).toUpperCase() || "A";
+}
+
+function AccountMenu({
   desktopUpdateStatus,
+  hostSession,
+  isDesktopAuthStarting,
+  isDesktopRuntime,
   isDesktopUpdateSupported,
   onCheckDesktopUpdate,
+  onStartDesktopAuth,
   onOpenProviderConfig,
+  onLogout
+}: {
+  desktopUpdateStatus: DesktopUpdateStatus;
+  hostSession: HostSessionResponse | null;
+  isDesktopAuthStarting: boolean;
+  isDesktopRuntime: boolean;
+  isDesktopUpdateSupported: boolean;
+  onCheckDesktopUpdate: () => void;
+  onStartDesktopAuth: () => void;
+  onOpenProviderConfig: () => void;
+  onLogout: () => void;
+}) {
+  const { t } = useI18n();
+  const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
+  const isCheckingUpdate = desktopUpdateStatus === "checking";
+  const canLogout = Boolean(hostSession);
+  const displayName = accountDisplayName(hostSession, t);
+  const subtitle = accountSubtitle(hostSession, t);
+
+  return (
+    <div className="account-menu">
+      <button
+        aria-label={t("accountMenuOpen")}
+        className="account-menu__trigger"
+        data-desktop={isDesktopRuntime}
+        data-testid="account-menu-trigger"
+        title={t("accountMenuOpen")}
+        type="button"
+        onClick={() => setIsLogoutConfirmOpen(false)}
+      >
+        <span className="account-menu__avatar" aria-hidden="true">
+          {accountInitial(displayName)}
+        </span>
+        {isDesktopRuntime ? null : (
+          <>
+            <span className="account-menu__summary">
+              <strong>{displayName}</strong>
+              <span>{subtitle}</span>
+            </span>
+            <ChevronDown className="size-3.5" aria-hidden="true" />
+          </>
+        )}
+      </button>
+      <div className="account-menu__content">
+        <div className="account-menu__identity">
+          <span className="account-menu__avatar account-menu__avatar--large" aria-hidden="true">
+            {accountInitial(displayName)}
+          </span>
+          <div className="account-menu__identity-copy">
+            <strong>{displayName}</strong>
+            <span>{subtitle}</span>
+          </div>
+        </div>
+        <div className="account-menu__actions">
+          {isDesktopRuntime && hostSession ? (
+            <button
+              className="account-menu__action"
+              data-testid="account-menu-provider-settings"
+              type="button"
+              onClick={() => {
+                setIsLogoutConfirmOpen(false);
+                onOpenProviderConfig();
+              }}
+            >
+              <Settings className="size-4" aria-hidden="true" />
+              {t("navSettings")}
+            </button>
+          ) : null}
+          {isDesktopUpdateSupported ? (
+            <button
+              className="account-menu__action"
+              data-testid="account-menu-update-check"
+              disabled={isCheckingUpdate}
+              type="button"
+              onClick={() => {
+                setIsLogoutConfirmOpen(false);
+                onCheckDesktopUpdate();
+              }}
+            >
+              <RefreshCw className={`size-4 ${isCheckingUpdate ? "animate-spin" : ""}`} aria-hidden="true" />
+              {isCheckingUpdate ? t("desktopUpdateChecking") : t("desktopUpdateCheck")}
+            </button>
+          ) : null}
+          {!canLogout ? null : isLogoutConfirmOpen ? (
+            <div className="account-menu__confirm" data-testid="account-menu-logout-confirm" role="alert">
+              <p>
+                <strong>{t("accountLogoutConfirmTitle")}</strong>
+                <span>{t("accountLogoutConfirmCopy")}</span>
+              </p>
+              <div className="account-menu__confirm-actions">
+                <button className="account-menu__confirm-cancel" type="button" onClick={() => setIsLogoutConfirmOpen(false)}>
+                  {t("accountLogoutConfirmCancel")}
+                </button>
+                <button className="account-menu__confirm-submit" type="button" onClick={onLogout}>
+                  {t("accountLogoutConfirmAction")}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="account-menu__action account-menu__action--danger"
+              data-testid="account-menu-logout"
+              type="button"
+              onClick={() => setIsLogoutConfirmOpen(true)}
+            >
+              <LogOut className="size-4" aria-hidden="true" />
+              {t("accountLogout")}
+            </button>
+          )}
+          {isDesktopRuntime && !hostSession ? (
+            <button
+              className="account-menu__action account-menu__action--login"
+              data-testid="account-menu-login"
+              disabled={isDesktopAuthStarting}
+              type="button"
+              onClick={() => {
+                setIsLogoutConfirmOpen(false);
+                onStartDesktopAuth();
+              }}
+            >
+              {isDesktopAuthStarting ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <KeyRound className="size-4" aria-hidden="true" />}
+              {isDesktopAuthStarting ? t("desktopAuthOpening") : t("desktopAuthLogin")}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TopNavigation({
+  isAiCoveMode,
+  isDesktopRuntime,
+  desktopUpdateStatus,
+  hostSession,
+  isDesktopAuthStarting,
+  isDesktopUpdateSupported,
+  onCheckDesktopUpdate,
+  onLogout,
+  onOpenProviderConfig,
+  onStartDesktopAuth,
   route,
   onNavigate,
   onPreloadGallery,
   onPreloadPool
 }: {
   isAiCoveMode: boolean;
+  isDesktopRuntime: boolean;
   desktopUpdateStatus: DesktopUpdateStatus;
+  hostSession: HostSessionResponse | null;
+  isDesktopAuthStarting: boolean;
   isDesktopUpdateSupported: boolean;
   onCheckDesktopUpdate: () => void;
+  onLogout: () => void;
   onOpenProviderConfig: () => void;
+  onStartDesktopAuth: () => void;
   route: AppRoute;
   onNavigate: (route: AppRoute) => void;
   onPreloadGallery: () => void;
   onPreloadPool: () => void;
 }) {
   const { t } = useI18n();
-  const isCheckingUpdate = desktopUpdateStatus === "checking";
+  const shouldLimitDesktopNav = isDesktopRuntime && !hostSession;
 
   return (
     <header className="top-navigation">
@@ -3134,20 +3296,22 @@ function TopNavigation({
                 {t("navHome")}
               </a>
             )}
-            <a
-              aria-current={route === "canvas" ? "page" : undefined}
-              className="top-navigation__link"
-              data-active={route === "canvas"}
-              data-testid="nav-canvas"
-              href="/canvas"
-              onClick={(event) => {
-                event.preventDefault();
-                onNavigate("canvas");
-              }}
-            >
-              <Square className="size-4" aria-hidden="true" />
-              {t("navCanvas")}
-            </a>
+            {shouldLimitDesktopNav ? null : (
+              <a
+                aria-current={route === "canvas" ? "page" : undefined}
+                className="top-navigation__link"
+                data-active={route === "canvas"}
+                data-testid="nav-canvas"
+                href="/canvas"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onNavigate("canvas");
+                }}
+              >
+                <Square className="size-4" aria-hidden="true" />
+                {t("navCanvas")}
+              </a>
+            )}
             <a
               aria-current={route === "pool" ? "page" : undefined}
               className="top-navigation__link"
@@ -3164,48 +3328,51 @@ function TopNavigation({
               <BookOpenCheck className="size-4" aria-hidden="true" />
               {t("navPool")}
             </a>
-            <a
-              aria-current={route === "gallery" ? "page" : undefined}
-              className="top-navigation__link"
-              data-active={route === "gallery"}
-              data-testid="nav-gallery"
-              href="/gallery"
-              onFocus={onPreloadGallery}
-              onMouseEnter={onPreloadGallery}
-              onClick={(event) => {
-                event.preventDefault();
-                onNavigate("gallery");
-              }}
-            >
-              <ImageIcon className="size-4" aria-hidden="true" />
-              {t("navGallery")}
-            </a>
+            {shouldLimitDesktopNav ? null : (
+              <a
+                aria-current={route === "gallery" ? "page" : undefined}
+                className="top-navigation__link"
+                data-active={route === "gallery"}
+                data-testid="nav-gallery"
+                href="/gallery"
+                onFocus={onPreloadGallery}
+                onMouseEnter={onPreloadGallery}
+                onClick={(event) => {
+                  event.preventDefault();
+                  onNavigate("gallery");
+                }}
+              >
+                <ImageIcon className="size-4" aria-hidden="true" />
+                {t("navGallery")}
+              </a>
+            )}
           </nav>
-          {isDesktopUpdateSupported ? (
+          {isDesktopRuntime ? null : (
             <button
-              aria-label={t("desktopUpdateCheck")}
+              aria-label={t("navOpenProviderConfig")}
               className="top-navigation__settings"
-              data-testid="desktop-update-check"
-              disabled={isCheckingUpdate}
-              title={t("desktopUpdateCheck")}
+              data-testid="global-provider-settings"
+              title={t("navProviderConfig")}
               type="button"
-              onClick={onCheckDesktopUpdate}
+              onClick={onOpenProviderConfig}
             >
-              <RefreshCw className={`size-4 ${isCheckingUpdate ? "animate-spin" : ""}`} aria-hidden="true" />
-              <span>{isCheckingUpdate ? t("desktopUpdateChecking") : t("desktopUpdateCheck")}</span>
+              <Settings className="size-4" aria-hidden="true" />
+              <span>{t("navSettings")}</span>
             </button>
+          )}
+          {isDesktopRuntime ? (
+            <AccountMenu
+              desktopUpdateStatus={desktopUpdateStatus}
+              hostSession={hostSession}
+              isDesktopAuthStarting={isDesktopAuthStarting}
+              isDesktopRuntime={isDesktopRuntime}
+              isDesktopUpdateSupported={isDesktopUpdateSupported}
+              onCheckDesktopUpdate={onCheckDesktopUpdate}
+              onStartDesktopAuth={onStartDesktopAuth}
+              onOpenProviderConfig={onOpenProviderConfig}
+              onLogout={onLogout}
+            />
           ) : null}
-          <button
-            aria-label={t("navOpenProviderConfig")}
-            className="top-navigation__settings"
-            data-testid="global-provider-settings"
-            title={t("navProviderConfig")}
-            type="button"
-            onClick={onOpenProviderConfig}
-          >
-            <Settings className="size-4" aria-hidden="true" />
-            <span>{t("navSettings")}</span>
-          </button>
         </div>
       </div>
     </header>
@@ -3639,6 +3806,7 @@ export function App() {
   const [summaryConfig, setSummaryConfig] = useState<SummaryLlmConfigView | null>(null);
   const [isSummaryConfigLoading, setIsSummaryConfigLoading] = useState(true);
   const [summaryConfigError, setSummaryConfigError] = useState("");
+  const [hostSession, setHostSession] = useState<HostSessionResponse | null>(null);
   const [isHostSessionChecked, setIsHostSessionChecked] = useState(false);
   const [hostSessionError, setHostSessionError] = useState("");
   const [desktopAuthError, setDesktopAuthError] = useState("");
@@ -3961,6 +4129,31 @@ export function App() {
     }
   }, [desktopAuthSupported, t]);
 
+  const logoutDesktopSession = useCallback(async (): Promise<void> => {
+    setDesktopAuthError("");
+
+    try {
+      if (desktopAuthSupported) {
+        const response = await fetch("/api/desktop-auth/session", {
+          method: "DELETE"
+        });
+        if (!response.ok && response.status !== 404) {
+          throw new Error(await readErrorMessage(response, locale, t));
+        }
+      }
+
+      clearHostCredentials();
+      setHostSession(null);
+      setHostSessionError(t("desktopAuthLoggedOut"));
+      navigateToRoute("home", { replace: true });
+      window.location.assign("/");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("desktopAuthLogoutFailed");
+      setDesktopAuthError(message);
+      setHostSessionError(message);
+    }
+  }, [desktopAuthSupported, locale, navigateToRoute, t]);
+
   const saveProjectSnapshot = useCallback(async (editor: Editor): Promise<void> => {
     if (isHostSessionBlocked) {
       return;
@@ -4110,11 +4303,13 @@ export function App() {
 
         const response = await apiFetch("/api/host/session", { signal: controller.signal });
         if (!response.ok) {
-          const message = response.status === 401 ? await readErrorMessage(response, locale, t) : t("hostSessionLoadFailed");
+          const isDesktopAuthRequired = desktopAuthSupported && response.status === 401;
+          const message = isDesktopAuthRequired ? t("desktopAuthRequired") : response.status === 401 ? await readErrorMessage(response, locale, t) : t("hostSessionLoadFailed");
+          setHostSession(null);
           setHostSessionError(message);
           setSaveStatus("error");
           setSaveError(message);
-          setAuthError(message);
+          setAuthError(isDesktopAuthRequired ? "" : message);
           setAgentConfigError(message);
           setSummaryConfigError(message);
           setIsProjectLoaded(true);
@@ -4124,13 +4319,19 @@ export function App() {
           return;
         }
 
-        const session = (await response.json()) as { adapter?: { mode?: string } };
-        if (!controller.signal.aborted && isHostedAiCoveAdapterMode(session.adapter?.mode)) {
-          setIsAiCoveMode(true);
+        const session = (await response.json()) as HostSessionResponse;
+        if (!controller.signal.aborted) {
+          setHostSession(session);
+          setHostSessionError("");
+          setDesktopAuthError("");
+          if (isHostedAiCoveAdapterMode(session.adapter.mode)) {
+            setIsAiCoveMode(true);
+          }
         }
       } catch (error) {
         if (!controller.signal.aborted) {
           const message = error instanceof Error ? error.message : t("hostSessionLoadFailed");
+          setHostSession(null);
           setHostSessionError(message);
           setSaveStatus("error");
           setSaveError(message);
@@ -4154,7 +4355,7 @@ export function App() {
     return () => {
       controller.abort();
     };
-  }, [locale, t]);
+  }, [desktopAuthSupported, locale, t]);
 
   useEffect(() => {
     if (!isHostSessionChecked || isHostSessionBlocked) {
@@ -4957,9 +5158,12 @@ export function App() {
     }
 
     if (insertedCount > 0) {
+      setGenerationError("");
       if (cloudFailedCount > 0 || failedCount > 0) {
+        setGenerationMessage("");
         setGenerationWarning(generationWarningMessage(record, insertedCount, failedCount, cloudFailedCount, t));
       } else {
+        setGenerationWarning("");
         setGenerationMessage(t("generationImageInserted", { count: insertedCount }));
       }
       showGenerationCompleteNotification(record, insertedCount, failedCount, t);
@@ -7416,12 +7620,17 @@ export function App() {
     >
       <TopNavigation
         desktopUpdateStatus={desktopUpdater.state.status}
+        hostSession={hostSession}
         isAiCoveMode={isAiCoveMode}
+        isDesktopAuthStarting={isDesktopAuthStarting}
+        isDesktopRuntime={desktopAuthSupported || desktopUpdater.isSupported}
         isDesktopUpdateSupported={desktopUpdater.isSupported}
         route={route}
         onCheckDesktopUpdate={() => void desktopUpdater.checkForUpdates()}
+        onLogout={() => void logoutDesktopSession()}
         onNavigate={navigateToRoute}
         onOpenProviderConfig={() => openProviderConfigDialog()}
+        onStartDesktopAuth={() => void startDesktopAuth()}
         onPreloadGallery={preloadGalleryPage}
         onPreloadPool={preloadPromptPoolPage}
       />
@@ -7434,13 +7643,16 @@ export function App() {
       {route === "home" ? (
         <Suspense fallback={null}>
           <LazyHomePage
-            authError={authError}
+            authError={desktopAuthSupported && !hostSession ? "" : authError}
             authStatus={authStatus}
             isAuthLoading={isAuthLoading}
             isCodexStarting={codexLoginStatus === "starting"}
+            isDesktopAuthStarting={isDesktopAuthStarting}
+            isDesktopRuntime={desktopAuthSupported || desktopUpdater.isSupported}
             onOpenProviderConfig={() => openProviderConfigDialog()}
             onOpenGallery={() => navigateToRoute("gallery")}
             onStartCodexLogin={startCodexLogin}
+            onStartDesktopAuth={() => void startDesktopAuth()}
           />
         </Suspense>
       ) : null}
