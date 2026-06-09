@@ -52,7 +52,7 @@ pnpm desktop:build -- --debug
 5. release artifact collection into `desktop-release/`
 6. release `latest.json` generation, merged with an existing manifest when present
 
-The API sidecar uses `pnpm deploy --config.node-linker=hoisted` so Tauri can copy a Node-resolvable dependency tree into the app bundle. On macOS, the copied Node binary is stripped before Tauri signs/packages the app. This keeps the packaged Node runtime smaller without changing API dependencies.
+The API sidecar uses `pnpm deploy --config.node-linker=hoisted` so Tauri can copy a Node-resolvable dependency tree into the app bundle. On macOS, the copied Node binary is stripped and then ad-hoc signed before Tauri packages the app. This keeps the packaged Node runtime smaller without leaving a modified executable signature that Gatekeeper can kill after download quarantine.
 
 ## Artifacts
 

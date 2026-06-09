@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { apiDeployArgs, nodeStripArgs, promptPoolResourcePaths } from "./desktop-prepare-sidecar.mjs";
+import {
+  apiDeployArgs,
+  nodeCodesignArgs,
+  nodeStripArgs,
+  promptPoolResourcePaths
+} from "./desktop-prepare-sidecar.mjs";
 
 const args = apiDeployArgs("/tmp/ai-cove-design-sidecar-api");
 
@@ -15,6 +20,8 @@ assert.deepEqual(args, [
 
 assert.deepEqual(nodeStripArgs("/tmp/node", "darwin"), ["-x", "/tmp/node"]);
 assert.equal(nodeStripArgs("/tmp/node", "win32"), null);
+assert.deepEqual(nodeCodesignArgs("/tmp/node", "darwin"), ["--force", "--sign", "-", "/tmp/node"]);
+assert.equal(nodeCodesignArgs("/tmp/node", "win32"), null);
 
 assert.deepEqual(promptPoolResourcePaths("/tmp/ai-cove-design"), {
   source: path.join("/tmp/ai-cove-design", "prompt-pool-data"),

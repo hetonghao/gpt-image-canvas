@@ -40,6 +40,14 @@ export function nodeStripArgs(nodePath, platform = process.platform) {
   return ["-x", nodePath];
 }
 
+export function nodeCodesignArgs(nodePath, platform = process.platform) {
+  if (platform !== "darwin") {
+    return null;
+  }
+
+  return ["--force", "--sign", "-", nodePath];
+}
+
 function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: root,
@@ -71,6 +79,24 @@ function stripCopiedNodeBinary(nodePath) {
   }
 }
 
+function signCopiedNodeBinary(nodePath) {
+  const args = nodeCodesignArgs(nodePath);
+  if (!args) {
+    return;
+  }
+
+  const result = spawnSync("codesign", args, {
+    cwd: root,
+    encoding: "utf8",
+    shell: false
+  });
+
+  if (result.status !== 0) {
+    const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+    throw new Error(`codesign ${args.join(" ")} failed: ${output || result.status || "unknown error"}`);
+  }
+}
+
 export async function main() {
   await rm(sidecarRoot, { force: true, recursive: true });
   await mkdir(sidecarRoot, { recursive: true });
@@ -85,6 +111,7 @@ export async function main() {
   const copiedNodePath = path.join(nodeRoot, nodeFileName);
   await cp(process.execPath, copiedNodePath);
   stripCopiedNodeBinary(copiedNodePath);
+  signCopiedNodeBinary(copiedNodePath);
   if (process.platform !== "win32") {
     await chmod(copiedNodePath, 0o755);
   }
