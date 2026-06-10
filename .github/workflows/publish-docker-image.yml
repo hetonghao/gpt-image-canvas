@@ -1,4 +1,5 @@
 name: AI Cove GHCR Image
+run-name: AI Cove GHCR Image (${{ inputs.image_tag }})
 
 on:
   workflow_dispatch:

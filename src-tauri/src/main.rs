@@ -106,6 +106,26 @@ fn sidecar_root(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>>
     ))
 }
 
+fn normalize_sidecar_runtime_path(path: &Path) -> PathBuf {
+    normalize_sidecar_runtime_path_for_platform(path, cfg!(target_os = "windows"))
+}
+
+fn normalize_sidecar_runtime_path_for_platform(path: &Path, windows: bool) -> PathBuf {
+    if !windows {
+        return path.to_path_buf();
+    }
+
+    let raw = path.to_string_lossy();
+    if let Some(stripped) = raw.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{stripped}"));
+    }
+    if let Some(stripped) = raw.strip_prefix(r"\\?\") {
+        return PathBuf::from(stripped);
+    }
+
+    path.to_path_buf()
+}
+
 fn sidecar_log_paths(app_data_dir: &Path) -> SidecarLogPaths {
     let log_dir = app_data_dir.join("logs");
     SidecarLogPaths {
@@ -192,9 +212,13 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<StartedApiSidecar>, Box<
     } else {
         "node"
     };
-    let node_path = sidecar_dir.join("node").join(node_name);
-    let api_entry = sidecar_dir.join("api").join("dist").join("index.js");
-    let web_dist_dir = sidecar_dir.join("web-dist");
+    let node_path = normalize_sidecar_runtime_path(&sidecar_dir.join("node").join(node_name));
+    let api_entry =
+        normalize_sidecar_runtime_path(&sidecar_dir.join("api").join("dist").join("index.js"));
+    let api_dir = normalize_sidecar_runtime_path(&sidecar_dir.join("api"));
+    let prompt_pool_dir =
+        normalize_sidecar_runtime_path(&sidecar_dir.join("prompt-pool-data"));
+    let web_dist_dir = normalize_sidecar_runtime_path(&sidecar_dir.join("web-dist"));
 
     if !node_path.exists() || !api_entry.exists() || !web_dist_dir.exists() {
         return Err(io::Error::new(
@@ -209,7 +233,7 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<StartedApiSidecar>, Box<
 
     let port = allocate_api_port()?;
     let app_data_dir = app.path().app_data_dir()?;
-    let data_dir = app_data_dir.join("data");
+    let data_dir = normalize_sidecar_runtime_path(&app_data_dir.join("data"));
     let logs = sidecar_log_paths(&app_data_dir);
     fs::create_dir_all(&data_dir)?;
     if let Some(parent) = logs.startup.parent() {
@@ -227,7 +251,7 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<StartedApiSidecar>, Box<
             "starting sidecar: node={} entry={} cwd={} port={port}",
             node_path.display(),
             api_entry.display(),
-            sidecar_dir.join("api").display()
+            api_dir.display()
         ),
     );
 
@@ -242,14 +266,11 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<StartedApiSidecar>, Box<
 
     let child = Command::new(node_path)
         .arg(api_entry)
-        .current_dir(sidecar_dir.join("api"))
+        .current_dir(api_dir)
         .env("HOST", "127.0.0.1")
         .env("PORT", port.to_string())
         .env("DATA_DIR", data_dir)
-        .env(
-            "PROMPT_POOL_DIR",
-            sidecar_dir.join("prompt-pool-data"),
-        )
+        .env("PROMPT_POOL_DIR", prompt_pool_dir)
         .env("HOST_ADAPTER", "ai-cove-new-api")
         .env("AI_COVE_API_BASE_URL", ai_cove_api_base_url)
         .env("AI_COVE_PUBLIC_BASE_URL", ai_cove_public_base_url)
@@ -375,5 +396,38 @@ mod tests {
             paths.stderr,
             app_data_dir.join("logs").join("api-sidecar-stderr.log")
         );
+    }
+
+    #[test]
+    fn strips_windows_verbatim_drive_prefix_for_runtime_paths() {
+        let raw = PathBuf::from(r"\\?\D:\Software\AI Cove Design\resources\sidecar\api\dist\index.js");
+
+        let normalized = normalize_sidecar_runtime_path_for_platform(&raw, true);
+
+        assert_eq!(
+            normalized,
+            PathBuf::from(r"D:\Software\AI Cove Design\resources\sidecar\api\dist\index.js")
+        );
+    }
+
+    #[test]
+    fn strips_windows_verbatim_unc_prefix_for_runtime_paths() {
+        let raw = PathBuf::from(r"\\?\UNC\server\share\AI Cove Design\resources\sidecar");
+
+        let normalized = normalize_sidecar_runtime_path_for_platform(&raw, true);
+
+        assert_eq!(
+            normalized,
+            PathBuf::from(r"\\server\share\AI Cove Design\resources\sidecar")
+        );
+    }
+
+    #[test]
+    fn leaves_non_windows_runtime_paths_unchanged() {
+        let raw = PathBuf::from("/tmp/ai-cove-design/resources/sidecar/api/dist/index.js");
+
+        let normalized = normalize_sidecar_runtime_path_for_platform(&raw, false);
+
+        assert_eq!(normalized, raw);
     }
 }
