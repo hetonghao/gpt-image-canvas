@@ -124,12 +124,65 @@ export function registerDesktopAuthRoutes(app: Hono): void {
       box-shadow: 0 12px 28px rgb(126 50 26 / 0.18);
     }
 
-    .desktop-auth-complete__name {
+    .desktop-auth-brand-name {
+      position: relative;
+      max-width: 100%;
       margin: 0;
+      overflow: hidden;
+      padding-bottom: 4px;
       color: #15110d;
-      font-size: 18px;
+      font-family: "Bodoni 72", "Didot", "Georgia", ui-serif, serif;
+      font-size: 21px;
       font-weight: 900;
-      line-height: 1.15;
+      letter-spacing: 0;
+      line-height: 0.98;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .desktop-auth-brand-name::after {
+      content: "";
+      position: absolute;
+      right: 2px;
+      bottom: 0;
+      left: 0;
+      height: 3px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgb(198 95 50 / 0.9), rgb(15 118 110 / 0.78));
+      transform: skewX(-18deg);
+    }
+
+    .desktop-auth-brand-name span {
+      display: inline-block;
+      vertical-align: baseline;
+    }
+
+    .desktop-auth-brand-name__prefix {
+      color: #2c211a;
+      font-style: italic;
+      font-weight: 700;
+    }
+
+    .desktop-auth-brand-name__image {
+      color: transparent;
+      background: linear-gradient(100deg, #7e321a 0%, #c65f32 48%, #0f766e 100%);
+      background-clip: text;
+      font-size: 1.07em;
+      -webkit-background-clip: text;
+    }
+
+    .desktop-auth-brand-name__canvas {
+      color: #0f5f58;
+      font-size: 1.15em;
+      text-shadow: 0 1px 0 rgb(231 177 112 / 0.36);
+    }
+
+    .desktop-auth-brand-name__space {
+      width: 0.18em;
+    }
+
+    .desktop-auth-brand-name__space--after-prefix {
+      width: 0.34em;
     }
 
     h1 {
@@ -182,7 +235,9 @@ export function registerDesktopAuthRoutes(app: Hono): void {
   <main class="desktop-auth-complete">
     <div class="desktop-auth-complete__brand">
       <img class="desktop-auth-complete__logo" src="/brand-logo.png" alt="" draggable="false">
-      <p class="desktop-auth-complete__name">AI Cove Design</p>
+      <p class="desktop-auth-brand-name" aria-label="AI  Cove Design">
+        <span class="desktop-auth-brand-name__prefix">AI</span><span class="desktop-auth-brand-name__space desktop-auth-brand-name__space--after-prefix"> </span><span class="desktop-auth-brand-name__image">Cove</span><span class="desktop-auth-brand-name__space"> </span><span class="desktop-auth-brand-name__canvas">Design</span>
+      </p>
     </div>
     <h1>登录完成</h1>
     <p>桌面端已经收到 AI Cove 授权。可以关闭这个页面，回到 AI Cove Design 继续创作。</p>

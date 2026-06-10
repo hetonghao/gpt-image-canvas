@@ -20,7 +20,7 @@ import {
   X
 } from "lucide-react";
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type PointerEvent, type ReactNode } from "react";
 import {
   PROVIDER_SOURCE_IDS,
   isHostedAiCoveAdapterMode,
@@ -153,7 +153,6 @@ export function ProviderConfigDialog({
   const [message, setMessage] = useState<DialogMessage | null>(null);
   const [draggingSourceId, setDraggingSourceId] = useState<ProviderSourceId | null>(null);
   const [activeTab, setActiveTab] = useState<ProviderConfigTab>(initialTab);
-  const providerConfigBodyRef = useRef<HTMLDivElement | null>(null);
   const isAiCoveMode = isHostedRuntime || isHostedAiCoveAdapterMode(hostSession?.adapter.mode);
   const gatewayBaseUrl = hostSession?.adapter.gatewayBaseUrl ?? queryBaseUrlSeed;
   const hasHostApiKeys = hostApiKeys.length > 0;
@@ -409,10 +408,6 @@ export function ProviderConfigDialog({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [onClose]);
-
-  useEffect(() => {
-    providerConfigBodyRef.current?.scrollTo({ top: 0 });
-  }, [activeTab]);
 
   function applyProviderConfig(nextConfig: ProviderConfigResponse, context: HostSessionResponse | null = hostSession): void {
     const nextIsAiCoveMode = isHostedAiCoveAdapterMode(context?.adapter.mode);
@@ -947,7 +942,7 @@ export function ProviderConfigDialog({
           </button>
         </header>
 
-        <div className="provider-config-dialog__body" ref={providerConfigBodyRef}>
+        <div className="provider-config-dialog__body">
           {!isInitialConfigReady ? (
             <ProviderConfigSkeleton label={t("providerConfigLoading")} />
           ) : (

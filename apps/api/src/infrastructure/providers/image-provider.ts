@@ -198,7 +198,7 @@ class OpenAIImageProvider implements ImageProvider {
       const bodyText = await response.text();
       const parsed = parseImagesResponseLike(bodyText);
       if (!response.ok) {
-        throw providerHttpErrorFromJson(response.status, parsed);
+        throw providerHttpErrorFromBody(response.status, bodyText);
       }
       if (!parsed) {
         throw new ProviderError("unsupported_provider_behavior", "OpenAI 图像服务返回了无法识别的响应。", 502);
@@ -306,26 +306,53 @@ function parseImagesResponseLike(value: unknown): ImagesResponse | undefined {
   return undefined;
 }
 
+function parseJsonObjectLike(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === "string") {
+    try {
+      return parseJsonObjectLike(JSON.parse(value) as unknown);
+    } catch {
+      return undefined;
+    }
+  }
+
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  return undefined;
+}
+
 function isAiCoveCompatibleBaseUrl(baseURL: string | undefined): boolean {
-  const normalized = baseURL?.trim().toLowerCase() ?? "";
-  return normalized.includes("api.ai-cove.com") || normalized.includes("host.docker.internal:8080") || normalized.includes("127.0.0.1:8080");
+  const normalized = baseURL?.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  try {
+    const host = new URL(normalized).host.toLowerCase();
+    return host === "ai-cove.com" || host === "api.ai-cove.com" || host === "host.docker.internal:8080" || host === "127.0.0.1:8080";
+  } catch {
+    const lower = normalized.toLowerCase();
+    return lower.includes("://ai-cove.com") || lower.includes("://api.ai-cove.com") || lower.includes("host.docker.internal:8080") || lower.includes("127.0.0.1:8080");
+  }
 }
 
 function trimmedBaseUrl(baseURL: string | undefined): string {
   return (baseURL ?? "").replace(/\/+$/u, "");
 }
 
-function providerHttpErrorFromJson(status: number, parsed: ImagesResponse | undefined): ProviderError {
+function providerHttpErrorFromBody(status: number, bodyText: string): ProviderError {
+  const parsed = parseJsonObjectLike(bodyText);
   if (status === 403 && !parsed) {
     return new ProviderError("upstream_failure", "AI Cove 网关拒绝了图像请求（HTTP 403）。请检查该 API Key 的额度、分组图片权限或可用性。", 403);
   }
 
   const fallbackMessage = `OpenAI 图像服务请求失败（HTTP ${status}）。`;
-  if (!parsed || typeof parsed !== "object") {
+  if (!parsed) {
     return new ProviderError("upstream_failure", fallbackMessage, providerHttpStatus(status));
   }
 
-  const errorRecord = (parsed as unknown as { error?: { message?: unknown } }).error;
+  const errorRecord = (parsed as { error?: { message?: unknown } }).error;
   const message = typeof errorRecord?.message === "string" && errorRecord.message.trim() ? errorRecord.message.trim() : fallbackMessage;
   return new ProviderError("upstream_failure", message, providerHttpStatus(status));
 }

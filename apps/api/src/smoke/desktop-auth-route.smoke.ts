@@ -40,9 +40,14 @@ try {
   );
   assert.equal(callbackResponse.status, 200);
   const callbackHtml = await callbackResponse.text();
-  assert.match(callbackHtml, /AI Cove Design/u);
+  assert.match(callbackHtml, /aria-label="AI  Cove Design"/u);
   assert.match(callbackHtml, /brand-logo\.png/u);
   assert.match(callbackHtml, /desktop-auth-complete/u);
+  assert.match(callbackHtml, /desktop-auth-brand-name/u);
+  assert.match(callbackHtml, /desktop-auth-brand-name__prefix">AI<\/span>/u);
+  assert.match(callbackHtml, /desktop-auth-brand-name__space desktop-auth-brand-name__space--after-prefix/u);
+  assert.match(callbackHtml, /desktop-auth-brand-name__image">Cove<\/span>/u);
+  assert.match(callbackHtml, /background:\s*linear-gradient\(100deg, #7e321a 0%, #c65f32 48%, #0f766e 100%\)/u);
 
   const savedSessionResponse = await app.request("http://127.0.0.1:8787/api/desktop-auth/session");
   assert.equal(savedSessionResponse.status, 200);

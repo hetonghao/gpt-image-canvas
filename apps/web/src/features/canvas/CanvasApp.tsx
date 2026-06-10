@@ -188,7 +188,7 @@ const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
 const MOBILE_DRAWER_MEDIA_QUERY = "(max-width: 1023px)";
 const ASSET_PREVIEW_WIDTHS = [256, 512, 1024, 2048] as const;
 type AssetPreviewWidth = (typeof ASSET_PREVIEW_WIDTHS)[number];
-const GENERATED_ASSET_INITIAL_PREVIEW_WIDTH: AssetPreviewWidth = 2048;
+const GENERATED_ASSET_INITIAL_PREVIEW_WIDTH: AssetPreviewWidth = 1024;
 const SUPPORTED_REFERENCE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 const initialCanvasPreviewWidths = new Map<string, AssetPreviewWidth>();
 const assetMetadataCache = new Map<string, ImageSize>();
@@ -1327,19 +1327,28 @@ function livePlacement(editor: Editor, placement: GenerationPlaceholderPlacement
   };
 }
 
+function generatedCanvasDisplayUrl(asset: Pick<GeneratedAsset, "id">): string {
+  return assetPreviewUrl(asset.id, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH);
+}
+
+function generatedCanvasOriginalUrl(asset: Pick<GeneratedAsset, "url">): string {
+  return normalizeAssetUrl(asset.url);
+}
+
 function createImageAsset(asset: GeneratedAsset): TLAsset {
   initialCanvasPreviewWidths.set(asset.id, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH);
   rememberAssetMetadata(asset.id, {
     width: asset.width,
     height: asset.height
   });
+  const displayUrl = generatedCanvasDisplayUrl(asset);
 
   return {
     id: createTldrawAssetId(asset.id),
     typeName: "asset",
     type: "image",
     props: {
-      src: normalizeAssetUrl(asset.url),
+      src: displayUrl,
       w: asset.width,
       h: asset.height,
       name: asset.fileName,
@@ -1347,7 +1356,8 @@ function createImageAsset(asset: GeneratedAsset): TLAsset {
       isAnimated: false
     },
     meta: {
-      localAssetId: asset.id
+      localAssetId: asset.id,
+      originalUrl: generatedCanvasOriginalUrl(asset)
     }
   };
 }
@@ -1368,7 +1378,7 @@ function createImageShape(
       assetId,
       w: placement.width,
       h: placement.height,
-      url: normalizeAssetUrl(asset.url),
+      url: generatedCanvasOriginalUrl(asset),
       playing: true,
       crop: null,
       flipX: false,
@@ -1441,7 +1451,7 @@ async function preloadGenerationRecordPreviews(record: GenerationRecord, signal:
 
 async function preloadGeneratedAssetPreview(asset: GeneratedAsset, signal: AbortSignal): Promise<void> {
   try {
-    await preloadImageUrl(assetPreviewUrl(asset.id, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH), signal);
+    await preloadImageUrl(generatedCanvasDisplayUrl(asset), signal);
   } catch (error) {
     if (signal.aborted) {
       throw error;
@@ -1834,14 +1844,21 @@ function getLocalAssetId(asset: TLAsset | undefined, sourceUrl?: string): string
   return undefined;
 }
 
+function getOriginalAssetUrl(asset: TLAsset | undefined): string | undefined {
+  return asset?.meta && typeof asset.meta.originalUrl === "string" ? asset.meta.originalUrl : undefined;
+}
+
 function resolveCanvasAssetUrl(asset: TLAsset, context: TLAssetContext): string | null {
   if (asset.type !== "image") {
     return "src" in asset.props && typeof asset.props.src === "string" ? asset.props.src : null;
   }
 
   const sourceUrl = asset.props.src;
-  if (!sourceUrl || context.shouldResolveToOriginal) {
-    return sourceUrl || null;
+  if (!sourceUrl) {
+    return null;
+  }
+  if (context.shouldResolveToOriginal) {
+    return getOriginalAssetUrl(asset) ?? sourceUrl;
   }
 
   const localAssetId = getLocalAssetId(asset, sourceUrl);
@@ -3073,9 +3090,9 @@ function BrandMark({ className = "" }: { className?: string }) {
 
 function BrandName() {
   return (
-    <p className="brand-name" title="AI Cove Design">
+    <p className="brand-name" title="AI  Cove Design">
       <span className="brand-name__prefix">AI</span>
-      <span className="brand-name__space"> </span>
+      <span className="brand-name__space brand-name__space--after-prefix"> </span>
       <span className="brand-name__image">Cove</span>
       <span className="brand-name__space"> </span>
       <span className="brand-name__canvas">Design</span>

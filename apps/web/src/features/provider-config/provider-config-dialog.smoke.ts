@@ -31,11 +31,14 @@ test("lets the loaded provider config dialog height adapt to its content", () =>
   assert.match(cssRule(".provider-config-dialog--initializing"), /min-height/u, "Only the initializing ProviderConfigDialog should reserve skeleton height");
 });
 
-test("keeps provider config tab changes inside a stable scrollable dialog body", () => {
-  assert.match(source, /providerConfigBodyRef/u, "ProviderConfigDialog should keep a ref to its scrollable body");
-  assert.match(source, /providerConfigBodyRef\.current\?\.scrollTo\(\{ top: 0 \}\)/u, "ProviderConfigDialog should reset body scroll when tabs change");
-  assert.match(cssRule(".provider-config-dialog__body"), /flex:\s*1 1 auto/u, "ProviderConfigDialog body should own the available vertical space");
-  assert.match(cssRule(".provider-config-dialog__body"), /min-height:\s*0/u, "ProviderConfigDialog body should be allowed to shrink and scroll inside the modal");
+test("lets provider config tab content expand the dialog instead of creating an inner body scrollbar", () => {
+  assert.doesNotMatch(source, /providerConfigBodyRef/u, "ProviderConfigDialog should not keep a body ref only for tab scroll resets");
+  assert.doesNotMatch(source, /scrollTo\(\{ top: 0 \}\)/u, "ProviderConfigDialog should not force a body scroll reset when tabs change");
+  assert.match(cssRule(".provider-config-dialog"), /overflow-x:\s*hidden/u, "ProviderConfigDialog should keep horizontal overflow clipped");
+  assert.match(cssRule(".provider-config-dialog"), /overflow-y:\s*auto/u, "ProviderConfigDialog should own viewport overflow when content is taller than the screen");
+  assert.match(cssRule(".provider-config-dialog__body"), /flex:\s*0 0 auto/u, "ProviderConfigDialog body should size to the active tab content");
+  assert.match(cssRule(".provider-config-dialog__body"), /overflow-y:\s*visible/u, "ProviderConfigDialog body should not create its own vertical scrollbar");
+  assert.doesNotMatch(styles, /max-height:\s*min\(36rem/u, "Desktop provider config dialog should not cap loaded tab content at 36rem");
 });
 
 test("uses the regular summary layout during provider onboarding", () => {
@@ -80,7 +83,15 @@ test("keeps AI Cove hosted selects wide and avoids duplicate model requests", ()
   assert.match(cssRule(".provider-field--hosted-api-key"), /grid-column:\s*1 \/ -1/u, "Hosted API key selects should not be squeezed into a compact column");
   assert.match(cssRule(".provider-field--hosted-model"), /grid-column:\s*1 \/ -1/u, "Hosted model selects should not be squeezed into a compact column");
   assert.match(cssRule(".provider-field--select .provider-field__control"), /width:\s*100%/u, "Hosted select controls should fill their field");
-  assert.match(cssRule(".provider-field--select select.provider-field__control"), /height:\s*2\.55rem/u, "Hosted native select controls should keep the same visual height as text inputs");
+  assert.match(cssRule(".provider-field"), /--provider-control-height:\s*2\.75rem/u, "Provider fields should define one shared control height");
+  assert.match(cssRule(".provider-field__control"), /min-height:\s*var\(--provider-control-height\)/u, "Text inputs should use the shared provider control height");
+  assert.match(cssRule(".provider-field--select select.provider-field__control"), /height:\s*var\(--provider-control-height\)/u, "Hosted native select controls should use the same visual height as text inputs");
+  assert.match(cssRule(".provider-field--select select.provider-field__control"), /min-height:\s*var\(--provider-control-height\)/u, "Hosted native select controls should not retain a separate min-height");
+  assert.match(
+    cssRule(".provider-detail-card--summary-onboarding .provider-field"),
+    /--provider-control-height:\s*2\.5rem/u,
+    "Compact Summary onboarding fields should still keep selects and inputs aligned"
+  );
 });
 
 test("does not block the whole provider config dialog on hosted API keys", () => {
