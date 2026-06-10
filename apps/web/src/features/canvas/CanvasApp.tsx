@@ -145,6 +145,7 @@ import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
 import { apiFetch, appendHostTokenParam, clearHostCredentials } from "../../shared/api/host-token";
 import { DesktopUpdateDialog } from "../../shared/desktop/DesktopUpdateDialog";
 import { isDesktopAuthSupported, restoreDesktopAuthSession, startDesktopAuthLogin, waitForDesktopAuthSession } from "../../shared/desktop/desktop-auth";
+import { useDesktopSidecarStartup } from "../../shared/desktop/desktop-sidecar-startup";
 import { useDesktopUpdater } from "../../shared/desktop/useDesktopUpdater";
 import type { DesktopUpdateStatus } from "../../shared/desktop/desktop-updater";
 import {
@@ -3716,6 +3717,7 @@ function PromptFavoritesFloatingPanel({
 export function App() {
   const { formatDateTime, locale, setLocale, t } = useI18n();
   const desktopUpdater = useDesktopUpdater();
+  const desktopSidecarStartup = useDesktopSidecarStartup();
   const desktopAuthSupported = isDesktopAuthSupported();
   const tldrawLocale = tldrawLocaleForLocale(locale);
   const [tldrawUserPreferences, setTldrawUserPreferences] = useState<TLUserPreferences>(() => ({
@@ -4310,6 +4312,28 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (desktopSidecarStartup.status === "starting") {
+      return;
+    }
+
+    if (desktopSidecarStartup.status === "error") {
+      const message = desktopSidecarStartup.message ?? t("desktopSidecarStartFailed");
+      setHostSession(null);
+      setHostSessionError(message);
+      setDesktopAuthError(message);
+      setSaveStatus("error");
+      setSaveError(message);
+      setAuthError(message);
+      setAgentConfigError(message);
+      setSummaryConfigError(message);
+      setIsProjectLoaded(true);
+      setIsAuthLoading(false);
+      setIsAgentConfigLoading(false);
+      setIsSummaryConfigLoading(false);
+      setIsHostSessionChecked(true);
+      return;
+    }
+
     const controller = new AbortController();
 
     async function loadHostSession(): Promise<void> {
@@ -4372,7 +4396,7 @@ export function App() {
     return () => {
       controller.abort();
     };
-  }, [desktopAuthSupported, locale, t]);
+  }, [desktopAuthSupported, desktopSidecarStartup.message, desktopSidecarStartup.status, locale, t]);
 
   useEffect(() => {
     if (!isHostSessionChecked || isHostSessionBlocked) {
@@ -7624,6 +7648,34 @@ export function App() {
     } else {
       editor.zoomToSelection({ animation: { duration: 220 } });
     }
+  }
+
+  if (desktopSidecarStartup.status === "starting") {
+    return (
+      <div className="app-root">
+        <div className="canvas-loading-state">
+          <BrandMark className="brand-mark--large" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-neutral-800">{t("canvasLoadingTitle")}</p>
+            <p className="mt-1 text-xs text-neutral-500">{t("desktopSidecarStarting")}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (desktopSidecarStartup.status === "error") {
+    return (
+      <div className="app-root">
+        <div className="canvas-loading-state canvas-host-session-state" role="alert">
+          <AlertTriangle className="size-5 text-amber-600" aria-hidden="true" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-neutral-800">{t("desktopSidecarStartFailed")}</p>
+            <p className="mt-1 text-xs text-neutral-500">{desktopSidecarStartup.message ?? t("desktopSidecarStartFailed")}</p>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

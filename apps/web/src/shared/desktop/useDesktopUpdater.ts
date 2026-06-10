@@ -153,6 +153,7 @@ export function useDesktopUpdater(options: UseDesktopUpdaterOptions = {}) {
     }));
 
     try {
+      await adapter.prepareRelaunch();
       await availableUpdate.install();
       setState((current) => ({
         ...current,

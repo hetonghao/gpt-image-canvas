@@ -58,6 +58,7 @@ export type DesktopUpdaterAdapter = {
   isSupported: () => boolean;
   getCurrentVersion: () => Promise<string>;
   check: () => Promise<DesktopUpdateEntry | null>;
+  prepareRelaunch: () => Promise<void>;
   relaunch: () => Promise<void>;
 };
 
@@ -78,6 +79,17 @@ export const initialDesktopUpdaterState: DesktopUpdaterState = {
   error: null,
   isDialogOpen: false
 };
+
+let desktopRelaunchLoader: Promise<() => Promise<void>> | null = null;
+
+async function loadDesktopRelaunch(): Promise<() => Promise<void>> {
+  if (!isTauriRuntime()) {
+    return async () => {};
+  }
+
+  desktopRelaunchLoader ??= import("@tauri-apps/plugin-process").then(({ relaunch }) => relaunch);
+  return desktopRelaunchLoader;
+}
 
 export const desktopUpdaterAdapter: DesktopUpdaterAdapter = {
   isSupported() {
@@ -104,9 +116,11 @@ export const desktopUpdaterAdapter: DesktopUpdaterAdapter = {
       install: () => tauriUpdate.install()
     };
   },
+  async prepareRelaunch() {
+    await loadDesktopRelaunch();
+  },
   async relaunch() {
-    if (!isTauriRuntime()) return;
-    const { relaunch } = await import("@tauri-apps/plugin-process");
+    const relaunch = await loadDesktopRelaunch();
     await relaunch();
   }
 };

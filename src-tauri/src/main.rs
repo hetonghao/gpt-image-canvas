@@ -8,7 +8,22 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
-use tauri::{Manager, Url};
+use tauri::{AppHandle, Emitter, Manager, Url};
+
+const DESKTOP_SIDECAR_STARTUP_EVENT: &str = "ai-cove-design://sidecar-startup";
+
+struct SidecarLogPaths {
+    startup: PathBuf,
+    stdout: PathBuf,
+    stderr: PathBuf,
+}
+
+struct StartedApiSidecar {
+    child: Child,
+    url: Url,
+    port: u16,
+    logs: SidecarLogPaths,
+}
 
 #[derive(Default)]
 struct ApiSidecar {
@@ -34,7 +49,7 @@ fn allocate_api_port() -> io::Result<u16> {
 }
 
 fn wait_for_api_port(port: u16) -> io::Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + sidecar_startup_timeout();
     let address = format!("127.0.0.1:{port}");
 
     while Instant::now() < deadline {
@@ -53,6 +68,14 @@ fn wait_for_api_port(port: u16) -> io::Result<()> {
         io::ErrorKind::TimedOut,
         "AI Cove Design API sidecar did not start in time",
     ))
+}
+
+fn sidecar_startup_timeout() -> Duration {
+    if cfg!(target_os = "windows") {
+        Duration::from_secs(45)
+    } else {
+        Duration::from_secs(20)
+    }
 }
 
 fn resolve_sidecar_root(resource_dir: &Path, sidecar_override: Option<String>) -> PathBuf {
@@ -83,7 +106,82 @@ fn sidecar_root(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>>
     ))
 }
 
-fn start_api_sidecar(app: &tauri::App) -> Result<Option<(Child, Url)>, Box<dyn std::error::Error>> {
+fn sidecar_log_paths(app_data_dir: &Path) -> SidecarLogPaths {
+    let log_dir = app_data_dir.join("logs");
+    SidecarLogPaths {
+        startup: log_dir.join("api-sidecar-startup.log"),
+        stdout: log_dir.join("api-sidecar-stdout.log"),
+        stderr: log_dir.join("api-sidecar-stderr.log"),
+    }
+}
+
+fn append_sidecar_log(path: &Path, message: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        use std::io::Write;
+        let _ = writeln!(file, "[{:?}] {}", std::time::SystemTime::now(), message);
+    }
+}
+
+fn emit_sidecar_startup(handle: &AppHandle, status: &str, message: Option<String>) {
+    let payload = serde_json::json!({
+        "status": status,
+        "message": message
+    });
+    let _ = handle.emit(DESKTOP_SIDECAR_STARTUP_EVENT, payload);
+}
+
+fn stop_api_sidecar(handle: &AppHandle) {
+    if let Ok(mut child) = handle.state::<ApiSidecar>().child.lock() {
+        if let Some(mut process) = child.take() {
+            let _ = process.kill();
+            let _ = process.wait();
+        }
+    }
+}
+
+fn format_sidecar_startup_failure(logs: &SidecarLogPaths, detail: &str) -> String {
+    format!(
+        "AI Cove Design 本地服务启动失败。{detail} 日志位置：{}",
+        logs.startup.display()
+    )
+}
+
+fn monitor_api_sidecar_startup(handle: AppHandle, port: u16, url: Url, logs: SidecarLogPaths) {
+    std::thread::spawn(move || match wait_for_api_port(port) {
+        Ok(()) => {
+            append_sidecar_log(
+                &logs.startup,
+                &format!("sidecar ready on http://127.0.0.1:{port}/"),
+            );
+
+            if let Some(window) = handle.get_webview_window("main") {
+                if let Err(error) = window.navigate(url.clone()) {
+                    let message = format_sidecar_startup_failure(
+                        &logs,
+                        &format!("窗口跳转本地服务失败：{error}。"),
+                    );
+                    append_sidecar_log(&logs.startup, &message);
+                    emit_sidecar_startup(&handle, "error", Some(message));
+                }
+            }
+        }
+        Err(error) => {
+            let message = format_sidecar_startup_failure(
+                &logs,
+                &format!("本地服务未在 {} 秒内就绪：{error}。", sidecar_startup_timeout().as_secs()),
+            );
+            append_sidecar_log(&logs.startup, &message);
+            stop_api_sidecar(&handle);
+            emit_sidecar_startup(&handle, "error", Some(message));
+        }
+    });
+}
+
+fn start_api_sidecar(app: &tauri::App) -> Result<Option<StartedApiSidecar>, Box<dyn std::error::Error>> {
     if cfg!(debug_assertions) && env::var("AI_COVE_DESIGN_START_SIDECAR").as_deref() != Ok("1") {
         return Ok(None);
     }
@@ -110,13 +208,37 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<(Child, Url)>, Box<dyn s
     }
 
     let port = allocate_api_port()?;
-    let data_dir = app.path().app_data_dir()?.join("data");
+    let app_data_dir = app.path().app_data_dir()?;
+    let data_dir = app_data_dir.join("data");
+    let logs = sidecar_log_paths(&app_data_dir);
     fs::create_dir_all(&data_dir)?;
+    if let Some(parent) = logs.startup.parent() {
+        fs::create_dir_all(parent)?;
+    }
 
     let ai_cove_api_base_url =
         env::var("AI_COVE_API_BASE_URL").unwrap_or_else(|_| "https://ai-cove.com".to_string());
     let ai_cove_public_base_url =
         env::var("AI_COVE_PUBLIC_BASE_URL").unwrap_or_else(|_| ai_cove_api_base_url.clone());
+
+    append_sidecar_log(
+        &logs.startup,
+        &format!(
+            "starting sidecar: node={} entry={} cwd={} port={port}",
+            node_path.display(),
+            api_entry.display(),
+            sidecar_dir.join("api").display()
+        ),
+    );
+
+    let stdout_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&logs.stdout)?;
+    let stderr_file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&logs.stderr)?;
 
     let child = Command::new(node_path)
         .arg(api_entry)
@@ -134,13 +256,22 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<(Child, Url)>, Box<dyn s
         .env("AI_COVE_DESIGN_WEB_DIST_DIR", web_dist_dir)
         .env("DESKTOP_AUTH_ENABLED", "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
         .spawn()?;
 
-    wait_for_api_port(port)?;
     let url = Url::parse(&format!("http://127.0.0.1:{port}/"))?;
-    Ok(Some((child, url)))
+    append_sidecar_log(
+        &logs.startup,
+        &format!("spawned sidecar process pid={}", child.id()),
+    );
+
+    Ok(Some(StartedApiSidecar {
+        child,
+        url,
+        port,
+        logs,
+    }))
 }
 
 fn main() {
@@ -151,15 +282,42 @@ fn main() {
         .setup(|app| {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
-            if let Some((child, url)) = start_api_sidecar(app)? {
-                app.state::<ApiSidecar>()
-                    .child
-                    .lock()
-                    .expect("failed to lock API sidecar state")
-                    .replace(child);
-
-                if let Some(window) = app.get_webview_window("main") {
-                    window.navigate(url)?;
+            match start_api_sidecar(app) {
+                Ok(Some(started)) => {
+                    emit_sidecar_startup(
+                        &app.handle(),
+                        "starting",
+                        Some("正在启动本地服务...".to_string()),
+                    );
+                    app.state::<ApiSidecar>()
+                        .child
+                        .lock()
+                        .expect("failed to lock API sidecar state")
+                        .replace(started.child);
+                    monitor_api_sidecar_startup(
+                        app.handle().clone(),
+                        started.port,
+                        started.url,
+                        started.logs,
+                    );
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    if let Ok(app_data_dir) = app.path().app_data_dir() {
+                        let logs = sidecar_log_paths(&app_data_dir);
+                        let message = format_sidecar_startup_failure(
+                            &logs,
+                            &format!("本地服务进程创建失败：{error}。"),
+                        );
+                        append_sidecar_log(&logs.startup, &message);
+                        emit_sidecar_startup(&app.handle(), "error", Some(message));
+                    } else {
+                        emit_sidecar_startup(
+                            &app.handle(),
+                            "error",
+                            Some(format!("AI Cove Design 本地服务启动失败：{error}")),
+                        );
+                    }
                 }
             }
             Ok(())
@@ -198,5 +356,24 @@ mod tests {
             resolve_sidecar_root(&resource_dir, Some(override_dir.to_string_lossy().to_string()));
 
         assert_eq!(resolved, override_dir);
+    }
+
+    #[test]
+    fn sidecar_log_paths_live_under_app_logs_directory() {
+        let app_data_dir = PathBuf::from("/tmp/ai-cove-design-app-data");
+        let paths = sidecar_log_paths(&app_data_dir);
+
+        assert_eq!(
+            paths.startup,
+            app_data_dir.join("logs").join("api-sidecar-startup.log")
+        );
+        assert_eq!(
+            paths.stdout,
+            app_data_dir.join("logs").join("api-sidecar-stdout.log")
+        );
+        assert_eq!(
+            paths.stderr,
+            app_data_dir.join("logs").join("api-sidecar-stderr.log")
+        );
     }
 }
