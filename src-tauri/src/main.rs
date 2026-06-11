@@ -8,6 +8,8 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, Emitter, Manager, Url};
 
 const DESKTOP_SIDECAR_STARTUP_EVENT: &str = "ai-cove-design://sidecar-startup";
@@ -125,6 +127,15 @@ fn normalize_sidecar_runtime_path_for_platform(path: &Path, windows: bool) -> Pa
 
     path.to_path_buf()
 }
+
+#[cfg(target_os = "windows")]
+fn configure_sidecar_command(command: &mut Command) {
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_sidecar_command(_command: &mut Command) {}
 
 fn sidecar_log_paths(app_data_dir: &Path) -> SidecarLogPaths {
     let log_dir = app_data_dir.join("logs");
@@ -264,7 +275,8 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<StartedApiSidecar>, Box<
         .append(true)
         .open(&logs.stderr)?;
 
-    let child = Command::new(node_path)
+    let mut command = Command::new(node_path);
+    command
         .arg(api_entry)
         .current_dir(api_dir)
         .env("HOST", "127.0.0.1")
@@ -278,8 +290,9 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<StartedApiSidecar>, Box<
         .env("DESKTOP_AUTH_ENABLED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file))
-        .spawn()?;
+        .stderr(Stdio::from(stderr_file));
+    configure_sidecar_command(&mut command);
+    let child = command.spawn()?;
 
     let url = Url::parse(&format!("http://127.0.0.1:{port}/"))?;
     append_sidecar_log(

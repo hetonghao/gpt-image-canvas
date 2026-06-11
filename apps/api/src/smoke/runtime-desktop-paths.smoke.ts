@@ -15,5 +15,7 @@ assert.equal(runtimePaths.webDistDir, "/tmp/ai-cove-design-web-dist");
 assert.match(tauriMainSource, /std::thread::spawn/u, "desktop sidecar startup should run on a background thread so the window can paint");
 assert.match(tauriMainSource, /\.stdout\(Stdio::from/u, "desktop sidecar stdout should be persisted to a log file");
 assert.match(tauriMainSource, /\.stderr\(Stdio::from/u, "desktop sidecar stderr should be persisted to a log file");
+assert.match(tauriMainSource, /CREATE_NO_WINDOW/u, "desktop sidecar should hide the Windows node console window");
+assert.match(tauriMainSource, /\.creation_flags\(CREATE_NO_WINDOW\)/u, "desktop sidecar should apply the Windows no-window creation flag");
 
 process.stdout.write("runtime-desktop-paths.smoke.ts passed\n");
