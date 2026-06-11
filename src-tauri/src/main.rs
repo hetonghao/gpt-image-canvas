@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::{
     env, fs, io,
     net::{TcpListener, TcpStream},
@@ -8,8 +10,6 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, Emitter, Manager, Url};
 
 const DESKTOP_SIDECAR_STARTUP_EVENT: &str = "ai-cove-design://sidecar-startup";
@@ -128,6 +128,14 @@ fn normalize_sidecar_runtime_path_for_platform(path: &Path, windows: bool) -> Pa
     path.to_path_buf()
 }
 
+fn sidecar_api_entry_arg_for_platform(api_entry: &Path, windows: bool) -> PathBuf {
+    if windows {
+        return PathBuf::from("dist/index.js");
+    }
+
+    api_entry.to_path_buf()
+}
+
 #[cfg(target_os = "windows")]
 fn configure_sidecar_command(command: &mut Command) {
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -208,7 +216,10 @@ fn monitor_api_sidecar_startup(handle: AppHandle, port: u16, url: Url, logs: Sid
         Err(error) => {
             let message = format_sidecar_startup_failure(
                 &logs,
-                &format!("本地服务未在 {} 秒内就绪：{error}。", sidecar_startup_timeout().as_secs()),
+                &format!(
+                    "本地服务未在 {} 秒内就绪：{error}。",
+                    sidecar_startup_timeout().as_secs()
+                ),
             );
             append_sidecar_log(&logs.startup, &message);
             stop_api_sidecar(&handle);
@@ -217,7 +228,9 @@ fn monitor_api_sidecar_startup(handle: AppHandle, port: u16, url: Url, logs: Sid
     });
 }
 
-fn start_api_sidecar(app: &tauri::App) -> Result<Option<StartedApiSidecar>, Box<dyn std::error::Error>> {
+fn start_api_sidecar(
+    app: &tauri::App,
+) -> Result<Option<StartedApiSidecar>, Box<dyn std::error::Error>> {
     if cfg!(debug_assertions) && env::var("AI_COVE_DESIGN_START_SIDECAR").as_deref() != Ok("1") {
         return Ok(None);
     }
@@ -232,9 +245,9 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<StartedApiSidecar>, Box<
     let api_entry =
         normalize_sidecar_runtime_path(&sidecar_dir.join("api").join("dist").join("index.js"));
     let api_dir = normalize_sidecar_runtime_path(&sidecar_dir.join("api"));
-    let prompt_pool_dir =
-        normalize_sidecar_runtime_path(&sidecar_dir.join("prompt-pool-data"));
+    let prompt_pool_dir = normalize_sidecar_runtime_path(&sidecar_dir.join("prompt-pool-data"));
     let web_dist_dir = normalize_sidecar_runtime_path(&sidecar_dir.join("web-dist"));
+    let api_entry_arg = sidecar_api_entry_arg_for_platform(&api_entry, cfg!(target_os = "windows"));
 
     if !node_path.exists() || !api_entry.exists() || !web_dist_dir.exists() {
         return Err(io::Error::new(
@@ -264,9 +277,10 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<StartedApiSidecar>, Box<
     append_sidecar_log(
         &logs.startup,
         &format!(
-            "starting sidecar: node={} entry={} cwd={} port={port}",
+            "starting sidecar: node={} entry={} entryArg={} cwd={} port={port}",
             node_path.display(),
             api_entry.display(),
+            api_entry_arg.display(),
             api_dir.display()
         ),
     );
@@ -282,7 +296,7 @@ fn start_api_sidecar(app: &tauri::App) -> Result<Option<StartedApiSidecar>, Box<
 
     let mut command = Command::new(node_path);
     command
-        .arg(api_entry)
+        .arg(api_entry_arg)
         .current_dir(api_dir)
         .env("HOST", "127.0.0.1")
         .env("PORT", port.to_string())
@@ -392,8 +406,10 @@ mod tests {
         let resource_dir = PathBuf::from("/tmp/ai-cove-design-resource-dir");
         let override_dir = PathBuf::from("/tmp/ai-cove-design-override-sidecar");
 
-        let resolved =
-            resolve_sidecar_root(&resource_dir, Some(override_dir.to_string_lossy().to_string()));
+        let resolved = resolve_sidecar_root(
+            &resource_dir,
+            Some(override_dir.to_string_lossy().to_string()),
+        );
 
         assert_eq!(resolved, override_dir);
     }
@@ -419,7 +435,8 @@ mod tests {
 
     #[test]
     fn strips_windows_verbatim_drive_prefix_for_runtime_paths() {
-        let raw = PathBuf::from(r"\\?\D:\Software\AI Cove Design\resources\sidecar\api\dist\index.js");
+        let raw =
+            PathBuf::from(r"\\?\D:\Software\AI Cove Design\resources\sidecar\api\dist\index.js");
 
         let normalized = normalize_sidecar_runtime_path_for_platform(&raw, true);
 
@@ -448,5 +465,15 @@ mod tests {
         let normalized = normalize_sidecar_runtime_path_for_platform(&raw, false);
 
         assert_eq!(normalized, raw);
+    }
+
+    #[test]
+    fn uses_relative_api_entry_arg_for_windows_sidecar_startup() {
+        let api_entry =
+            PathBuf::from(r"C:\Program Files\AI Cove Design\resources\sidecar\api\dist\index.js");
+
+        let entry_arg = sidecar_api_entry_arg_for_platform(&api_entry, true);
+
+        assert_eq!(entry_arg, PathBuf::from("dist/index.js"));
     }
 }
