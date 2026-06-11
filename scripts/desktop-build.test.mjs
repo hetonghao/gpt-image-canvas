@@ -41,6 +41,16 @@ assert.deepEqual(
   ],
   "desktop release must package the AI Cove Design icon"
 );
+assert.equal(
+  tauriConfig.bundle?.windows?.nsis?.installerIcon,
+  "icons/icon.ico",
+  "Windows NSIS installer should use the AI Cove Design icon"
+);
+assert.equal(
+  tauriConfig.bundle?.windows?.nsis?.uninstallerIcon,
+  "icons/icon.ico",
+  "Windows NSIS uninstaller should use the AI Cove Design icon"
+);
 assert.deepEqual(
   defaultCapability.remote?.urls,
   ["http://127.0.0.1:*", "http://localhost:*"],
