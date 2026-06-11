@@ -174,6 +174,11 @@ fn stop_api_sidecar(handle: &AppHandle) {
     }
 }
 
+#[tauri::command]
+fn prepare_desktop_update_install(handle: AppHandle) {
+    stop_api_sidecar(&handle);
+}
+
 fn format_sidecar_startup_failure(logs: &SidecarLogPaths, detail: &str) -> String {
     format!(
         "AI Cove Design 本地服务启动失败。{detail} 日志位置：{}",
@@ -313,6 +318,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .manage(ApiSidecar::default())
+        .invoke_handler(tauri::generate_handler![prepare_desktop_update_install])
         .setup(|app| {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;

@@ -51,6 +51,18 @@ assert.equal(
   "icons/icon.ico",
   "Windows NSIS uninstaller should use the AI Cove Design icon"
 );
+assert.equal(
+  tauriConfig.bundle?.windows?.nsis?.installerHooks,
+  "nsis/installer-hooks.nsh",
+  "Windows NSIS installer should close the running desktop app before replacing sidecar files"
+);
+const nsisInstallerHooks = await readFile(new URL("../src-tauri/nsis/installer-hooks.nsh", import.meta.url), "utf8");
+assert.match(nsisInstallerHooks, /NSIS_HOOK_PREINSTALL/u, "Windows NSIS installer should run a preinstall hook");
+assert.match(nsisInstallerHooks, /taskkill\.exe/u, "Windows NSIS installer should close stale app processes");
+assert.match(nsisInstallerHooks, /AI Cove Design\.exe/u, "Windows NSIS installer should close the current product process name");
+assert.match(nsisInstallerHooks, /AI-Cove-Design\.exe/u, "Windows NSIS installer should close the legacy product process name");
+assert.match(nsisInstallerHooks, /ai-cove-design-tauri\.exe/u, "Windows NSIS installer should close the Cargo binary process name");
+assert.doesNotMatch(nsisInstallerHooks, /node\.exe/u, "Windows NSIS installer must not kill unrelated user Node.js processes");
 assert.deepEqual(
   defaultCapability.remote?.urls,
   ["http://127.0.0.1:*", "http://localhost:*"],

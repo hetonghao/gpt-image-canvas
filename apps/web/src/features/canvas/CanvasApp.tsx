@@ -3136,7 +3136,8 @@ function AccountMenu({
 }) {
   const { t } = useI18n();
   const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
-  const isCheckingUpdate = desktopUpdateStatus === "checking";
+  const isCheckingUpdate =
+    desktopUpdateStatus === "checking" || desktopUpdateStatus === "downloading" || desktopUpdateStatus === "installing";
   const canLogout = Boolean(hostSession);
   const displayName = accountDisplayName(hostSession, t);
   const subtitle = accountSubtitle(hostSession, t);

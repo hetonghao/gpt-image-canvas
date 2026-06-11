@@ -9,6 +9,7 @@ export type DesktopUpdateStatus =
   | "up-to-date"
   | "downloading"
   | "downloaded"
+  | "installing"
   | "installed"
   | "error"
   | "unsupported";
@@ -48,6 +49,8 @@ export type DesktopUpdateDialogState = {
   availableVersion: string | null;
   notes: string | null;
   publishedAt: string | null;
+  downloadedBytes: number | null;
+  totalBytes: number | null;
   progressPercent: number | null;
   error: string | null;
   message: string | null;
@@ -81,6 +84,7 @@ export const initialDesktopUpdaterState: DesktopUpdaterState = {
 };
 
 let desktopRelaunchLoader: Promise<() => Promise<void>> | null = null;
+let desktopPrepareUpdateInstallLoader: Promise<() => Promise<void>> | null = null;
 
 async function loadDesktopRelaunch(): Promise<() => Promise<void>> {
   if (!isTauriRuntime()) {
@@ -89,6 +93,15 @@ async function loadDesktopRelaunch(): Promise<() => Promise<void>> {
 
   desktopRelaunchLoader ??= import("@tauri-apps/plugin-process").then(({ relaunch }) => relaunch);
   return desktopRelaunchLoader;
+}
+
+async function loadDesktopPrepareUpdateInstall(): Promise<() => Promise<void>> {
+  if (!isTauriRuntime()) {
+    return async () => {};
+  }
+
+  desktopPrepareUpdateInstallLoader ??= import("@tauri-apps/api/core").then(({ invoke }) => () => invoke<void>("prepare_desktop_update_install"));
+  return desktopPrepareUpdateInstallLoader;
 }
 
 export const desktopUpdaterAdapter: DesktopUpdaterAdapter = {
@@ -118,6 +131,8 @@ export const desktopUpdaterAdapter: DesktopUpdaterAdapter = {
   },
   async prepareRelaunch() {
     await loadDesktopRelaunch();
+    const prepareUpdateInstall = await loadDesktopPrepareUpdateInstall();
+    await prepareUpdateInstall();
   },
   async relaunch() {
     const relaunch = await loadDesktopRelaunch();
@@ -141,11 +156,41 @@ export function desktopUpdaterDialogState(state: DesktopUpdaterState): DesktopUp
     availableVersion: state.availableUpdate?.version ?? null,
     notes: state.availableUpdate?.notes ?? null,
     publishedAt: state.availableUpdate?.publishedAt ?? null,
+    downloadedBytes: state.progress?.downloadedBytes ?? null,
+    totalBytes: state.progress?.totalBytes ?? null,
     progressPercent: state.progress?.percent ?? null,
     error: state.error,
     message: state.message,
     isOpen: state.isDialogOpen
   };
+}
+
+export function formatDesktopUpdateBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const digits = unitIndex === 0 ? 0 : value >= 100 ? 0 : value >= 10 ? 1 : 1;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+export function desktopUpdateProgressLabel(downloadedBytes: number | null, totalBytes: number | null): string | null {
+  if (typeof downloadedBytes !== "number" || !Number.isFinite(downloadedBytes) || downloadedBytes <= 0) {
+    return null;
+  }
+
+  if (typeof totalBytes === "number" && Number.isFinite(totalBytes) && totalBytes > 0) {
+    return `${formatDesktopUpdateBytes(downloadedBytes)} / ${formatDesktopUpdateBytes(totalBytes)}`;
+  }
+
+  return formatDesktopUpdateBytes(downloadedBytes);
 }
 
 export function desktopUpdaterErrorMessage(error: unknown, fallback: string): string {

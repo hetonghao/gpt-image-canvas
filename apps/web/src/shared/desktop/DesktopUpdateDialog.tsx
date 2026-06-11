@@ -1,5 +1,5 @@
 import { useI18n } from "../i18n";
-import type { DesktopUpdateDialogState } from "./desktop-updater";
+import { desktopUpdateProgressLabel, type DesktopUpdateDialogState } from "./desktop-updater";
 
 type DesktopUpdateDialogProps = {
   state: DesktopUpdateDialogState;
@@ -26,7 +26,10 @@ export function DesktopUpdateDialog({ state, onClose, onDownload, onInstall }: D
   if (!state.isOpen) return null;
 
   const publishedAt = formatPublishedAt(state.publishedAt, locale);
-  const isBusy = state.status === "checking" || state.status === "downloading";
+  const isBusy = state.status === "checking" || state.status === "downloading" || state.status === "installing";
+  const shouldShowProgress =
+    state.status === "downloading" || state.status === "downloaded" || state.status === "installing" || state.status === "installed";
+  const progressLabel = desktopUpdateProgressLabel(state.downloadedBytes, state.totalBytes);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/45 px-4 py-6" role="presentation">
@@ -50,28 +53,33 @@ export function DesktopUpdateDialog({ state, onClose, onDownload, onInstall }: D
               {state.error}
             </p>
           ) : null}
-          {typeof state.progressPercent === "number" && (state.status === "downloading" || state.status === "downloaded" || state.status === "installed") ? (
+          {shouldShowProgress ? (
             <div className="space-y-1">
               <div className="h-2 overflow-hidden rounded-full bg-neutral-100">
-                <span className="block h-full rounded-full bg-cyan-600" style={{ width: `${state.progressPercent}%` }} />
+                {typeof state.progressPercent === "number" ? (
+                  <span className="block h-full rounded-full bg-cyan-600 transition-[width] duration-200" style={{ width: `${state.progressPercent}%` }} />
+                ) : (
+                  <span className="block h-full w-2/5 rounded-full bg-cyan-600/85 animate-pulse" />
+                )}
               </div>
-              <p className="text-xs text-neutral-500">{state.progressPercent}%</p>
+              {typeof state.progressPercent === "number" ? <p className="text-xs text-neutral-500">{state.progressPercent}%</p> : null}
+              {progressLabel ? <p className="text-xs text-neutral-500">{progressLabel}</p> : null}
             </div>
           ) : null}
         </div>
         <div className="mt-5 flex justify-end gap-2">
           {!isBusy ? (
-            <button className="rounded-md border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-50" type="button" onClick={onClose}>
+            <button className="rounded-md border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-60" disabled={isBusy} type="button" onClick={onClose}>
               {t("desktopUpdateLater")}
             </button>
           ) : null}
           {state.status === "available" ? (
-            <button className="rounded-md bg-neutral-900 px-3 py-2 text-sm font-semibold text-white hover:bg-neutral-800" type="button" onClick={onDownload}>
+            <button className="rounded-md bg-neutral-900 px-3 py-2 text-sm font-semibold text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60" disabled={isBusy} type="button" onClick={onDownload}>
               {t("desktopUpdateDownload")}
             </button>
           ) : null}
           {state.status === "downloaded" ? (
-            <button className="rounded-md bg-neutral-900 px-3 py-2 text-sm font-semibold text-white hover:bg-neutral-800" type="button" onClick={onInstall}>
+            <button className="rounded-md bg-neutral-900 px-3 py-2 text-sm font-semibold text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60" disabled={isBusy} type="button" onClick={onInstall}>
               {t("desktopUpdateInstall")}
             </button>
           ) : null}

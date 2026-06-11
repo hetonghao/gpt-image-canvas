@@ -19,6 +19,7 @@ export function useDesktopUpdater(options: UseDesktopUpdaterOptions = {}) {
   const adapter = useMemo(() => options.adapter ?? desktopUpdaterAdapter, [options.adapter]);
   const isSupported = adapter.isSupported();
   const downloadInFlightRef = useRef<Promise<void> | null>(null);
+  const installInFlightRef = useRef<Promise<void> | null>(null);
   const [state, setState] = useState<DesktopUpdaterState>(() =>
     isSupported ? initialDesktopUpdaterState : { ...initialDesktopUpdaterState, status: "unsupported" }
   );
@@ -142,37 +143,41 @@ export function useDesktopUpdater(options: UseDesktopUpdaterOptions = {}) {
   };
 
   const installUpdate = async () => {
+    if (installInFlightRef.current) return installInFlightRef.current;
     const availableUpdate = state.availableUpdate;
-    if (!availableUpdate) return;
+    if (!availableUpdate) return undefined;
 
-    setState((current) => ({
-      ...current,
-      message: "正在安装更新...",
-      error: null,
-      isDialogOpen: true
-    }));
-
-    try {
-      await adapter.prepareRelaunch();
-      await availableUpdate.install();
+    const installTask = (async () => {
       setState((current) => ({
         ...current,
-        status: "installed",
-        progress: current.progress ? { ...current.progress, percent: 100 } : desktopUpdateProgressFromBytes(0, 0),
-        message: "更新已安装，正在重启应用...",
+        status: "installing",
+        progress: current.progress
+          ? desktopUpdateProgressFromBytes(current.progress.downloadedBytes, current.progress.totalBytes ?? current.progress.downloadedBytes)
+          : desktopUpdateProgressFromBytes(0, 0),
+        message: "正在安装更新...",
         error: null,
         isDialogOpen: true
       }));
-      await adapter.relaunch();
-    } catch (error) {
-      setState((current) => ({
-        ...current,
-        status: "error",
-        error: desktopUpdaterErrorMessage(error, "安装更新失败，请稍后重试"),
-        message: null,
-        isDialogOpen: true
-      }));
-    }
+
+      try {
+        await adapter.prepareRelaunch();
+        await availableUpdate.install();
+        await adapter.relaunch();
+      } catch (error) {
+        setState((current) => ({
+          ...current,
+          status: "error",
+          error: desktopUpdaterErrorMessage(error, "安装更新失败，请稍后重试"),
+          message: null,
+          isDialogOpen: true
+        }));
+      } finally {
+        installInFlightRef.current = null;
+      }
+    })();
+
+    installInFlightRef.current = installTask;
+    return installTask;
   };
 
   return {
