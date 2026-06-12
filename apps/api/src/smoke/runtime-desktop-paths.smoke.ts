@@ -17,6 +17,7 @@ assert.match(tauriMainSource, /\.stdout\(Stdio::from/u, "desktop sidecar stdout 
 assert.match(tauriMainSource, /\.stderr\(Stdio::from/u, "desktop sidecar stderr should be persisted to a log file");
 assert.match(tauriMainSource, /CREATE_NO_WINDOW/u, "desktop sidecar should hide the Windows node console window");
 assert.match(tauriMainSource, /\.creation_flags\(CREATE_NO_WINDOW\)/u, "desktop sidecar should apply the Windows no-window creation flag");
+assert.match(tauriMainSource, /https:\/\/long-api\.ai-cove\.com/u, "desktop sidecar should default to the long API domain to avoid Cloudflare long-request timeouts");
 assert.match(tauriMainSource, /fn prepare_desktop_update_install/u, "desktop updater should expose a command that releases sidecar file locks before install");
 assert.match(tauriMainSource, /stop_api_sidecar\(&handle\)/u, "desktop update preparation should stop the API sidecar");
 assert.match(tauriMainSource, /generate_handler!\[prepare_desktop_update_install\]/u, "desktop update preparation command should be registered");

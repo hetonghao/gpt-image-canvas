@@ -62,7 +62,56 @@ assert.match(nsisInstallerHooks, /taskkill\.exe/u, "Windows NSIS installer shoul
 assert.match(nsisInstallerHooks, /AI Cove Design\.exe/u, "Windows NSIS installer should close the current product process name");
 assert.match(nsisInstallerHooks, /AI-Cove-Design\.exe/u, "Windows NSIS installer should close the legacy product process name");
 assert.match(nsisInstallerHooks, /ai-cove-design-tauri\.exe/u, "Windows NSIS installer should close the Cargo binary process name");
-assert.doesNotMatch(nsisInstallerHooks, /node\.exe/u, "Windows NSIS installer must not kill unrelated user Node.js processes");
+assert.match(
+  nsisInstallerHooks,
+  /powershell\.exe/u,
+  "Windows NSIS installer should use PowerShell to close only the bundled sidecar Node.js process"
+);
+assert.match(
+  nsisInstallerHooks,
+  /Name -ieq ''node\.exe''/u,
+  "Windows NSIS installer should restrict targeted processes to node.exe"
+);
+assert.doesNotMatch(
+  nsisInstallerHooks,
+  /taskkill\.exe"\s+\/IM\s+"node\.exe"/u,
+  "Windows NSIS installer must not kill unrelated user Node.js processes with a blanket taskkill rule"
+);
+assert.match(
+  nsisInstallerHooks,
+  /\$INSTDIR\\resources\\sidecar\\node\\node\.exe/u,
+  "Windows NSIS installer should target the current install directory sidecar node.exe path"
+);
+assert.match(
+  nsisInstallerHooks,
+  /\$LOCALAPPDATA\\AI Cove Design\\resources\\sidecar\\node\\node\.exe/u,
+  "Windows NSIS installer should target the current branded per-user sidecar node.exe path"
+);
+assert.match(
+  nsisInstallerHooks,
+  /\$LOCALAPPDATA\\AI-Cove-Design\\resources\\sidecar\\node\\node\.exe/u,
+  "Windows NSIS installer should target the legacy branded per-user sidecar node.exe path"
+);
+assert.match(
+  nsisInstallerHooks,
+  /Stop-Process -Id/u,
+  "Windows NSIS installer should stop only the matched bundled sidecar node process ids"
+);
+assert.match(
+  nsisInstallerHooks,
+  /Wait-Process -Id/u,
+  "Windows NSIS installer should wait for matched bundled sidecar node processes to exit"
+);
+assert.doesNotMatch(
+  nsisInstallerHooks,
+  /Get-Process\s+node/u,
+  "Windows NSIS installer must not enumerate user Node.js processes with a broad Get-Process call"
+);
+assert.doesNotMatch(
+  nsisInstallerHooks,
+  /Stop-Process -Name/u,
+  "Windows NSIS installer must not stop processes by a broad name-only rule"
+);
 assert.deepEqual(
   defaultCapability.remote?.urls,
   ["http://127.0.0.1:*", "http://localhost:*"],

@@ -269,10 +269,10 @@ fn start_api_sidecar(
         fs::create_dir_all(parent)?;
     }
 
-    let ai_cove_api_base_url =
-        env::var("AI_COVE_API_BASE_URL").unwrap_or_else(|_| "https://ai-cove.com".to_string());
-    let ai_cove_public_base_url =
-        env::var("AI_COVE_PUBLIC_BASE_URL").unwrap_or_else(|_| ai_cove_api_base_url.clone());
+    let ai_cove_api_base_url = env::var("AI_COVE_API_BASE_URL")
+        .unwrap_or_else(|_| "https://long-api.ai-cove.com".to_string());
+    let ai_cove_public_base_url = env::var("AI_COVE_PUBLIC_BASE_URL")
+        .unwrap_or_else(|_| ai_cove_api_base_url.clone());
 
     append_sidecar_log(
         &logs.startup,

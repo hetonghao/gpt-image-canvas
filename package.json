@@ -1,6 +1,6 @@
 {
   "name": "gpt-image-canvas",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "license": "MIT",
   "packageManager": "pnpm@9.14.2",
