@@ -1,0 +1,12 @@
+{
+  "permission": [
+    {
+      "identifier": "allow-prepare-desktop-update-install",
+      "description": "Allows the desktop updater to stop the sidecar before installing an update.",
+      "commands": {
+        "allow": ["prepare_desktop_update_install"],
+        "deny": []
+      }
+    }
+  ]
+}

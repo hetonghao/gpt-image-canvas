@@ -24,6 +24,9 @@ assert.deepEqual(releaseArtifactNames("win32", "x64"), {
 
 const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const defaultCapability = JSON.parse(await readFile(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"));
+const desktopUpdateInstallPermission = JSON.parse(
+  await readFile(new URL("../src-tauri/permissions/allow-prepare-desktop-update-install.json", import.meta.url), "utf8")
+);
 assert.equal(tauriConfig.productName, "AI Cove Design", "desktop app display name should use AI Cove Design");
 assert.equal(tauriConfig.app?.windows?.[0]?.title, "AI Cove Design", "desktop window title should use AI Cove Design");
 assert.ok(
@@ -116,6 +119,23 @@ assert.deepEqual(
   defaultCapability.remote?.urls,
   ["http://127.0.0.1:*", "http://localhost:*"],
   "desktop sidecar origin must be allowed to use Tauri opener permissions"
+);
+assert.ok(
+  defaultCapability.permissions?.includes("allow-prepare-desktop-update-install"),
+  "desktop capability must allow the prepare_desktop_update_install app command"
+);
+assert.equal(
+  desktopUpdateInstallPermission.permission?.[0]?.identifier,
+  "allow-prepare-desktop-update-install",
+  "desktop update install permission should use a stable identifier"
+);
+assert.deepEqual(
+  desktopUpdateInstallPermission.permission?.[0]?.commands,
+  {
+    allow: ["prepare_desktop_update_install"],
+    deny: []
+  },
+  "desktop update install permission should allow only the app command that releases sidecar file locks"
 );
 
 assert.equal(resolveMacSigningIdentity({}), "-", "macOS release should default to ad-hoc app signing");

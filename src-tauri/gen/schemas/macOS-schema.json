@@ -345,6 +345,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Allows the desktop updater to stop the sidecar before installing an update.",
+          "type": "string",
+          "const": "allow-prepare-desktop-update-install",
+          "markdownDescription": "Allows the desktop updater to stop the sidecar before installing an update."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",
