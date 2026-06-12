@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createOpenAIImageProvider, type ImageProviderInput } from "../infrastructure/providers/image-provider.ts";
+import { createOpenAIImageProvider, type ImageProviderInput } from "../infrastructure/providers/image-provider.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -7,7 +7,10 @@ const input: ImageProviderInput = {
   originalPrompt: "test",
   presetId: "default",
   prompt: "test",
-  size: "1024x1024",
+  size: {
+    width: 1024,
+    height: 1024
+  },
   sizeApiValue: "1024x1024",
   quality: "high",
   outputFormat: "png",
