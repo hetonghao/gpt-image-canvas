@@ -38,6 +38,7 @@
     "smoke:api:prompt-pool": "pnpm --filter @gpt-image-canvas/shared build && pnpm --filter @gpt-image-canvas/api exec tsx src/smoke/prompt-pool-smoke.ts",
     "smoke:api:prompt-pool-public-hosted": "pnpm --filter @gpt-image-canvas/shared build && pnpm --filter @gpt-image-canvas/api exec tsx src/smoke/prompt-pool-public-hosted-smoke.ts",
     "smoke:api:desktop-auth": "pnpm --filter @gpt-image-canvas/api exec tsx src/smoke/desktop-auth-route.smoke.ts",
+    "smoke:api:image-provider-http-errors": "pnpm --filter @gpt-image-canvas/api exec tsx src/smoke/image-provider-http-errors.smoke.ts",
     "smoke:api:runtime-desktop-paths": "pnpm --filter @gpt-image-canvas/api exec tsx src/smoke/runtime-desktop-paths.smoke.ts",
     "smoke:api:region-summary": "pnpm --filter @gpt-image-canvas/shared build && pnpm --filter @gpt-image-canvas/api exec tsx src/smoke/region-summary-smoke.ts",
     "smoke:api:static-assets-cache": "pnpm --filter @gpt-image-canvas/api exec tsx src/server/static-assets-cache.smoke.ts",
