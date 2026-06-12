@@ -1,6 +1,6 @@
 [package]
 name = "ai-cove-design-tauri"
-version = "1.0.2"
+version = "1.0.3"
 description = "AI Cove Design desktop shell"
 authors = ["AI Cove"]
 edition = "2021"
