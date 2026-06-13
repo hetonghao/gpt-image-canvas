@@ -144,6 +144,7 @@ import { normalizeAssetUrl } from "../../shared/api/asset-url";
 import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
 import { apiFetch, appendHostTokenParam, clearHostCredentials } from "../../shared/api/host-token";
 import { DesktopUpdateDialog } from "../../shared/desktop/DesktopUpdateDialog";
+import { revealDesktopAssetFile } from "../../shared/desktop/desktop-asset";
 import { isDesktopAuthSupported, restoreDesktopAuthSession, startDesktopAuthLogin, waitForDesktopAuthSession } from "../../shared/desktop/desktop-auth";
 import { useDesktopSidecarStartup } from "../../shared/desktop/desktop-sidecar-startup";
 import { useDesktopUpdater } from "../../shared/desktop/useDesktopUpdater";
@@ -153,6 +154,7 @@ import {
   fetchPromptFavorites,
   markPromptFavoriteUsed
 } from "../prompt-favorites/promptFavoritesApi";
+import { createPromptFavoritesRefreshController, subscribePromptFavoritesInvalidation } from "../prompt-favorites/prompt-favorites-sync";
 import magicWandAutoIconUrl from "../../assets/magic-wand-auto.png";
 import magicWandManualIconUrl from "../../assets/magic-wand-manual.png";
 import {
@@ -3720,6 +3722,7 @@ export function App() {
   const desktopUpdater = useDesktopUpdater();
   const desktopSidecarStartup = useDesktopSidecarStartup();
   const desktopAuthSupported = isDesktopAuthSupported();
+  const isDesktopRuntime = desktopAuthSupported || desktopUpdater.isSupported;
   const tldrawLocale = tldrawLocaleForLocale(locale);
   const [tldrawUserPreferences, setTldrawUserPreferences] = useState<TLUserPreferences>(() => ({
     id: TLDRAW_USER_ID,
@@ -3889,6 +3892,12 @@ export function App() {
   const saveTimerRef = useRef<number | undefined>();
   const codexPollTimerRef = useRef<number | undefined>();
   const favoriteCopyTimerRef = useRef<number | undefined>();
+  const promptFavoriteLoadRef = useRef(loadPromptFavoriteState);
+  promptFavoriteLoadRef.current = loadPromptFavoriteState;
+  const promptFavoriteRefreshControllerRef = useRef<ReturnType<typeof createPromptFavoritesRefreshController> | null>(null);
+  if (!promptFavoriteRefreshControllerRef.current) {
+    promptFavoriteRefreshControllerRef.current = createPromptFavoritesRefreshController((signal) => promptFavoriteLoadRef.current(signal));
+  }
   const saveRequestRef = useRef(0);
   const isGenerating = activeGenerationCount > 0;
   const hasGenerationProvider = authStatus?.provider === "openai" || authStatus?.provider === "codex";
@@ -4525,12 +4534,20 @@ export function App() {
   });
 
   useEffect(() => {
-    const controller = new AbortController();
-
-    void loadPromptFavoriteState(controller.signal);
+    void refreshPromptFavoriteState();
 
     return () => {
-      controller.abort();
+      promptFavoriteRefreshControllerRef.current?.dispose();
+    };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = subscribePromptFavoritesInvalidation(() => {
+      void refreshPromptFavoriteState();
+    });
+
+    return () => {
+      unsubscribe();
     };
   }, []);
 
@@ -6104,12 +6121,21 @@ export function App() {
     );
   }
 
-  function downloadHistoryRecord(record: GenerationRecord): void {
+  async function downloadHistoryRecord(record: GenerationRecord): Promise<void> {
     const asset = firstDownloadableAsset(record);
     setGenerationWarning("");
     if (!asset) {
       setGenerationError(t("generationDownloadNoAsset"));
       return;
+    }
+
+    try {
+      if (await revealDesktopAssetFile(asset.id)) {
+        setGenerationMessage(t("generationRevealOpened"));
+        return;
+      }
+    } catch {
+      // Fall back to the existing download behavior if desktop reveal is unavailable.
     }
 
     window.open(assetDownloadUrl(asset.id), "_blank", "noopener,noreferrer");
@@ -6295,6 +6321,10 @@ export function App() {
         setGenerationWarning((current) => current || t("favoriteLoadFailed"));
       }
     }
+  }
+
+  function refreshPromptFavoriteState(): Promise<void> {
+    return promptFavoriteRefreshControllerRef.current?.refresh() ?? Promise.resolve();
   }
 
   function toggleFavoritePanel(): void {
@@ -7693,7 +7723,7 @@ export function App() {
         hostSession={hostSession}
         isAiCoveMode={isAiCoveMode}
         isDesktopAuthStarting={isDesktopAuthStarting}
-        isDesktopRuntime={desktopAuthSupported || desktopUpdater.isSupported}
+        isDesktopRuntime={isDesktopRuntime}
         isDesktopUpdateSupported={desktopUpdater.isSupported}
         route={route}
         onCheckDesktopUpdate={() => void desktopUpdater.checkForUpdates()}
@@ -7718,7 +7748,7 @@ export function App() {
             isAuthLoading={isAuthLoading}
             isCodexStarting={codexLoginStatus === "starting"}
             isDesktopAuthStarting={isDesktopAuthStarting}
-            isDesktopRuntime={desktopAuthSupported || desktopUpdater.isSupported}
+            isDesktopRuntime={isDesktopRuntime}
             onOpenProviderConfig={() => openProviderConfigDialog()}
             onOpenGallery={() => navigateToRoute("gallery")}
             onStartCodexLogin={startCodexLogin}
@@ -8466,8 +8496,8 @@ export function App() {
                             type="button"
                             data-testid="history-download"
                             disabled={!downloadableAsset}
-                            title={downloadableAsset ? t("commonDownload") : t("generationHistoryNoDownload")}
-                            onClick={() => downloadHistoryRecord(record)}
+                            title={downloadableAsset ? (isDesktopRuntime ? t("historyRevealInFolder") : t("commonDownload")) : t("generationHistoryNoDownload")}
+                            onClick={() => void downloadHistoryRecord(record)}
                           >
                             <Download className="size-4" aria-hidden="true" />
                           </button>

@@ -1,6 +1,7 @@
+import { access } from "node:fs/promises";
 import type { Hono } from "hono";
 import { parsePreviewWidth, readStoredAssetPreview } from "../../domain/assets/preview.js";
-import { readStoredAsset, readStoredAssetMetadata, saveUploadedImageAsset } from "../../domain/generation/image-generation.js";
+import { getStoredAssetFile, readStoredAsset, readStoredAssetMetadata, saveUploadedImageAsset } from "../../domain/generation/image-generation.js";
 import { ProviderError } from "../../infrastructure/providers/image-provider.js";
 import { downloadFileName, errorResponse, providerErrorJson } from "../http/errors.js";
 import { readJson } from "../http/json.js";
@@ -61,6 +62,31 @@ export function registerAssetRoutes(app: Hono): void {
     return c.json(metadata);
   });
 
+  app.get("/api/assets/:id/location", async (c) => {
+    if (!isDesktopAuthEnabled()) {
+      return c.json(errorResponse("not_found", "Asset location is unavailable."), 404);
+    }
+
+    const file = getStoredAssetFile(c.req.param("id"), requireHostContext(c));
+    if (!file) {
+      return c.json(errorResponse("not_found", "找不到请求的图像资源。"), 404);
+    }
+
+    try {
+      await access(file.filePath);
+    } catch {
+      return c.json(errorResponse("not_found", "找不到请求的图像资源。"), 404);
+    }
+
+    return c.json(
+      { filePath: file.filePath },
+      200,
+      {
+        "Cache-Control": "private, no-store"
+      }
+    );
+  });
+
   app.get("/api/assets/:id/download", async (c) => {
     const asset = await readStoredAsset(c.req.param("id"), requireHostContext(c));
     if (!asset) {
@@ -92,4 +118,9 @@ export function registerAssetRoutes(app: Hono): void {
       }
     });
   });
+}
+
+function isDesktopAuthEnabled(): boolean {
+  const value = process.env.DESKTOP_AUTH_ENABLED?.trim().toLowerCase();
+  return value === "1" || value === "true";
 }

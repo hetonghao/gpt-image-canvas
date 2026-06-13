@@ -44,6 +44,7 @@ import {
   updatePromptFavorite,
   updatePromptFavoriteGroup
 } from "../prompt-favorites/promptFavoritesApi";
+import { emitPromptFavoritesInvalidation } from "../prompt-favorites/prompt-favorites-sync";
 
 interface PromptPoolPageProps {
   onUsePrompt: (item: PromptPoolItem) => void;
@@ -331,6 +332,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
     try {
       const favorite = await createPromptFavorite({ promptPoolItemId: item.id });
       upsertFavorite(favorite);
+      emitPromptFavoritesInvalidation();
       setFavoriteSparkSourceId(item.id);
       window.clearTimeout(favoriteSparkTimerRef.current);
       favoriteSparkTimerRef.current = window.setTimeout(() => setFavoriteSparkSourceId(null), 520);
@@ -343,6 +345,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
   async function movePromptFavorite(favorite: PromptFavoriteItem, groupId: string): Promise<void> {
     try {
       upsertFavorite(await updatePromptFavorite(favorite.id, { groupId }));
+      emitPromptFavoritesInvalidation();
       setFavoritePopoverSourceId(null);
       setFavoriteGroupDraft("");
     } catch {
@@ -354,6 +357,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
     try {
       await deletePromptFavorite(favorite.id);
       setFavoriteItems((current) => current.filter((item) => item.id !== favorite.id));
+      emitPromptFavoritesInvalidation();
       setFavoritePopoverSourceId(null);
       setLastFavoriteToastSourceId(null);
     } catch {
@@ -370,6 +374,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
     try {
       const group = await createPromptFavoriteGroup({ name });
       upsertGroup(group);
+      emitPromptFavoritesInvalidation();
       setFavoriteGroupDraft("");
       if (favoritePopoverFavorite) {
         await movePromptFavorite(favoritePopoverFavorite, group.id);
@@ -387,6 +392,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
 
     try {
       upsertGroup(await updatePromptFavoriteGroup(group.id, { name }));
+      emitPromptFavoritesInvalidation();
       setRenamingGroupId(null);
       setRenameGroupDraft("");
     } catch {
@@ -404,6 +410,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
           current.map((favorite) => (favorite.groupId === group.id ? { ...favorite, groupId: defaultGroup.id } : favorite))
         );
       }
+      emitPromptFavoritesInvalidation();
     } catch {
       setError(t("favoriteDeleteGroupFailed"));
     }
