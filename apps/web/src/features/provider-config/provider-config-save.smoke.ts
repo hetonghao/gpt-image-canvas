@@ -67,6 +67,42 @@ test("saves AI Cove Agent config when a host API key is selected", () => {
   );
 });
 
+test("skips AI Cove Agent config when only the default model is present", () => {
+  assert.equal(
+    shouldSaveAgentConfig({
+      form: {
+        apiKey: "",
+        apiKeyId: "",
+        baseUrl: "https://api.ai-cove.com/v1",
+        model: AI_COVE_DEFAULT_AGENT_MODEL,
+        supportsVision: true
+      },
+      hasSavedApiKey: false,
+      isAiCoveMode: true,
+      queryBaseUrlSeed: ""
+    }),
+    false
+  );
+});
+
+test("saves AI Cove Agent config when a non-default Agent model is provided", () => {
+  assert.equal(
+    shouldSaveAgentConfig({
+      form: {
+        apiKey: "",
+        apiKeyId: "",
+        baseUrl: "https://api.ai-cove.com/v1",
+        model: "gpt-5.4",
+        supportsVision: true
+      },
+      hasSavedApiKey: false,
+      isAiCoveMode: true,
+      queryBaseUrlSeed: ""
+    }),
+    true
+  );
+});
+
 test("switches to the Agent tab when AI Cove Agent config still needs an API key", () => {
   assert.equal(
     getProviderConfigSaveIssueTab({

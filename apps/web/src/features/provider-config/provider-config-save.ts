@@ -45,11 +45,12 @@ export function shouldSaveAgentConfig({
   queryBaseUrlSeed: string;
 }): boolean {
   const baseUrl = form.baseUrl.trim();
+  const model = form.model.trim();
   if (isAiCoveMode) {
-    return Boolean(form.apiKeyId.trim() || form.model.trim());
+    return Boolean(form.apiKeyId.trim() || (model && model !== AI_COVE_DEFAULT_AGENT_MODEL));
   }
 
-  return Boolean(hasSavedApiKey || form.apiKey.trim() || (baseUrl && baseUrl !== queryBaseUrlSeed) || form.model.trim());
+  return Boolean(hasSavedApiKey || form.apiKey.trim() || (baseUrl && baseUrl !== queryBaseUrlSeed) || model);
 }
 
 export function getProviderConfigSaveIssueTab({
