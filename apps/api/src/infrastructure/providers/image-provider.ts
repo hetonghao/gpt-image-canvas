@@ -188,6 +188,7 @@ class OpenAIImageProvider implements ImageProvider {
           size: input.sizeApiValue,
           quality: input.quality,
           output_format: input.outputFormat,
+          response_format: "b64_json",
           n: input.count
         }),
         signal: timeout.signal
@@ -458,37 +459,12 @@ function parseProviderImageUrl(url: string): URL | undefined {
 }
 
 function dataUrlToBase64(url: string): string {
-  const match = /^data:image\/[^;,]+;base64,(.+)$/u.exec(url);
+  const match = /^data:[^;,]+;base64,(.+)$/u.exec(url);
   if (!match) {
-    throw new ProviderError("unsupported_provider_behavior", "OpenAI 图像服务返回的 data URL 不受支持。", 502);
+    throw new ProviderError("unsupported_provider_behavior", "OpenAI 图像 URL 不包含有效的 data URL。", 502);
   }
 
   return match[1];
-}
-
-function isProviderImageContentType(value: string | null): boolean {
-  if (!value) {
-    return true;
-  }
-
-  const contentType = value.split(";")[0]?.trim().toLowerCase();
-  return Boolean(contentType?.startsWith("image/") || contentType === "application/octet-stream");
-}
-
-function isProviderImageBytes(bytes: Buffer): boolean {
-  return isPng(bytes) || isJpeg(bytes) || isWebp(bytes);
-}
-
-function isPng(bytes: Buffer): boolean {
-  return bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-}
-
-function isJpeg(bytes: Buffer): boolean {
-  return bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]));
-}
-
-function isWebp(bytes: Buffer): boolean {
-  return bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
 }
 
 function parseContentLength(value: string | null): number | undefined {
@@ -498,6 +474,44 @@ function parseContentLength(value: string | null): number | undefined {
 
   const parsed = Number.parseInt(value, 10);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function isProviderImageContentType(value: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+
+  const mediaType = value.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === "image/png" || mediaType === "image/jpeg" || mediaType === "image/jpg" || mediaType === "image/webp";
+}
+
+function isProviderImageBytes(bytes: Buffer): boolean {
+  if (bytes.length < 12) {
+    return false;
+  }
+
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return true;
+  }
+
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9) {
+    return true;
+  }
+
+  if (
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 async function dataUrlToFile(input: ReferenceImageInput): Promise<File> {
@@ -517,16 +531,6 @@ async function dataUrlToFile(input: ReferenceImageInput): Promise<File> {
   }
 
   const normalizedMimeType = mimeType === "image/jpg" ? "image/jpeg" : mimeType;
-  const extension = normalizedMimeType === "image/jpeg" ? "jpg" : normalizedMimeType.split("/")[1] || "png";
-  const fileName = sanitizeFileName(input.fileName) ?? `reference.${extension}`;
-  return toFile(bytes, fileName, { type: normalizedMimeType });
-}
-
-function sanitizeFileName(fileName: string | undefined): string | undefined {
-  const trimmed = fileName?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  return trimmed.replace(/[^a-zA-Z0-9._-]/gu, "_");
+  const extension = normalizedMimeType === "image/png" ? "png" : normalizedMimeType === "image/webp" ? "webp" : "jpg";
+  return toFile(bytes, input.fileName?.trim() || `reference.${extension}`, { type: normalizedMimeType });
 }

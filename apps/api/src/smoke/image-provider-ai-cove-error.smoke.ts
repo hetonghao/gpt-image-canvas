@@ -1,8 +1,12 @@
 const fetchCalls: string[] = [];
+const fetchBodies: string[] = [];
 
-globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+const originalFetch = globalThis.fetch;
+
+globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   fetchCalls.push(url);
+  fetchBodies.push(typeof init?.body === "string" ? init.body : "");
   return new Response(JSON.stringify({ error: { message: "refusal from gateway" } }), {
     status: 400,
     headers: {
@@ -25,8 +29,8 @@ try {
     originalPrompt: "draw it",
     presetId: "manual",
     prompt: "draw it",
-    size: { width: 1024, height: 1536 },
-    sizeApiValue: "1024x1536",
+    size: { width: 2160, height: 3840 },
+    sizeApiValue: "2160x3840",
     quality: "high",
     outputFormat: "png",
     count: 1
@@ -39,6 +43,10 @@ try {
   expect((error as { status?: number }).status === 400, `status = ${String((error as { status?: number }).status)}`);
   expect(fetchCalls.length === 1, `fetch call count = ${fetchCalls.length}`);
   expect(fetchCalls[0] === "https://ai-cove.com/v1/images/generations", `fetch url = ${fetchCalls[0]}`);
+
+  const requestBody = JSON.parse(fetchBodies[0] ?? "{}") as Record<string, unknown>;
+  expect(requestBody.size === "2160x3840", `size = ${String(requestBody.size)}`);
+  expect(requestBody.response_format === "b64_json", `response_format = ${String(requestBody.response_format)}`);
 }
 
 console.log("image-provider-ai-cove-error.smoke.ts passed");
