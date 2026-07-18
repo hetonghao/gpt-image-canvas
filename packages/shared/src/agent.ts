@@ -243,6 +243,7 @@ export type AgentServerEventType =
   | "plan_updated"
   | "job_started"
   | "job_completed"
+  | "job_cancelled"
   | "job_failed"
   | "job_blocked"
   | "asset_preview"
@@ -324,11 +325,19 @@ export interface AgentJobCompletedEvent extends AgentBaseServerEvent {
   record?: GenerationRecord;
 }
 
+export interface AgentJobCancelledEvent extends AgentBaseServerEvent {
+  type: "job_cancelled";
+  planId: string;
+  jobId: string;
+  record?: GenerationRecord;
+}
+
 export interface AgentJobFailedEvent extends AgentBaseServerEvent {
   type: "job_failed";
   planId: string;
   jobId: string;
   error: string;
+  record?: GenerationRecord;
 }
 
 export interface AgentJobBlockedEvent extends AgentBaseServerEvent {
@@ -371,6 +380,7 @@ export type AgentServerEvent =
   | AgentPlanUpdatedEvent
   | AgentJobStartedEvent
   | AgentJobCompletedEvent
+  | AgentJobCancelledEvent
   | AgentJobFailedEvent
   | AgentJobBlockedEvent
   | AgentAssetPreviewEvent

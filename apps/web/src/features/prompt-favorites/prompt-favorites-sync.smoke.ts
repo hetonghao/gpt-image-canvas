@@ -127,12 +127,12 @@ test("prompt pool favorite mutations notify the canvas favorite panel to refresh
   );
   assert.match(
     poolSource,
-    /upsertFavorite\(await updatePromptFavorite\(favorite\.id, \{ groupId \}\)\);[\s\S]*emitPromptFavoritesInvalidation\(\);/u,
+    /const updatedFavorite = await updatePromptFavorite\(favorite\.id, \{ groupId \}\);[\s\S]*upsertFavorite\(updatedFavorite\);[\s\S]*emitPromptFavoritesInvalidation\(\);/u,
     "Moving a prompt favorite between groups should invalidate the canvas favorite panel state"
   );
   assert.match(
     poolSource,
-    /upsertGroup\(await updatePromptFavoriteGroup\(group\.id, \{ name \}\)\);[\s\S]*emitPromptFavoritesInvalidation\(\);/u,
+    /const updatedGroup = await updatePromptFavoriteGroup\(group\.id, \{ name \}\);[\s\S]*upsertGroup\(updatedGroup\);[\s\S]*emitPromptFavoritesInvalidation\(\);/u,
     "Renaming a prompt favorite group should invalidate the canvas favorite panel state"
   );
   assert.match(

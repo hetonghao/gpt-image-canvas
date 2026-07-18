@@ -19,6 +19,7 @@ export {
   STYLE_PRESETS,
   composePrompt,
   isHostedAiCoveAdapterMode,
+  resolutionTierForSize,
   sizeToApiValue,
   validateImageSize,
   validateSceneImageSize
@@ -87,6 +88,7 @@ export type {
   ProviderSourceSummary,
   ProviderSourceView,
   ReferenceImageInput,
+  ResolutionTier,
   NormalizedImageRegion,
   RegionSummaryImageInput,
   RegionSummaryLocale,

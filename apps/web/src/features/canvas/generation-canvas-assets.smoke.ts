@@ -42,6 +42,11 @@ assert.match(
   /if \(context\.shouldResolveToOriginal\) \{[\s\S]*return getOriginalAssetUrl\(asset\) \?\? sourceUrl;[\s\S]*\}/u,
   "original-resolution resolution should use the stored original URL instead of the preview fallback"
 );
+assert.match(
+  resolveCanvasAssetUrlBody,
+  /return resolveReadableCanvasAssetPreview\(localAssetId, assetPreviewUrl\(localAssetId, previewWidth\)\);/u,
+  "canvas previews should verify readability before tldraw renders them"
+);
 
 process.stdout.write("generation-canvas-assets.smoke.ts passed\n");
 

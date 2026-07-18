@@ -1,20 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve } from "node:path";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import sharp from "sharp";
+import { resolutionTierForSize } from "../contracts.js";
 import type {
   AssetMetadataResponse,
   GeneratedAsset,
   GeneratedAssetCloudInfo,
   GenerationOutput,
   GenerationRecord,
-  GenerationResponse,
   GenerationStatus,
   ImageMode,
   ImageQuality,
   ImageSize,
   OutputStatus,
   OutputFormat,
+  ProviderSourceId,
   ReferenceImageInput
 } from "../contracts.js";
 import { db } from "../../infrastructure/database.js";
@@ -22,6 +23,7 @@ import {
   ProviderError,
   type EditImageProviderInput,
   type ImageProvider,
+  type ImageModelRoute,
   type ImageProviderInput,
   type ProviderImage
 } from "../../infrastructure/providers/image-provider.js";
@@ -45,6 +47,7 @@ const SUPPORTED_REFERENCE_MIME_TYPES = new Set(["image/png", "image/jpeg", "imag
 const INTERRUPTED_GENERATION_ERROR = "Generation was interrupted by an API restart. Rerun it from history.";
 const CANCELLED_GENERATION_ERROR = "This generation was cancelled.";
 const localAssetStorage = new LocalAssetStorageAdapter();
+const activeReferenceGenerationStarts = new Map<string, Promise<RunningReferenceGeneration>>();
 
 export interface StoredAssetFile {
   id: string;
@@ -57,6 +60,8 @@ export interface StoredAssetFile {
 interface BatchOutputResult {
   id: string;
   status: "succeeded" | "failed";
+  model?: string;
+  retryCount?: number;
   asset?: GeneratedAsset;
   cloudStorage?: AssetCloudStorageRecord;
   error?: string;
@@ -91,8 +96,17 @@ type StoredCloudAssetLocation =
 
 type PersistedGenerationInput = ImageProviderInput & {
   mode: "generate" | "edit";
+  resolutionTier?: ImageModelRoute["tier"];
+  model?: string;
+  providerSourceId?: ProviderSourceId;
+  modelFallback?: boolean;
   referenceAssetIds?: string[];
   referenceAssetId?: string;
+};
+
+type RunningReferenceGeneration = {
+  record: GenerationRecord;
+  input: EditImageProviderInput;
 };
 
 const mimeTypes: Record<OutputFormat, string> = {
@@ -101,78 +115,59 @@ const mimeTypes: Record<OutputFormat, string> = {
   webp: "image/webp"
 };
 
-export async function runTextToImageGeneration(
+export function createRunningTextToImageGeneration(
   input: ImageProviderInput,
-  provider: ImageProvider,
-  signal?: AbortSignal,
-  hostContext?: HostContext
-): Promise<GenerationResponse> {
-  const outputs = await mapWithConcurrency(
-    Array.from({ length: input.count }, (_, index) => index),
-    BATCH_CONCURRENCY,
-    async () => generateSingleOutput(input, provider, signal, hostContext)
-  );
-
-  const record = saveCompletedGenerationRecord(
-    randomUUID(),
-    {
-      ...input,
-      mode: "generate"
-    },
-    outputs,
-    hostContext
-  );
-
-  return {
-    record
-  };
-}
-
-export async function runReferenceImageGeneration(
-  input: EditImageProviderInput,
-  provider: ImageProvider,
-  signal?: AbortSignal,
-  hostContext?: HostContext
-): Promise<GenerationResponse> {
-  const referenceAssetIds = await ensureReferenceAssetIds(input, hostContext);
-  const inputWithReferenceAssets: EditImageProviderInput = {
-    ...input,
-    referenceAssetIds,
-    referenceAssetId: referenceAssetIds[0]
-  };
-
-  const outputs = await mapWithConcurrency(
-    Array.from({ length: inputWithReferenceAssets.count }, (_, index) => index),
-    BATCH_CONCURRENCY,
-    async () => editSingleOutput(inputWithReferenceAssets, provider, signal, hostContext)
-  );
-
-  const record = saveCompletedGenerationRecord(
-    randomUUID(),
-    {
-      ...inputWithReferenceAssets,
-      mode: "edit"
-    },
-    outputs,
-    hostContext
-  );
-
-  return {
-    record
-  };
-}
-
-export function createRunningTextToImageGeneration(input: ImageProviderInput, hostContext?: HostContext): GenerationRecord {
-  return createRunningGenerationRecord({
+  hostContext?: HostContext,
+  provider?: ImageProvider
+): GenerationRecord {
+  const persistedInput: PersistedGenerationInput = {
     ...input,
     mode: "generate"
-  }, hostContext);
+  };
+  return createRunningGenerationRecord(provider ? withProviderRoute(persistedInput, provider) : persistedInput, hostContext);
 }
 
 export async function createRunningReferenceImageGeneration(
   input: EditImageProviderInput,
-  hostContext?: HostContext
-): Promise<{ record: GenerationRecord; input: EditImageProviderInput }> {
+  hostContext?: HostContext,
+  provider?: ImageProvider
+): Promise<RunningReferenceGeneration> {
+  const clientRequestId = input.clientRequestId?.trim();
+  const existing = clientRequestId ? readGenerationRecordByClientRequestId(clientRequestId, hostContext) : undefined;
+  if (existing) {
+    const referenceAssetIds = existing.referenceAssetIds ?? (existing.referenceAssetId ? [existing.referenceAssetId] : undefined);
+    return {
+      record: existing,
+      input: referenceAssetIds
+        ? { ...input, referenceAssetIds, referenceAssetId: referenceAssetIds[0] }
+        : input
+    };
+  }
+
+  const startKey = clientRequestId ? `${hostUserId(hostContext)}\u0000${clientRequestId}` : undefined;
+  const activeStart = startKey ? activeReferenceGenerationStarts.get(startKey) : undefined;
+  if (activeStart) {
+    return activeStart;
+  }
+
+  const start = persistRunningReferenceImageGeneration(input, hostContext, provider);
+  if (startKey) {
+    activeReferenceGenerationStarts.set(startKey, start);
+  }
+  try {
+    return await start;
+  } finally {
+    if (startKey && activeReferenceGenerationStarts.get(startKey) === start) {
+      activeReferenceGenerationStarts.delete(startKey);
+    }
+  }
+}
+
+async function persistRunningReferenceImageGeneration(
+  input: EditImageProviderInput,
+  hostContext?: HostContext,
+  provider?: ImageProvider
+): Promise<RunningReferenceGeneration> {
   const referenceAssetIds = await ensureReferenceAssetIds(input, hostContext);
   const inputWithReferenceAssets: EditImageProviderInput = {
     ...input,
@@ -181,7 +176,10 @@ export async function createRunningReferenceImageGeneration(
   };
 
   return {
-    record: createRunningGenerationRecord({
+    record: createRunningGenerationRecord(provider ? withProviderRoute({
+      ...inputWithReferenceAssets,
+      mode: "edit"
+    }, provider) : {
       ...inputWithReferenceAssets,
       mode: "edit"
     }, hostContext),
@@ -196,6 +194,8 @@ export async function finishTextToImageGeneration(
   signal?: AbortSignal,
   hostContext?: HostContext
 ): Promise<GenerationRecord> {
+  const persistedInput = withProviderRoute({ ...input, mode: "generate" }, provider);
+  updateGenerationRecordRoute(generationId, persistedInput, hostContext);
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
@@ -205,10 +205,7 @@ export async function finishTextToImageGeneration(
 
   return completeGenerationRecord(
     generationId,
-    {
-      ...input,
-      mode: "generate"
-    },
+    persistedInput,
     outputs,
     hostContext
   );
@@ -221,6 +218,8 @@ export async function finishReferenceImageGeneration(
   signal?: AbortSignal,
   hostContext?: HostContext
 ): Promise<GenerationRecord> {
+  const persistedInput = withProviderRoute({ ...input, mode: "edit" }, provider);
+  updateGenerationRecordRoute(generationId, persistedInput, hostContext);
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
@@ -230,10 +229,7 @@ export async function finishReferenceImageGeneration(
 
   return completeGenerationRecord(
     generationId,
-    {
-      ...input,
-      mode: "edit"
-    },
+    persistedInput,
     outputs,
     hostContext
   );
@@ -243,12 +239,23 @@ export function getGenerationRecord(generationId: string, hostContext?: HostCont
   return readGenerationRecord(generationId, hostContext);
 }
 
+export function listGenerationRecords(hostContext?: HostContext): GenerationRecord[] {
+  return db
+    .select()
+    .from(generationRecords)
+    .where(eq(generationRecords.userId, hostUserId(hostContext)))
+    .orderBy(desc(generationRecords.createdAt))
+    .limit(20)
+    .all()
+    .map((record) => materializeGenerationRecord(record, hostContext));
+}
+
 export function cancelGenerationRecord(generationId: string, hostContext?: HostContext): GenerationRecord | undefined {
   return updateGenerationRecordStatus(generationId, "cancelled", CANCELLED_GENERATION_ERROR, hostContext);
 }
 
-export function failGenerationRecord(generationId: string, error: string, hostContext?: HostContext): GenerationRecord | undefined {
-  return updateGenerationRecordStatus(generationId, "failed", sanitizeGenerationErrorMessage(error), hostContext);
+export function failGenerationRecord(generationId: string, error: unknown, hostContext?: HostContext): GenerationRecord | undefined {
+  return updateGenerationRecordStatus(generationId, "failed", generationFailureMessage(error), hostContext);
 }
 
 export function markInterruptedGenerationRecordsFailed(): void {
@@ -485,6 +492,8 @@ async function generateSingleOutput(
     return {
       id: outputId,
       status: "succeeded",
+      model: result.model,
+      retryCount: result.retryCount,
       asset: saved.asset,
       cloudStorage: saved.cloudStorage
     };
@@ -496,7 +505,8 @@ async function generateSingleOutput(
     return {
       id: outputId,
       status: "failed",
-      error: errorToMessage(error)
+      retryCount: error instanceof ProviderError ? error.retryCount : undefined,
+      error: generationFailureMessage(error)
     };
   }
 }
@@ -530,6 +540,8 @@ async function editSingleOutput(
     return {
       id: outputId,
       status: "succeeded",
+      model: result.model,
+      retryCount: result.retryCount,
       asset: saved.asset,
       cloudStorage: saved.cloudStorage
     };
@@ -541,7 +553,8 @@ async function editSingleOutput(
     return {
       id: outputId,
       status: "failed",
-      error: errorToMessage(error)
+      retryCount: error instanceof ProviderError ? error.retryCount : undefined,
+      error: generationFailureMessage(error)
     };
   }
 }
@@ -605,13 +618,46 @@ async function readImageSize(bytes: Buffer): Promise<ImageSize | undefined> {
   }
 }
 
+function withProviderRoute(input: PersistedGenerationInput, provider: ImageProvider): PersistedGenerationInput {
+  const route = provider.resolveModelRoute?.(input.size);
+  if (!route) {
+    return input;
+  }
+
+  return {
+    ...input,
+    resolutionTier: route.tier,
+    model: route.model,
+    providerSourceId: provider.sourceId,
+    modelFallback: route.fallbackToDefault
+  };
+}
+
+function updateGenerationRecordRoute(generationId: string, input: PersistedGenerationInput, hostContext?: HostContext): void {
+  const storedGenerationId = findGenerationRecordRow(generationId, hostContext)?.id;
+  if (!storedGenerationId) {
+    return;
+  }
+  db.update(generationRecords)
+    .set({
+      resolutionTier: input.resolutionTier ?? resolutionTierForSize(input.size),
+      model: input.model ?? null,
+      providerSourceId: input.providerSourceId ?? null,
+      modelFallback: input.modelFallback === undefined ? null : input.modelFallback ? 1 : 0
+    })
+    .where(and(eq(generationRecords.id, storedGenerationId), eq(generationRecords.userId, hostUserId(hostContext))))
+    .run();
+}
+
 function createRunningGenerationRecord(input: PersistedGenerationInput, hostContext?: HostContext): GenerationRecord {
   const createdAt = new Date().toISOString();
-  const generationId = input.clientRequestId || randomUUID();
-  const existing = readGenerationRecord(generationId, hostContext);
+  const userId = hostUserId(hostContext);
+  const clientRequestId = input.clientRequestId?.trim() || undefined;
+  const existing = clientRequestId ? readGenerationRecordByClientRequestId(clientRequestId, hostContext) : undefined;
   if (existing) {
     return existing;
   }
+  const generationId = clientRequestId && userId === "standalone" ? clientRequestId : newGenerationStorageId(hostContext);
 
   const referenceAssetIds = input.referenceAssetIds ?? (input.referenceAssetId ? [input.referenceAssetId] : []);
   const primaryReferenceAssetId = referenceAssetIds[0] ?? input.referenceAssetId;
@@ -619,18 +665,24 @@ function createRunningGenerationRecord(input: PersistedGenerationInput, hostCont
   db.insert(generationRecords)
     .values({
       id: generationId,
-      userId: hostUserId(hostContext),
+      userId,
+      clientRequestId: clientRequestId ?? null,
       mode: input.mode,
       prompt: input.originalPrompt,
       effectivePrompt: input.prompt,
       presetId: input.presetId,
       width: input.size.width,
       height: input.size.height,
+      resolutionTier: input.resolutionTier ?? resolutionTierForSize(input.size),
+      model: input.model ?? null,
+      providerSourceId: input.providerSourceId ?? null,
+      modelFallback: input.modelFallback === undefined ? null : input.modelFallback ? 1 : 0,
       quality: input.quality,
       outputFormat: input.outputFormat,
       count: input.count,
       status: "running",
       error: null,
+      retryCount: 0,
       referenceAssetId: primaryReferenceAssetId ?? null,
       createdAt
     })
@@ -648,16 +700,21 @@ function createRunningGenerationRecord(input: PersistedGenerationInput, hostCont
   });
 
   return {
-    id: generationId,
+    id: clientRequestId ?? generationId,
     mode: input.mode,
     prompt: input.originalPrompt,
     effectivePrompt: input.prompt,
     presetId: input.presetId,
     size: input.size,
+    resolutionTier: input.resolutionTier ?? resolutionTierForSize(input.size),
+    model: input.model,
+    providerSourceId: input.providerSourceId,
+    modelFallback: input.modelFallback,
     quality: input.quality,
     outputFormat: input.outputFormat,
     count: input.count,
     status: "running",
+    retryCount: 0,
     referenceAssetIds: referenceAssetIds.length > 0 ? referenceAssetIds : undefined,
     referenceAssetId: primaryReferenceAssetId,
     createdAt,
@@ -672,6 +729,7 @@ function completeGenerationRecord(
   hostContext?: HostContext
 ): GenerationRecord {
   const existing = readGenerationRecord(generationId, hostContext);
+  const storedGenerationId = findGenerationRecordRow(generationId, hostContext)?.id ?? generationId;
   if (existing && isTerminalGenerationStatus(existing.status)) {
     return existing;
   }
@@ -679,142 +737,59 @@ function completeGenerationRecord(
   const successCount = outputs.filter((output) => output.status === "succeeded").length;
   const failureCount = outputs.length - successCount;
   const status = resolveGenerationStatus(successCount, failureCount);
-  const error = failureCount > 0 ? `${failureCount} images failed.` : undefined;
+  const error = failureCount > 0 ? outputs.find((output) => output.status === "failed" && output.error)?.error ?? `${failureCount} images failed.` : undefined;
   const referenceAssetIds = input.referenceAssetIds ?? (input.referenceAssetId ? [input.referenceAssetId] : []);
   const primaryReferenceAssetId = referenceAssetIds[0] ?? input.referenceAssetId;
+  const model = outputs.find((output) => output.model)?.model;
+  const retryCount = outputs.reduce((total, output) => total + (output.retryCount ?? 0), 0);
 
   db.update(generationRecords)
     .set({
       status,
       error: error ?? null,
+      retryCount,
+      resolutionTier: input.resolutionTier ?? resolutionTierForSize(input.size),
+      model: model ?? input.model ?? existing?.model ?? null,
+      providerSourceId: input.providerSourceId ?? existing?.providerSourceId ?? null,
+      modelFallback:
+        input.modelFallback === undefined
+          ? existing?.modelFallback === undefined
+            ? null
+            : existing.modelFallback
+              ? 1
+              : 0
+          : input.modelFallback
+            ? 1
+            : 0,
       referenceAssetId: primaryReferenceAssetId ?? null
     })
-    .where(and(eq(generationRecords.id, generationId), eq(generationRecords.userId, hostUserId(hostContext))))
+    .where(and(eq(generationRecords.id, storedGenerationId), eq(generationRecords.userId, hostUserId(hostContext))))
     .run();
 
-  db.delete(generationOutputs).where(eq(generationOutputs.generationId, generationId)).run();
+  db.delete(generationOutputs).where(eq(generationOutputs.generationId, storedGenerationId)).run();
 
-  insertGenerationOutputs(generationId, outputs, hostContext);
+  insertGenerationOutputs(storedGenerationId, outputs, hostContext);
 
-  return readGenerationRecord(generationId, hostContext) ?? {
-    id: generationId,
+  return readGenerationRecord(storedGenerationId, hostContext) ?? {
+    id: input.clientRequestId ?? generationId,
     mode: input.mode,
     prompt: input.originalPrompt,
     effectivePrompt: input.prompt,
     presetId: input.presetId,
     size: input.size,
+    resolutionTier: input.resolutionTier ?? resolutionTierForSize(input.size),
+    model: model ?? input.model,
+    providerSourceId: input.providerSourceId,
+    modelFallback: input.modelFallback,
     quality: input.quality,
     outputFormat: input.outputFormat,
     count: input.count,
     status,
     error,
+    retryCount,
     referenceAssetIds: referenceAssetIds.length > 0 ? referenceAssetIds : undefined,
     referenceAssetId: primaryReferenceAssetId,
     createdAt: existing?.createdAt ?? new Date().toISOString(),
-    outputs: outputs.map(toGenerationOutput)
-  };
-}
-
-function saveCompletedGenerationRecord(
-  generationId: string,
-  input: PersistedGenerationInput,
-  outputs: BatchOutputResult[],
-  hostContext?: HostContext
-): GenerationRecord {
-  const createdAt = new Date().toISOString();
-  const successCount = outputs.filter((output) => output.status === "succeeded").length;
-  const failureCount = outputs.length - successCount;
-  const status = resolveGenerationStatus(successCount, failureCount);
-  const error = failureCount > 0 ? `${failureCount} 张图像生成失败。` : undefined;
-
-  const referenceAssetIds = input.referenceAssetIds ?? (input.referenceAssetId ? [input.referenceAssetId] : []);
-  const primaryReferenceAssetId = referenceAssetIds[0] ?? input.referenceAssetId;
-
-  db.insert(generationRecords)
-    .values({
-      id: generationId,
-      userId: hostUserId(hostContext),
-      mode: input.mode,
-      prompt: input.originalPrompt,
-      effectivePrompt: input.prompt,
-      presetId: input.presetId,
-      width: input.size.width,
-      height: input.size.height,
-      quality: input.quality,
-      outputFormat: input.outputFormat,
-      count: input.count,
-      status,
-      error,
-      referenceAssetId: primaryReferenceAssetId ?? null,
-      createdAt
-    })
-    .run();
-
-  referenceAssetIds.forEach((assetId, position) => {
-    db.insert(generationReferenceAssets)
-      .values({
-        generationId,
-        assetId,
-        position,
-        createdAt
-      })
-      .run();
-  });
-
-  for (const output of outputs) {
-    if (output.asset) {
-      db.insert(assets)
-        .values({
-          id: output.asset.id,
-          userId: hostUserId(hostContext),
-          fileName: output.asset.fileName,
-          relativePath: `assets/${output.asset.fileName}`,
-          mimeType: output.asset.mimeType,
-          width: output.asset.width,
-          height: output.asset.height,
-          cloudProvider: output.cloudStorage?.provider ?? null,
-          cloudBucket: output.cloudStorage?.bucket ?? null,
-          cloudRegion: output.cloudStorage?.region ?? null,
-          cloudObjectKey: output.cloudStorage?.objectKey ?? null,
-          cloudStatus: output.cloudStorage?.status ?? null,
-          cloudError: output.cloudStorage?.error ?? null,
-          cloudUploadedAt: output.cloudStorage?.uploadedAt ?? null,
-          cloudEtag: output.cloudStorage?.etag ?? null,
-          cloudRequestId: output.cloudStorage?.requestId ?? null,
-          cloudEndpoint: output.cloudStorage?.endpoint ?? null,
-          cloudForcePathStyle: output.cloudStorage?.provider === "s3" ? (output.cloudStorage.forcePathStyle ? 1 : 0) : null,
-          createdAt
-        })
-        .run();
-    }
-
-    db.insert(generationOutputs)
-      .values({
-        id: output.id,
-        generationId,
-        status: output.status,
-        assetId: output.asset?.id ?? null,
-        error: output.error ?? null,
-        createdAt
-      })
-      .run();
-  }
-
-  return {
-    id: generationId,
-    mode: input.mode,
-    prompt: input.originalPrompt,
-    effectivePrompt: input.prompt,
-    presetId: input.presetId,
-    size: input.size,
-    quality: input.quality,
-    outputFormat: input.outputFormat,
-    count: input.count,
-    status,
-    error,
-    referenceAssetIds: referenceAssetIds.length > 0 ? referenceAssetIds : undefined,
-    referenceAssetId: primaryReferenceAssetId,
-    createdAt,
     outputs: outputs.map(toGenerationOutput)
   };
 }
@@ -869,7 +844,8 @@ function updateGenerationRecordStatus(
   hostContext?: HostContext
 ): GenerationRecord | undefined {
   const existing = readGenerationRecord(generationId, hostContext);
-  if (!existing) {
+  const storedGenerationId = findGenerationRecordRow(generationId, hostContext)?.id;
+  if (!existing || !storedGenerationId) {
     return undefined;
   }
 
@@ -882,10 +858,10 @@ function updateGenerationRecordStatus(
       status,
       error
     })
-    .where(and(eq(generationRecords.id, generationId), eq(generationRecords.userId, hostUserId(hostContext))))
+    .where(and(eq(generationRecords.id, storedGenerationId), eq(generationRecords.userId, hostUserId(hostContext))))
     .run();
 
-  return readGenerationRecord(generationId, hostContext);
+  return readGenerationRecord(storedGenerationId, hostContext);
 }
 
 function isTerminalGenerationStatus(status: GenerationStatus): boolean {
@@ -893,25 +869,27 @@ function isTerminalGenerationStatus(status: GenerationStatus): boolean {
 }
 
 function readGenerationRecord(generationId: string, hostContext?: HostContext): GenerationRecord | undefined {
-  const record = db
-    .select()
-    .from(generationRecords)
-    .where(and(eq(generationRecords.id, generationId), eq(generationRecords.userId, hostUserId(hostContext))))
-    .get();
+  const record = findGenerationRecordRow(generationId, hostContext);
   if (!record) {
     return undefined;
   }
+  return materializeGenerationRecord(record, hostContext);
+}
 
+function materializeGenerationRecord(
+  record: typeof generationRecords.$inferSelect,
+  hostContext?: HostContext
+): GenerationRecord {
   const outputRows = db
     .select()
     .from(generationOutputs)
-    .where(eq(generationOutputs.generationId, generationId))
+    .where(eq(generationOutputs.generationId, record.id))
     .orderBy(generationOutputs.createdAt)
     .all();
   const referenceRows = db
     .select()
     .from(generationReferenceAssets)
-    .where(eq(generationReferenceAssets.generationId, generationId))
+    .where(eq(generationReferenceAssets.generationId, record.id))
     .all()
     .sort((left, right) => left.position - right.position);
   const assetIds = outputRows.flatMap((output) => (output.assetId ? [output.assetId] : []));
@@ -923,7 +901,7 @@ function readGenerationRecord(generationId: string, hostContext?: HostContext): 
   const referenceAssetIds = referenceRows.map((referenceRow) => referenceRow.assetId);
 
   return {
-    id: record.id,
+    id: record.clientRequestId ?? record.id,
     mode: record.mode as ImageMode,
     prompt: record.prompt,
     effectivePrompt: record.effectivePrompt,
@@ -932,11 +910,19 @@ function readGenerationRecord(generationId: string, hostContext?: HostContext): 
       width: record.width,
       height: record.height
     },
+    resolutionTier: record.resolutionTier === "1K" || record.resolutionTier === "2K" || record.resolutionTier === "4K" ? record.resolutionTier : undefined,
+    model: record.model ?? undefined,
+    providerSourceId:
+      record.providerSourceId === "env-openai" || record.providerSourceId === "local-openai" || record.providerSourceId === "codex"
+        ? record.providerSourceId
+        : undefined,
+    modelFallback: record.modelFallback === null ? undefined : record.modelFallback === 1,
     quality: record.quality as ImageQuality,
     outputFormat: record.outputFormat as OutputFormat,
     count: record.count,
     status: record.status as GenerationStatus,
     error: record.error ?? undefined,
+    retryCount: record.retryCount,
     referenceAssetIds: referenceAssetIds.length > 0 ? referenceAssetIds : record.referenceAssetId ? [record.referenceAssetId] : undefined,
     referenceAssetId: record.referenceAssetId ?? undefined,
     createdAt: record.createdAt,
@@ -947,6 +933,32 @@ function readGenerationRecord(generationId: string, hostContext?: HostContext): 
       error: output.error ?? undefined
     }))
   };
+}
+
+function findGenerationRecordRow(generationId: string, hostContext?: HostContext): typeof generationRecords.$inferSelect | undefined {
+  const userId = hostUserId(hostContext);
+  const clientRequestRecord = db
+    .select()
+    .from(generationRecords)
+    .where(and(eq(generationRecords.userId, userId), eq(generationRecords.clientRequestId, generationId)))
+    .get();
+  if (clientRequestRecord) {
+    return clientRequestRecord;
+  }
+  return db
+    .select()
+    .from(generationRecords)
+    .where(and(eq(generationRecords.userId, userId), eq(generationRecords.id, generationId)))
+    .get();
+}
+
+function readGenerationRecordByClientRequestId(clientRequestId: string, hostContext?: HostContext): GenerationRecord | undefined {
+  const record = db
+    .select()
+    .from(generationRecords)
+    .where(and(eq(generationRecords.userId, hostUserId(hostContext)), eq(generationRecords.clientRequestId, clientRequestId)))
+    .get();
+  return record ? materializeGenerationRecord(record, hostContext) : undefined;
 }
 
 function toGeneratedAsset(asset: (typeof assets.$inferSelect) | undefined): GeneratedAsset | undefined {
@@ -1123,6 +1135,10 @@ function hostUserId(hostContext: HostContext | undefined): string {
   return hostContext?.user.id ?? "standalone";
 }
 
+function newGenerationStorageId(hostContext: HostContext | undefined): string {
+  return hostUserId(hostContext) === "standalone" ? randomUUID() : `g.${randomUUID()}`;
+}
+
 async function mapWithConcurrency<T, TResult>(
   items: T[],
   concurrency: number,
@@ -1143,22 +1159,47 @@ async function mapWithConcurrency<T, TResult>(
   return results;
 }
 
-function errorToMessage(error: unknown): string {
+function generationFailureMessage(error: unknown): string {
   if (error instanceof ProviderError) {
-    return sanitizeGenerationErrorMessage(error.message);
+    return providerFailureMessage(error);
   }
-  if (error instanceof Error && error.message) {
-    return sanitizeGenerationErrorMessage(error.message);
-  }
-  return "图像生成失败，请重试。";
+  return "图像生成执行失败（内部错误）。请重试；如持续发生，请联系管理员。";
 }
 
-function sanitizeGenerationErrorMessage(message: string): string {
-  return message
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [redacted]")
-    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, "sk-[redacted]")
-    .trim()
-    .slice(0, 1200);
+function providerFailureMessage(error: ProviderError): string {
+  switch (error.code) {
+    case "missing_api_key":
+      return "图像生成源缺少 API Key，请先配置后重试。";
+    case "missing_provider":
+      return "没有可用的图像生成源，请先配置图片模型或登录 Codex。";
+    case "unsupported_provider_behavior":
+      return error.status === 400
+        ? "图像请求或参考图不受支持，请检查输入后重试。"
+        : "图像生成服务返回了不受支持的响应，请稍后重试。";
+    case "upstream_failure":
+      if (error.status === 400 || error.status === 422) {
+        return `图像生成服务拒绝了当前请求（HTTP ${error.status}）。请检查提示词、尺寸、格式或模型参数后重试。`;
+      }
+      if (error.status === 401) {
+        return "图像生成服务认证失败（HTTP 401）。请检查当前生成源的 API Key。";
+      }
+      if (error.status === 403) {
+        return "图像生成服务拒绝访问（HTTP 403）。请检查额度、分组图片权限或模型可用性。";
+      }
+      if (error.status === 408 || error.status === 504 || error.status === 524) {
+        return `图像生成服务请求超时（HTTP ${error.status}）。请稍后重试或降低分辨率。`;
+      }
+      if (error.status === 409 || error.status === 429) {
+        return `图像生成服务暂时无法处理请求（HTTP ${error.status}）。请稍后重试并检查额度或并发限制。`;
+      }
+      return `图像生成服务请求失败（HTTP ${error.status}）。请稍后重试。`;
+    default:
+      return assertNever(error.code);
+  }
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unexpected provider error code: ${String(value)}`);
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

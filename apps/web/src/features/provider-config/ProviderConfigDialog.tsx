@@ -5,6 +5,7 @@ import {
   Bot,
   Check,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   CircleHelp,
   Database,
@@ -20,7 +21,7 @@ import {
   X
 } from "lucide-react";
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useMemo, useState, type PointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import {
   PROVIDER_SOURCE_IDS,
   isHostedAiCoveAdapterMode,
@@ -29,7 +30,6 @@ import {
   type HostApiKeySummary,
   type HostApiKeysResponse,
   type HostModelSummary,
-  type HostModelsResponse,
   type HostSessionResponse,
   type ProviderConfigResponse,
   type ProviderSourceId,
@@ -41,6 +41,8 @@ import {
 } from "@gpt-image-canvas/shared";
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
 import { apiFetch } from "../../shared/api/host-token";
+import { useModalFocus } from "../../shared/ui/use-modal-focus";
+import { readCachedHostModels, type HostModelCacheIdentity } from "./host-model-cache";
 import { onboardingProviderFieldStates, type OnboardingFieldState } from "./provider-onboarding-fields";
 import {
   AI_COVE_DEFAULT_AGENT_MODEL,
@@ -71,6 +73,8 @@ interface LocalProviderFormState {
   apiKeyId: string;
   baseUrl: string;
   model: string;
+  model2K: string;
+  model4K: string;
   timeoutMs: string;
 }
 
@@ -83,6 +87,15 @@ interface AgentLlmFormState {
   supportsVision: boolean;
 }
 
+type HostModelLoadRequest = {
+  readonly currentModelId: string;
+  readonly identity: HostModelCacheIdentity;
+  readonly setLoading: (loading: boolean) => void;
+  readonly setModels: (models: HostModelSummary[]) => void;
+  readonly signal: AbortSignal;
+  readonly usage: ProviderConfigTab;
+};
+
 type DialogMessageTone = "success" | "error";
 interface DialogMessage {
   tone: DialogMessageTone;
@@ -94,6 +107,8 @@ const emptyLocalProviderForm: LocalProviderFormState = {
   apiKeyId: "",
   baseUrl: "",
   model: "",
+  model2K: "",
+  model4K: "",
   timeoutMs: "1200"
 };
 
@@ -108,9 +123,6 @@ const emptyAgentLlmForm: AgentLlmFormState = {
 
 const DEFAULT_SUMMARY_TIMEOUT_MS = 60000;
 const SUMMARY_LLM_RECOMMENDED_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"] as const;
-const hostedModelOptionsCache = new Map<string, HostModelSummary[]>();
-const hostedModelOptionsRequestCache = new Map<string, Promise<HostModelSummary[]>>();
-
 const queryBaseUrlSeed = readQueryBaseUrlSeed();
 
 seedLocalProviderBaseUrlFromQuery();
@@ -153,8 +165,10 @@ export function ProviderConfigDialog({
   const [message, setMessage] = useState<DialogMessage | null>(null);
   const [draggingSourceId, setDraggingSourceId] = useState<ProviderSourceId | null>(null);
   const [activeTab, setActiveTab] = useState<ProviderConfigTab>(initialTab);
+  const dialogRef = useModalFocus<HTMLDivElement>(onClose);
   const isAiCoveMode = isHostedRuntime || isHostedAiCoveAdapterMode(hostSession?.adapter.mode);
   const gatewayBaseUrl = hostSession?.adapter.gatewayBaseUrl ?? queryBaseUrlSeed;
+  const hostUserId = hostSession?.user.id ?? "";
   const hasHostApiKeys = hostApiKeys.length > 0;
 
   const sourcesById = useMemo(() => {
@@ -176,6 +190,7 @@ export function ProviderConfigDialog({
   const availableSourceCount = sourceOrder.filter((sourceId) => sourcesById.get(sourceId)?.available).length;
   const activeSourceRank = activeSourceId ? sourceOrder.indexOf(activeSourceId) + 1 : 0;
   const activeSourceTimeout = activeSource?.details.timeoutMs;
+  const defaultImageModelLabel = localForm.model || t("commonNotSet");
   const showAiCoveCondensedConfig = isAiCoveMode;
   const isOnboarding = mode === "onboarding";
   const isSummaryTab = activeTab === "summary";
@@ -393,22 +408,6 @@ export function ProviderConfigDialog({
     };
   }, [loadAgentConfig, loadHostContext, loadProviderConfig, loadSummaryConfig]);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") {
-        return;
-      }
-
-      event.preventDefault();
-      onClose();
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [onClose]);
-
   function applyProviderConfig(nextConfig: ProviderConfigResponse, context: HostSessionResponse | null = hostSession): void {
     const nextIsAiCoveMode = isHostedAiCoveAdapterMode(context?.adapter.mode);
     const nextModel = nextConfig.localOpenAI.model || (nextIsAiCoveMode ? "gpt-image-2" : "");
@@ -420,6 +419,8 @@ export function ProviderConfigDialog({
       apiKeyId: nextConfig.localOpenAI.apiKeyId ?? "",
       baseUrl: nextIsAiCoveMode ? nextGatewayBaseUrl : nextConfig.localOpenAI.baseUrl || queryBaseUrlSeed,
       model: nextModel,
+      model2K: nextConfig.localOpenAI.model2K ?? "",
+      model4K: nextConfig.localOpenAI.model4K ?? "",
       timeoutMs: formatTimeoutSeconds(nextConfig.localOpenAI.timeoutMs)
     });
   }
@@ -478,56 +479,106 @@ export function ProviderConfigDialog({
     setMessage(null);
   }
 
+  function handleProviderTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
+    if (!(["ArrowLeft", "ArrowRight", "Home", "End"] as const).includes(event.key as "ArrowLeft" | "ArrowRight" | "Home" | "End")) {
+      return;
+    }
+
+    const tabs = Array.from(event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role='tab']") ?? []);
+    const currentIndex = tabs.indexOf(event.currentTarget);
+    if (currentIndex < 0 || tabs.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    const nextIndex =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? tabs.length - 1
+          : event.key === "ArrowRight"
+            ? (currentIndex + 1) % tabs.length
+            : (currentIndex - 1 + tabs.length) % tabs.length;
+    const nextTab = tabs[nextIndex];
+    const nextValue = nextTab?.dataset.providerTab;
+    if (nextValue === "image" || nextValue === "agent" || nextValue === "summary") {
+      setActiveTab(nextValue);
+      nextTab.focus();
+    }
+  }
+
   useEffect(() => {
-    if (!isAiCoveMode || !localForm.apiKeyId) {
+    if (!isAiCoveMode || !hostUserId || !gatewayBaseUrl || !localForm.apiKeyId) {
       setImageModels(selectableCurrentModel(localForm.model, "image"));
       return;
     }
 
     const controller = new AbortController();
-    void loadHostModels(localForm.apiKeyId, "image", localForm.model, setImageModels, setIsImageModelsLoading, controller.signal);
+    void loadHostModels({
+      currentModelId: localForm.model,
+      identity: { apiKeyId: localForm.apiKeyId, gatewayBaseUrl, userId: hostUserId },
+      setLoading: setIsImageModelsLoading,
+      setModels: setImageModels,
+      signal: controller.signal,
+      usage: "image"
+    });
     return () => {
       controller.abort();
     };
-  }, [isAiCoveMode, localForm.apiKeyId, localForm.model]);
+  }, [gatewayBaseUrl, hostUserId, isAiCoveMode, localForm.apiKeyId, localForm.model]);
 
   useEffect(() => {
-    if (!isAiCoveMode || !agentForm.apiKeyId) {
+    if (!isAiCoveMode || !hostUserId || !gatewayBaseUrl || !agentForm.apiKeyId) {
       setAgentModels(selectableCurrentModel(agentForm.model, "agent"));
       return;
     }
 
     const controller = new AbortController();
-    void loadHostModels(agentForm.apiKeyId, "agent", agentForm.model, setAgentModels, setIsAgentModelsLoading, controller.signal);
+    void loadHostModels({
+      currentModelId: agentForm.model,
+      identity: { apiKeyId: agentForm.apiKeyId, gatewayBaseUrl, userId: hostUserId },
+      setLoading: setIsAgentModelsLoading,
+      setModels: setAgentModels,
+      signal: controller.signal,
+      usage: "agent"
+    });
     return () => {
       controller.abort();
     };
-  }, [agentForm.apiKeyId, agentForm.model, isAiCoveMode]);
+  }, [agentForm.apiKeyId, agentForm.model, gatewayBaseUrl, hostUserId, isAiCoveMode]);
 
   useEffect(() => {
-    if (!isAiCoveMode || !summaryModelApiKeyId) {
+    if (!isAiCoveMode || !hostUserId || !gatewayBaseUrl || !summaryModelApiKeyId) {
       setSummaryModels(selectableCurrentModel(summaryForm.model, "summary"));
       return;
     }
 
     const controller = new AbortController();
-    void loadHostModels(summaryModelApiKeyId, "summary", summaryForm.model, setSummaryModels, setIsSummaryModelsLoading, controller.signal);
+    void loadHostModels({
+      currentModelId: summaryForm.model,
+      identity: { apiKeyId: summaryModelApiKeyId, gatewayBaseUrl, userId: hostUserId },
+      setLoading: setIsSummaryModelsLoading,
+      setModels: setSummaryModels,
+      signal: controller.signal,
+      usage: "summary"
+    });
     return () => {
       controller.abort();
     };
-  }, [isAiCoveMode, summaryForm.model, summaryModelApiKeyId]);
+  }, [gatewayBaseUrl, hostUserId, isAiCoveMode, summaryForm.model, summaryModelApiKeyId]);
 
-  async function loadHostModels(
-    apiKeyId: string,
-    usage: ProviderConfigTab,
-    currentModelId: string,
-    setModels: (models: HostModelSummary[]) => void,
-    setLoading: (loading: boolean) => void,
-    signal?: AbortSignal
-  ): Promise<void> {
+  async function loadHostModels({ currentModelId, identity, setLoading, setModels, signal, usage }: HostModelLoadRequest): Promise<void> {
     setLoading(true);
     try {
-      const bodyItems = await readCachedHostModels(apiKeyId);
+      const bodyItems = await readCachedHostModels(identity, async () => {
+        const params = new URLSearchParams({ apiKeyId: identity.apiKeyId });
+        const response = await apiFetch(`/api/host/models?${params.toString()}`);
+        if (!response.ok) {
+          throw new Error(await readProviderConfigError(response, locale, t));
+        }
+        const body: unknown = await response.json();
+        return body;
+      });
       if (!signal?.aborted) {
         const filtered = bodyItems.filter((model) => isModelAllowedForTab(model.id, usage));
         setModels(filtered.length > 0 ? filtered : fallbackHostModels(currentModelId, usage));
@@ -541,35 +592,6 @@ export function ProviderConfigDialog({
         setLoading(false);
       }
     }
-  }
-
-  async function readCachedHostModels(apiKeyId: string): Promise<HostModelSummary[]> {
-    const cached = hostedModelOptionsCache.get(apiKeyId);
-    if (cached) {
-      return cached;
-    }
-
-    const pending = hostedModelOptionsRequestCache.get(apiKeyId);
-    if (pending) {
-      return pending;
-    }
-
-    const request = (async () => {
-      const params = new URLSearchParams({ apiKeyId });
-      const response = await apiFetch(`/api/host/models?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error(await readProviderConfigError(response, locale, t));
-      }
-
-      const body = (await response.json()) as HostModelsResponse;
-      hostedModelOptionsCache.set(apiKeyId, body.items);
-      return body.items;
-    })().finally(() => {
-      hostedModelOptionsRequestCache.delete(apiKeyId);
-    });
-
-    hostedModelOptionsRequestCache.set(apiKeyId, request);
-    return request;
   }
 
   function moveSource(sourceId: ProviderSourceId, direction: -1 | 1): void {
@@ -656,6 +678,19 @@ export function ProviderConfigDialog({
 
   async function saveProviderConfig(): Promise<void> {
     if (!config) {
+      return;
+    }
+
+    const localModel = localForm.model.trim();
+    if (!localModel) {
+      setActiveTab("image");
+      setMessage({
+        tone: "error",
+        text: t("providerLocalModelRequired")
+      });
+      window.requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>('[data-testid="provider-local-model"]')?.focus();
+      });
       return;
     }
 
@@ -784,14 +819,18 @@ export function ProviderConfigDialog({
         ? {
             apiKeyId: localApiKeyId,
             baseUrl: gatewayBaseUrl,
-            model: localForm.model.trim(),
+            model: localModel,
+            model2K: localForm.model2K.trim(),
+            model4K: localForm.model4K.trim(),
             timeoutMs
           }
         : {
             apiKey,
             preserveApiKey: !apiKey && hasSavedLocalKey,
             baseUrl: localForm.baseUrl.trim(),
-            model: localForm.model.trim(),
+            model: localModel,
+            model2K: localForm.model2K.trim(),
+            model4K: localForm.model4K.trim(),
             timeoutMs
           }
     };
@@ -929,7 +968,9 @@ export function ProviderConfigDialog({
         aria-labelledby="provider-config-title"
         aria-modal="true"
         className={`provider-config-dialog app-modal-surface${isInitialConfigReady ? "" : " provider-config-dialog--initializing"}`}
+        ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <header className="provider-config-dialog__header">
@@ -985,17 +1026,27 @@ export function ProviderConfigDialog({
               aria-selected={activeTab === "image"}
               className="provider-config-tab"
               data-active={activeTab === "image"}
+              data-provider-tab="image"
               data-testid="provider-config-tab-image"
               id="provider-config-tab-image"
               role="tab"
               tabIndex={activeTab === "image" ? 0 : -1}
               type="button"
               onClick={() => setActiveTab("image")}
+              onKeyDown={handleProviderTabKeyDown}
             >
               <Server className="size-4" aria-hidden="true" />
               <span className="provider-config-tab__copy">
                 <strong>{t("providerImageModelTab")}</strong>
-                <span>{activeSourceId ? t("providerCurrent", { source: sourceLabel(activeSourceId, t) }) : t("providerCurrentNone")}</span>
+                <span>
+                  {isAiCoveMode
+                    ? activeSourceId
+                      ? t("providerAvailable")
+                      : t("providerUnavailable")
+                    : activeSourceId
+                      ? t("providerCurrent", { source: sourceLabel(activeSourceId, t) })
+                      : t("providerCurrentNone")}
+                </span>
               </span>
             </button>
             <button
@@ -1003,12 +1054,14 @@ export function ProviderConfigDialog({
               aria-selected={activeTab === "agent"}
               className="provider-config-tab"
               data-active={activeTab === "agent"}
+              data-provider-tab="agent"
               data-testid="provider-config-tab-agent"
               id="provider-config-tab-agent"
               role="tab"
               tabIndex={activeTab === "agent" ? 0 : -1}
               type="button"
               onClick={() => setActiveTab("agent")}
+              onKeyDown={handleProviderTabKeyDown}
             >
               <Bot className="size-4" aria-hidden="true" />
               <span className="provider-config-tab__copy">
@@ -1021,12 +1074,14 @@ export function ProviderConfigDialog({
               aria-selected={activeTab === "summary"}
               className="provider-config-tab"
               data-active={activeTab === "summary"}
+              data-provider-tab="summary"
               data-testid="provider-config-tab-summary"
               id="provider-config-tab-summary"
               role="tab"
               tabIndex={activeTab === "summary" ? 0 : -1}
               type="button"
               onClick={() => setActiveTab("summary")}
+              onKeyDown={handleProviderTabKeyDown}
             >
               <CircleHelp className="size-4" aria-hidden="true" />
               <span className="provider-config-tab__copy">
@@ -1070,29 +1125,33 @@ export function ProviderConfigDialog({
 
               <div className={`provider-workspace${showAiCoveCondensedConfig ? " provider-workspace--agent provider-workspace--condensed" : ""}`}>
                 <section className="provider-detail-card provider-detail-card--local" data-testid="provider-local-section" aria-labelledby="provider-local-title">
-                  <ProviderDetailHeader description={t("providerCardLocalHint")} source={localSource} sourceId="local-openai" titleId="provider-local-title" />
+                  <ProviderDetailHeader
+                    description={isAiCoveMode ? undefined : t("providerCardLocalHint")}
+                    source={localSource}
+                    sourceId="local-openai"
+                    title={isAiCoveMode ? t("providerImageModelTab") : undefined}
+                    titleId="provider-local-title"
+                  />
                   {isAiCoveMode && !hasHostApiKeys && !isHostApiKeysLoading ? (
-                    <div className="provider-secret-pill" role="alert">
-                      <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
-                      {t("hostApiKeysEmpty")}
-                    </div>
+                    <HostApiKeysEmptyAlert />
                   ) : null}
                   <div className="provider-form-grid">
-                    <label className="provider-field provider-field--span">
-                      <span>
-                        Base URL
-                        <OnboardingFieldStatusBadge state={onboardingFieldStates?.image.baseUrl} />
-                      </span>
-                      <input
-                        className="provider-field__control"
-                        data-testid="provider-local-base-url"
-                        disabled={isAiCoveMode}
-                        name="localOpenAIBaseUrl"
-                        placeholder={t("providerBaseUrlPlaceholder")}
-                        value={isAiCoveMode ? gatewayBaseUrl : localForm.baseUrl}
-                        onChange={(event) => updateLocalForm({ baseUrl: event.target.value })}
-                      />
-                    </label>
+                    {isAiCoveMode ? null : (
+                      <label className="provider-field provider-field--span">
+                        <span>
+                          Base URL
+                          <OnboardingFieldStatusBadge state={onboardingFieldStates?.image.baseUrl} />
+                        </span>
+                        <input
+                          className="provider-field__control"
+                          data-testid="provider-local-base-url"
+                          name="localOpenAIBaseUrl"
+                          placeholder={t("providerBaseUrlPlaceholder")}
+                          value={localForm.baseUrl}
+                          onChange={(event) => updateLocalForm({ baseUrl: event.target.value })}
+                        />
+                      </label>
+                    )}
                     {isAiCoveMode ? (
                       <HostApiKeySelect
                         keys={hostApiKeys}
@@ -1124,7 +1183,7 @@ export function ProviderConfigDialog({
                     )}
                     <label className={isAiCoveMode ? "provider-field provider-field--select provider-field--hosted-model" : "provider-field provider-field--compact provider-field--select"}>
                       <span>
-                        {t("providerFieldModel")}
+                        {t("providerDefaultImageModel")}
                         <OnboardingFieldStatusBadge state={onboardingFieldStates?.image.model} />
                       </span>
                       {isAiCoveMode ? (
@@ -1133,7 +1192,7 @@ export function ProviderConfigDialog({
                           models={imageModels}
                           name="localOpenAIModel"
                           placeholder={t("providerLocalModelPlaceholder")}
-                          shouldIncludeCurrentValue={isLikelyImageModel}
+                          required
                           testId="provider-local-model"
                           value={localForm.model}
                           onChange={(model) => updateLocalForm({ model })}
@@ -1143,11 +1202,86 @@ export function ProviderConfigDialog({
                           className="provider-field__control"
                           data-testid="provider-local-model"
                           name="localOpenAIModel"
+                          required
                           value={localForm.model}
                           onChange={(event) => updateLocalForm({ model: event.target.value })}
                         />
                       )}
                     </label>
+                    <fieldset className="provider-resolution-models">
+                      <legend>{t("providerResolutionModelsTitle")}</legend>
+                      <p>{t("providerResolutionModelsCopy")}</p>
+                      <div className="provider-resolution-models__grid">
+                        <label className="provider-field provider-field--select">
+                          <span>{t("providerResolutionModel2K")}</span>
+                          {isAiCoveMode ? (
+                            <HostModelSelect
+                              emptyDisplay={
+                                <ResolutionFallbackLabel
+                                  label={t("providerResolutionFollowDefault", { model: defaultImageModelLabel })}
+                                  model={defaultImageModelLabel}
+                                />
+                              }
+                              isLoading={isImageModelsLoading}
+                              models={imageModels}
+                              name="localOpenAIModel2K"
+                              placeholder={t("providerResolutionFollowDefault", { model: defaultImageModelLabel })}
+                              testId="provider-local-model-2k"
+                              value={localForm.model2K}
+                              onChange={(model2K) => updateLocalForm({ model2K })}
+                            />
+                          ) : (
+                            <input
+                              className="provider-field__control"
+                              data-testid="provider-local-model-2k"
+                              name="localOpenAIModel2K"
+                              placeholder={t("providerResolutionFollowDefault", { model: localForm.model || t("commonNotSet") })}
+                              value={localForm.model2K}
+                              onChange={(event) => updateLocalForm({ model2K: event.target.value })}
+                            />
+                          )}
+                          {localForm.model2K ? null : (
+                            <small aria-hidden="true" className="provider-resolution-model__fallback">
+                              {t("providerResolutionFollowDefault", { model: localForm.model || t("commonNotSet") })}
+                            </small>
+                          )}
+                        </label>
+                        <label className="provider-field provider-field--select">
+                          <span>{t("providerResolutionModel4K")}</span>
+                          {isAiCoveMode ? (
+                            <HostModelSelect
+                              emptyDisplay={
+                                <ResolutionFallbackLabel
+                                  label={t("providerResolutionFollowDefault", { model: defaultImageModelLabel })}
+                                  model={defaultImageModelLabel}
+                                />
+                              }
+                              isLoading={isImageModelsLoading}
+                              models={imageModels}
+                              name="localOpenAIModel4K"
+                              placeholder={t("providerResolutionFollowDefault", { model: defaultImageModelLabel })}
+                              testId="provider-local-model-4k"
+                              value={localForm.model4K}
+                              onChange={(model4K) => updateLocalForm({ model4K })}
+                            />
+                          ) : (
+                            <input
+                              className="provider-field__control"
+                              data-testid="provider-local-model-4k"
+                              name="localOpenAIModel4K"
+                              placeholder={t("providerResolutionFollowDefault", { model: localForm.model || t("commonNotSet") })}
+                              value={localForm.model4K}
+                              onChange={(event) => updateLocalForm({ model4K: event.target.value })}
+                            />
+                          )}
+                          {localForm.model4K ? null : (
+                            <small aria-hidden="true" className="provider-resolution-model__fallback">
+                              {t("providerResolutionFollowDefault", { model: localForm.model || t("commonNotSet") })}
+                            </small>
+                          )}
+                        </label>
+                      </div>
+                    </fieldset>
                     <label className="provider-field provider-field--compact provider-field--select">
                       <span>{t("providerTimeoutMs")}</span>
                       <input
@@ -1321,27 +1455,25 @@ export function ProviderConfigDialog({
                     <ProviderAvailabilityBadge available={agentConfig?.configured ?? false} />
                   </header>
                   {isAiCoveMode && !hasHostApiKeys && !isHostApiKeysLoading ? (
-                    <div className="provider-secret-pill" role="alert">
-                      <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
-                      {t("hostApiKeysEmpty")}
-                    </div>
+                    <HostApiKeysEmptyAlert />
                   ) : null}
                   <div className="provider-form-grid">
-                    <label className="provider-field provider-field--span">
-                      <span>
-                        Base URL
-                        <OnboardingFieldStatusBadge state={onboardingFieldStates?.agent.baseUrl} />
-                      </span>
-                      <input
-                        className="provider-field__control"
-                        data-testid="provider-agent-base-url"
-                        disabled={isAiCoveMode}
-                        name="agentLlmBaseUrl"
-                        placeholder={t("agentConfigBaseUrlPlaceholder")}
-                        value={isAiCoveMode ? gatewayBaseUrl : agentForm.baseUrl}
-                        onChange={(event) => updateAgentForm({ baseUrl: event.target.value })}
-                      />
-                    </label>
+                    {isAiCoveMode ? null : (
+                      <label className="provider-field provider-field--span">
+                        <span>
+                          Base URL
+                          <OnboardingFieldStatusBadge state={onboardingFieldStates?.agent.baseUrl} />
+                        </span>
+                        <input
+                          className="provider-field__control"
+                          data-testid="provider-agent-base-url"
+                          name="agentLlmBaseUrl"
+                          placeholder={t("agentConfigBaseUrlPlaceholder")}
+                          value={agentForm.baseUrl}
+                          onChange={(event) => updateAgentForm({ baseUrl: event.target.value })}
+                        />
+                      </label>
+                    )}
                     {isAiCoveMode ? (
                       <HostApiKeySelect
                         keys={hostApiKeys}
@@ -1382,7 +1514,6 @@ export function ProviderConfigDialog({
                           models={agentModels}
                           name="agentLlmModel"
                           placeholder={t("agentConfigModelPlaceholder")}
-                          shouldIncludeCurrentValue={isLikelyAgentLlmModel}
                           testId="provider-agent-model"
                           value={agentForm.model}
                           onChange={(model) => updateAgentForm({ model })}
@@ -1460,28 +1591,33 @@ export function ProviderConfigDialog({
                     </header>
                   )}
                   {isAiCoveMode && !hasHostApiKeys && !isHostApiKeysLoading ? (
-                    <div className="provider-secret-pill" role="alert">
-                      <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
-                      {t("hostApiKeysEmpty")}
-                    </div>
+                    <HostApiKeysEmptyAlert />
                   ) : null}
                   <p className={`provider-config-inline-hint${isSummaryOnboarding ? " provider-config-inline-hint--compact" : ""}`} data-testid="summary-llm-gemini-hint">
                     <strong>!</strong>
-                    <span>{t("summaryLlmGeminiHint")}</span>
+                    <span>
+                      {t("summaryLlmGeminiHintLead")}
+                      <span className="provider-config-inline-hint__keep">{t("summaryLlmGeminiHintAction")}</span>
+                      <span className="provider-config-inline-hint__keep">{t("summaryLlmGeminiHintOutcome")}</span>
+                      {t("summaryLlmGeminiHintTail")}
+                      <span className="provider-config-inline-hint__keep">{t("summaryLlmGeminiHintFallback")}</span>
+                      {t("summaryLlmGeminiHintEnd")}
+                    </span>
                   </p>
                   <div className="provider-form-grid">
-                    <label className="provider-field provider-field--span">
-                      <span>Base URL</span>
-                      <input
-                        className="provider-field__control"
-                        data-testid="provider-summary-base-url"
-                        disabled={isAiCoveMode}
-                        name="summaryLlmBaseUrl"
-                        placeholder={t("agentConfigBaseUrlPlaceholder")}
-                        value={isAiCoveMode ? gatewayBaseUrl : summaryForm.baseUrl}
-                        onChange={(event) => updateSummaryForm({ baseUrl: event.target.value })}
-                      />
-                    </label>
+                    {isAiCoveMode ? null : (
+                      <label className="provider-field provider-field--span">
+                        <span>Base URL</span>
+                        <input
+                          className="provider-field__control"
+                          data-testid="provider-summary-base-url"
+                          name="summaryLlmBaseUrl"
+                          placeholder={t("agentConfigBaseUrlPlaceholder")}
+                          value={summaryForm.baseUrl}
+                          onChange={(event) => updateSummaryForm({ baseUrl: event.target.value })}
+                        />
+                      </label>
+                    )}
                     {isAiCoveMode ? (
                       <HostApiKeySelect
                         keys={hostApiKeys}
@@ -1520,7 +1656,6 @@ export function ProviderConfigDialog({
                           models={summaryModels}
                           name="summaryLlmModel"
                           placeholder={t("summaryConfigModelPlaceholder")}
-                          shouldIncludeCurrentValue={isLikelyAgentLlmModel}
                           testId="provider-summary-model"
                           value={summaryForm.model}
                           onChange={(model) =>
@@ -1669,11 +1804,13 @@ function ProviderDetailHeader({
   description,
   source,
   sourceId,
+  title,
   titleId
 }: {
   description?: string;
   source: ProviderSourceView | undefined;
   sourceId: ProviderSourceId;
+  title?: string;
   titleId: string;
 }) {
   const { t } = useI18n();
@@ -1684,7 +1821,7 @@ function ProviderDetailHeader({
         <SourceIcon sourceId={sourceId} />
       </span>
       <div className="min-w-0">
-        <h3 id={titleId}>{sourceLabel(sourceId, t)}</h3>
+        <h3 id={titleId}>{title ?? sourceLabel(sourceId, t)}</h3>
         {description ? <p>{description}</p> : null}
       </div>
       <ProviderAvailabilityBadge available={source?.available ?? false} />
@@ -1755,6 +1892,21 @@ function OnboardingFieldStatusBadge({ state }: { state?: OnboardingFieldState })
   );
 }
 
+function HostApiKeysEmptyAlert() {
+  const { t } = useI18n();
+
+  return (
+    <div className="provider-secret-pill" role="alert">
+      <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="provider-secret-pill__copy">
+        {t("hostApiKeysEmptyPrefix")}
+        <span className="provider-secret-pill__action">{t("hostApiKeysEmptyAction")}</span>
+        <span className="provider-secret-pill__suffix">{t("hostApiKeysEmptySuffix")}</span>
+      </span>
+    </div>
+  );
+}
+
 function HostApiKeySelect({
   isLoading,
   keys,
@@ -1802,43 +1954,67 @@ function HostApiKeySelect({
 }
 
 function HostModelSelect({
+  emptyDisplay,
   isLoading,
   models,
   placeholder,
+  required = false,
   name,
-  shouldIncludeCurrentValue,
   testId,
   value,
   onChange
 }: {
+  emptyDisplay?: ReactNode;
   isLoading: boolean;
   models: HostModelSummary[];
   placeholder?: string;
+  required?: boolean;
   name: string;
-  shouldIncludeCurrentValue: (modelId: string) => boolean;
   testId: string;
   value: string;
   onChange: (model: string) => void;
 }) {
   const { t } = useI18n();
-  const hasSavedUnknownModel = value && shouldIncludeCurrentValue(value) && !models.some((model) => model.id === value);
+  const hasSavedUnknownModel = Boolean(value) && !models.some((model) => model.id === value);
+  const emptyLabel = isLoading ? t("hostModelsLoading") : placeholder ?? t("hostModelSelectPlaceholder");
   return (
-    <select
-      className="provider-field__control"
-      data-testid={testId}
-      disabled={isLoading}
-      name={name}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-    >
-      <option value="">{isLoading ? t("hostModelsLoading") : placeholder ?? t("hostModelSelectPlaceholder")}</option>
-      {hasSavedUnknownModel ? <option value={value}>{value}</option> : null}
-      {models.map((model) => (
-        <option key={model.id} value={model.id}>
-          {model.id}
-        </option>
-      ))}
-    </select>
+    <span className="provider-model-select" data-empty={value ? "false" : "true"}>
+      <select
+        className="provider-field__control"
+        data-testid={testId}
+        disabled={isLoading}
+        name={name}
+        required={required}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">{emptyLabel}</option>
+        {hasSavedUnknownModel ? <option value={value}>{value}</option> : null}
+        {models.map((model) => (
+          <option key={model.id} value={model.id}>
+            {model.id}
+          </option>
+        ))}
+      </select>
+      {value ? null : (
+        <span aria-hidden="true" className="provider-model-select__display" data-testid={`${testId}-display`}>
+          <span className="provider-model-select__display-copy">{emptyDisplay ?? emptyLabel}</span>
+          <ChevronDown className="provider-model-select__chevron" aria-hidden="true" />
+        </span>
+      )}
+    </span>
+  );
+}
+
+function ResolutionFallbackLabel({ label, model }: { label: string; model: string }) {
+  const modelIndex = label.indexOf(model);
+  if (modelIndex < 0) return label;
+  return (
+    <span className="provider-resolution-model__fallback-label">
+      {label.slice(0, modelIndex)}
+      <span className="provider-resolution-model__name">{model}</span>
+      {label.slice(modelIndex + model.length)}
+    </span>
   );
 }
 

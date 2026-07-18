@@ -860,6 +860,12 @@
   background: rgb(20 184 166 / 0.12) !important;
 }
 
+.app-root[data-canvas-theme="dark"] [data-testid="reference-state"][data-reference-state="error"] {
+  border-color: color-mix(in srgb, var(--danger) 42%, transparent) !important;
+  background: color-mix(in srgb, var(--danger) 22%, transparent) !important;
+  color: color-mix(in srgb, var(--danger) 38%, var(--paper-soft)) !important;
+}
+
 .app-root[data-canvas-theme="dark"] .reference-preview-card {
   border-color: rgb(45 212 191 / 0.22);
   background: rgb(255 247 237 / 0.05);

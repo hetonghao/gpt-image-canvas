@@ -4,16 +4,15 @@ import type {
   GalleryImageItem,
   GalleryResponse,
   GenerationRecord as ApiGenerationRecord,
-  GenerationStatus,
   ImageMode,
   ImageQuality,
   OutputFormat,
-  OutputStatus,
   ProjectState
 } from "../contracts.js";
 import { db } from "../../infrastructure/database.js";
-import { assets, generationOutputs, generationRecords, generationReferenceAssets, projects } from "../../infrastructure/schema.js";
+import { assets, generationOutputs, generationRecords, projects } from "../../infrastructure/schema.js";
 import type { HostContext } from "../host/host-adapter.js";
+import { listGenerationRecords } from "../generation/image-generation.js";
 
 export const DEFAULT_PROJECT_ID = "default";
 const DEFAULT_PROJECT_NAME = "Default Project";
@@ -301,7 +300,7 @@ function getDefaultProjectRow(hostContext?: HostContext): (typeof projects.$infe
 
 function getGenerationHistory(hostContext?: HostContext): ApiGenerationRecord[] {
   try {
-    return readGenerationHistory(hostContext);
+    return listGenerationRecords(hostContext);
   } catch (error) {
     warnOnce(
       "history-read-fallback",
@@ -328,87 +327,6 @@ function formatErrorSummary(error: unknown): string {
   }
 
   return String(error);
-}
-
-function readGenerationHistory(hostContext?: HostContext): ApiGenerationRecord[] {
-  const records = db
-    .select()
-    .from(generationRecords)
-    .where(eq(generationRecords.userId, hostUserId(hostContext)))
-    .orderBy(desc(generationRecords.createdAt))
-    .limit(20)
-    .all();
-  if (records.length === 0) {
-    return [];
-  }
-
-  const generationIds = records.map((record) => record.id);
-  const outputs = db
-    .select()
-    .from(generationOutputs)
-    .where(inArray(generationOutputs.generationId, generationIds))
-    .orderBy(generationOutputs.createdAt)
-    .all();
-  const referenceRows = db
-    .select()
-    .from(generationReferenceAssets)
-    .where(inArray(generationReferenceAssets.generationId, generationIds))
-    .all()
-    .sort((left, right) =>
-      left.generationId === right.generationId
-        ? left.position - right.position
-        : left.generationId.localeCompare(right.generationId)
-    );
-
-  const assetIds = outputs.flatMap((output) => (output.assetId ? [output.assetId] : []));
-  const assetRows =
-    assetIds.length > 0
-      ? db.select().from(assets).where(and(inArray(assets.id, assetIds), eq(assets.userId, hostUserId(hostContext)))).all()
-      : [];
-  const assetById = new Map(assetRows.map((asset) => [asset.id, asset]));
-
-  const outputsByGenerationId = new Map<string, typeof outputs>();
-  for (const output of outputs) {
-    const existing = outputsByGenerationId.get(output.generationId) ?? [];
-    existing.push(output);
-    outputsByGenerationId.set(output.generationId, existing);
-  }
-  const referenceAssetIdsByGenerationId = new Map<string, string[]>();
-  for (const referenceRow of referenceRows) {
-    const existing = referenceAssetIdsByGenerationId.get(referenceRow.generationId) ?? [];
-    existing.push(referenceRow.assetId);
-    referenceAssetIdsByGenerationId.set(referenceRow.generationId, existing);
-  }
-
-  return records.map((record) => {
-    const mappedOutputs = (outputsByGenerationId.get(record.id) ?? []).map((output) => ({
-      id: output.id,
-      status: output.status as OutputStatus,
-      asset: output.assetId ? toGeneratedAsset(assetById.get(output.assetId)) : undefined,
-      error: output.error ?? undefined
-    }));
-
-    return {
-      id: record.id,
-      mode: record.mode as ImageMode,
-      prompt: record.prompt,
-      effectivePrompt: record.effectivePrompt,
-      presetId: record.presetId,
-      size: {
-        width: record.width,
-        height: record.height
-      },
-      quality: record.quality as ImageQuality,
-      outputFormat: record.outputFormat as OutputFormat,
-      count: record.count,
-      status: record.status as GenerationStatus,
-      error: record.error ?? undefined,
-      referenceAssetIds: referenceAssetIdsByGenerationId.get(record.id) ?? (record.referenceAssetId ? [record.referenceAssetId] : undefined),
-      referenceAssetId: record.referenceAssetId ?? undefined,
-      createdAt: record.createdAt,
-      outputs: mappedOutputs
-    };
-  });
 }
 
 function toGeneratedAsset(asset: (typeof assets.$inferSelect) | undefined): GeneratedAsset | undefined {

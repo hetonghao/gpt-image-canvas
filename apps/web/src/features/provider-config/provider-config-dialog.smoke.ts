@@ -7,11 +7,19 @@ import { fileURLToPath } from "node:url";
 const sourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "ProviderConfigDialog.tsx");
 const cssPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../styles/provider-config.css");
 const responsiveCssPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../styles/responsive.css");
+const canvasSourcePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../canvas/CanvasApp.tsx");
+const canvasCssPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../styles/canvas-runtime.css");
+const i18nPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../shared/i18n/index.tsx");
+const modalFocusPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../shared/ui/use-modal-focus.ts");
 
-const [source, styles, responsiveStyles] = await Promise.all([
+const [source, styles, responsiveStyles, canvasSource, canvasStyles, i18nSource, modalFocusSource] = await Promise.all([
   readFile(sourcePath, "utf8"),
   readFile(cssPath, "utf8"),
-  readFile(responsiveCssPath, "utf8")
+  readFile(responsiveCssPath, "utf8"),
+  readFile(canvasSourcePath, "utf8"),
+  readFile(canvasCssPath, "utf8"),
+  readFile(i18nPath, "utf8"),
+  readFile(modalFocusPath, "utf8")
 ]);
 
 function cssRule(selector: string): string {
@@ -74,7 +82,7 @@ test("hides the Codex login action in hosted AI Cove mode", () => {
 });
 
 test("keeps AI Cove hosted selects wide and avoids duplicate model requests", () => {
-  assert.match(source, /hostedModelOptionsCache/u, "ProviderConfigDialog should cache AI Cove model options across dialog instances");
+  assert.match(source, /readCachedHostModels/u, "ProviderConfigDialog should reuse the identity-scoped hosted model cache");
   assert.match(source, /provider-field--select/u, "ProviderConfigDialog should mark hosted select fields for wider styling");
   assert.match(source, /provider-field--hosted-api-key/u, "ProviderConfigDialog should expand hosted API key selects to the full form width");
   assert.match(source, /provider-field--hosted-model/u, "ProviderConfigDialog should expand hosted model selects to the full form width");
@@ -98,4 +106,61 @@ test("does not block the whole provider config dialog on hosted API keys", () =>
   assert.match(source, /isHostApiKeysLoading/u, "ProviderConfigDialog should track hosted API key loading separately");
   assert.ok(source.includes('void apiFetch("/api/host/api-keys"'), "Hosted API key loading should be launched without blocking config forms");
   assert.match(source, /hostApiKeysLoading/u, "Hosted API key selects should have a loading placeholder");
+});
+
+test("keeps provider tab labels intact on narrow screens", () => {
+  assert.match(cssRule(".provider-config-tab__copy strong"), /overflow-wrap:\s*normal/u, "Provider tab titles should not split Latin words");
+  assert.match(cssRule(".provider-config-tab__copy strong"), /word-break:\s*keep-all/u, "Provider tab titles should keep Agent and OpenAI intact");
+  assert.match(cssRule(".provider-config-tab__copy span"), /text-overflow:\s*ellipsis/u, "Provider tab subtitles should truncate instead of breaking words");
+  assert.match(cssRule(".provider-config-tab__copy span"), /white-space:\s*nowrap/u, "Provider tab subtitles should stay on one line");
+  assert.match(
+    styles,
+    /@media \(max-width:\s*480px\)[\s\S]*?\.provider-config-tab\s*\{[^}]*grid-template-columns:\s*1fr;/u,
+    "Mobile provider tabs should stack the icon above the complete primary label"
+  );
+  assert.match(
+    styles,
+    /@media \(max-width:\s*480px\)[\s\S]*?\.provider-config-tab__copy span\s*\{[^}]*display:\s*none;/u,
+    "Mobile provider tabs should hide secondary copy before truncating the primary label"
+  );
+});
+
+test("keeps the compact desktop close target usable", () => {
+  assert.match(
+    styles,
+    /@media \(min-width:\s*1180px\)[\s\S]*?\.provider-config-dialog__close\s*\{[^}]*width:\s*2\.5rem;[^}]*height:\s*2\.5rem;/u,
+    "Provider config close target should remain at least 40 by 40 pixels on desktop"
+  );
+});
+
+test("shows the complete default resolution model below empty narrow fields", () => {
+  assert.match(source, /className="provider-resolution-model__fallback"/u, "Empty resolution model fields should render a visible fallback label");
+  assert.match(source, /localForm\.model4K \? null : \(/u, "The 4K fallback label should only render while the field is empty");
+  assert.match(styles, /\.provider-resolution-model__fallback\s*\{[^}]*display:\s*block;/u, "The complete fallback label should stay visible on narrow screens");
+  assert.match(
+    styles,
+    /@media \(min-width:\s*1180px\)[\s\S]*?\.provider-resolution-model__fallback\s*\{[^}]*display:\s*none;/u,
+    "The duplicate fallback label should stay hidden when the desktop select can show the full value"
+  );
+});
+
+test("keeps hosted recovery instructions as semantic phrases on narrow screens", () => {
+  assert.match(source, /function HostApiKeysEmptyAlert\(\)/u, "Hosted API key recovery copy should be composed in one shared feature component");
+  assert.match(source, /provider-secret-pill__action/u, "Hosted API key recovery action should have a protected semantic phrase");
+  assert.match(cssRule(".provider-secret-pill__action"), /white-space:\s*nowrap/u, "Hosted API key recovery action should not split into an orphaned CJK word");
+  assert.doesNotMatch(cssRule(".provider-secret-pill"), /overflow-wrap:\s*anywhere/u, "Hosted API key alerts should not force arbitrary word breaks");
+  assert.match(canvasSource, /canvas-host-session-state__action/u, "Canvas host-session recovery should protect the complete sign-in action");
+  assert.match(canvasStyles, /\.canvas-host-session-state__action\s*\{[^}]*white-space:\s*nowrap/u, "Canvas host-session recovery action should not split at mobile widths");
+  assert.match(i18nSource, /hostApiKeysEmptyAction:\s*"请先在 AI Cove 创建 API Key"/u, "Chinese API key recovery copy should expose a semantic action phrase");
+  assert.match(i18nSource, /hostSessionRequiredRetryAction:\s*"请重新登录"/u, "Chinese host-session recovery copy should expose a semantic action phrase");
+});
+
+test("keeps background content inert while the provider dialog is open", () => {
+  assert.match(modalFocusSource, /element\.inert = true/u, "Modal focus management should make background roots non-interactive");
+  assert.match(modalFocusSource, /document\.addEventListener\("focusin"/u, "Modal focus management should recover focus if it escapes programmatically");
+  assert.doesNotMatch(
+    modalFocusSource,
+    /activeElement instanceof HTMLElement && !dialog\.contains\(activeElement\)\) \{\s*return;/u,
+    "Modal keyboard handling should not silently ignore Escape or Tab after focus leaves the dialog"
+  );
 });

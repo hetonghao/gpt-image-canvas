@@ -2,7 +2,7 @@
 
 Generated documentation for the SQLite schema defined in `apps/api/src/infrastructure/schema.ts`.
 
-Last reviewed: 2026-05-11.
+Last reviewed: 2026-07-13.
 
 ## `projects`
 
@@ -73,6 +73,8 @@ Stores image provider source order and local OpenAI-compatible settings.
 | `local_api_key` | text | Optional local API key. |
 | `local_base_url` | text | Optional OpenAI-compatible base URL. |
 | `local_model` | text | Optional image model. |
+| `local_model_2k` | text | Optional 2K-specific image model; empty follows `local_model`. |
+| `local_model_4k` | text | Optional 4K-specific image model; empty follows `local_model`. |
 | `local_timeout_ms` | integer | Optional image timeout in milliseconds. |
 | `created_at` | text | Required ISO timestamp. |
 | `updated_at` | text | Required ISO timestamp. |
@@ -169,17 +171,24 @@ Stores one generation request and its overall status.
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | text | Primary key. |
+| `user_id` | text | Required local or hosted user scope. |
+| `client_request_id` | text | Optional caller request ID; legacy rows are backfilled from `id`, with a unique index inside each `user_id` for idempotent lookup and cancellation. |
 | `mode` | text | Required generation mode. |
 | `prompt` | text | Required user prompt. |
 | `effective_prompt` | text | Required prompt after preset composition. |
 | `preset_id` | text | Required style preset ID. |
 | `width` | integer | Required output width. |
 | `height` | integer | Required output height. |
+| `resolution_tier` | text | Optional resolved request tier (`1K`, `2K`, or `4K`) for legacy compatibility. |
+| `model` | text | Optional actual image model selected before the provider call. |
+| `provider_source_id` | text | Optional provider source used for the request. |
+| `model_fallback` | integer | Optional boolean indicating fallback to the source default model. |
 | `quality` | text | Required image quality. |
 | `output_format` | text | Required output format. |
 | `count` | integer | Required requested output count. |
 | `status` | text | Required generation status. |
 | `error` | text | Optional generation error. |
+| `retry_count` | integer | Required upstream retry count; defaults to `0`. |
 | `reference_asset_id` | text | Optional legacy reference to `assets.id`. |
 | `created_at` | text | Required ISO timestamp. |
 

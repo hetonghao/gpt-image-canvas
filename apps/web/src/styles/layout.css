@@ -65,8 +65,8 @@
 
 .language-switcher__button {
   display: inline-flex;
-  height: 2.15rem;
-  min-width: 2.4rem;
+  height: 2.5rem;
+  min-width: 2.5rem;
   align-items: center;
   justify-content: center;
   border: 0;
@@ -101,7 +101,7 @@
 
 .top-navigation__link {
   display: inline-flex;
-  height: 2.15rem;
+  height: 2.5rem;
   min-width: 0;
   align-items: center;
   justify-content: center;

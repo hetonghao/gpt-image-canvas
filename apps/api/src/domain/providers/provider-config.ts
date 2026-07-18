@@ -44,6 +44,8 @@ interface ResolvedLocalConfig {
   localApiKeyId: string | null;
   localBaseUrl: string | null;
   localModel: string | null;
+  localModel2K: string | null;
+  localModel4K: string | null;
   localTimeoutMs: number | null;
 }
 
@@ -65,7 +67,12 @@ export async function getProviderConfigWithSeed(
   const sourceOrder = readSavedSourceOrder(row?.sourceOrderJson);
   const sourcesById = new Map(providerSources(row, hostContext, hostApiKeys).map((source) => [source.id, source]));
   const sources = sourceOrder.map((sourceId) => sourcesById.get(sourceId)).filter(isDefined);
-  const activeSource = sources.find((source) => source.available);
+  const hostedSource = sourcesById.get("local-openai");
+  const activeSource = isHostedAiCoveMode()
+    ? hostedSource?.available
+      ? hostedSource
+      : undefined
+    : sources.find((source) => source.available);
 
   return {
     sourceOrder,
@@ -99,6 +106,8 @@ export async function saveProviderConfig(
     localApiKeyId: local.localApiKeyId,
     localBaseUrl: local.localBaseUrl,
     localModel: local.localModel,
+    localModel2K: local.localModel2K,
+    localModel4K: local.localModel4K,
     localTimeoutMs: local.localTimeoutMs,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
@@ -114,6 +123,8 @@ export async function saveProviderConfig(
         localApiKeyId: row.localApiKeyId,
         localBaseUrl: row.localBaseUrl,
         localModel: row.localModel,
+        localModel2K: row.localModel2K,
+        localModel4K: row.localModel4K,
         localTimeoutMs: row.localTimeoutMs,
         updatedAt: row.updatedAt
       }
@@ -124,9 +135,10 @@ export async function saveProviderConfig(
 }
 
 export function getProviderSourceOrder(hostContext?: HostContext): ProviderSourceId[] {
-  return readSavedSourceOrder(getProviderConfigRow(hostContext)?.sourceOrderJson);
+  return isHostedAiCoveMode() ? ["local-openai"] : readSavedSourceOrder(getProviderConfigRow(hostContext)?.sourceOrderJson);
 }
 
+// Retained for a possible non-embedded deployment; AI Cove runtime source order never includes this adapter.
 export function getEnvironmentOpenAIImageProviderConfig(): OpenAIImageProviderConfig | undefined {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
@@ -159,6 +171,8 @@ export async function getLocalOpenAIImageProviderConfig(
     apiKey,
     baseURL: isHostedAiCoveMode() ? hostGatewayRuntimeBaseUrl() : trimToUndefined(row?.localBaseUrl),
     model: trimToUndefined(row?.localModel) ?? IMAGE_MODEL,
+    model2K: trimToUndefined(row?.localModel2K),
+    model4K: trimToUndefined(row?.localModel4K),
     timeoutMs: validTimeoutMs(row?.localTimeoutMs) ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS
   };
 }
@@ -199,6 +213,8 @@ function getProviderConfigRowWithSeed(baseUrlSeed?: string, hostContext?: HostCo
       localApiKeyId: null,
       localBaseUrl: normalizedBaseUrlSeed,
       localModel: null,
+      localModel2K: null,
+      localModel4K: null,
       localTimeoutMs: null,
       createdAt: now,
       updatedAt: now
@@ -271,6 +287,8 @@ function providerSources(
       ? Boolean(findHostApiKeyRecord(row?.localApiKeyId, hostApiKeys))
       : Boolean(trimToUndefined(row?.localApiKey));
   const codex = codexSessionView(getCodexTokenRow(hostContext));
+  const environmentModel = getConfiguredImageModel();
+  const localModel = trimToUndefined(row?.localModel) ?? IMAGE_MODEL;
 
   return [
     {
@@ -281,7 +299,9 @@ function providerSources(
       status: envConfig ? "available" : "missing_api_key",
       details: {
         baseUrl: process.env.OPENAI_BASE_URL?.trim() || "",
-        model: getConfiguredImageModel(),
+        model: environmentModel,
+        resolvedModel2K: environmentModel,
+        resolvedModel4K: environmentModel,
         timeoutMs: parseOpenAIImageTimeoutMs(process.env.OPENAI_IMAGE_TIMEOUT_MS)
       },
       secret: maskedSecret(process.env.OPENAI_API_KEY)
@@ -294,7 +314,11 @@ function providerSources(
       status: hasLocalConfig ? "available" : "missing_api_key",
       details: {
         baseUrl: isHostedAiCoveMode() ? hostGatewayBaseUrl() : (row?.localBaseUrl ?? ""),
-        model: trimToUndefined(row?.localModel) ?? IMAGE_MODEL,
+        model: localModel,
+        model2K: trimToUndefined(row?.localModel2K),
+        model4K: trimToUndefined(row?.localModel4K),
+        resolvedModel2K: trimToUndefined(row?.localModel2K) ?? localModel,
+        resolvedModel4K: trimToUndefined(row?.localModel4K) ?? localModel,
         timeoutMs: validTimeoutMs(row?.localTimeoutMs) ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS
       },
       secret: isHostedAiCoveMode() ? { hasSecret: Boolean(row?.localApiKeyId) } : maskedSecret(row?.localApiKey)
@@ -306,6 +330,9 @@ function providerSources(
       available: codex.available,
       status: codex.available ? "available" : "missing_codex_session",
       details: {
+        model: environmentModel,
+        resolvedModel2K: environmentModel,
+        resolvedModel4K: environmentModel,
         codex
       },
       secret: {
@@ -317,11 +344,16 @@ function providerSources(
 
 function localOpenAIConfigView(row: ProviderConfigRow | undefined, hostApiKeys: HostApiKeyRecord[] | undefined): LocalOpenAIProviderConfigView {
   const hasHostApiKey = Boolean(findHostApiKeyRecord(row?.localApiKeyId, hostApiKeys));
+  const model = trimToUndefined(row?.localModel) ?? IMAGE_MODEL;
   return {
     apiKey: isHostedAiCoveMode() ? { hasSecret: hasHostApiKey } : maskedSecret(row?.localApiKey),
     apiKeyId: row?.localApiKeyId ?? undefined,
     baseUrl: isHostedAiCoveMode() ? hostGatewayBaseUrl() : (row?.localBaseUrl ?? ""),
-    model: trimToUndefined(row?.localModel) ?? IMAGE_MODEL,
+    model,
+    model2K: trimToUndefined(row?.localModel2K),
+    model4K: trimToUndefined(row?.localModel4K),
+    resolvedModel2K: trimToUndefined(row?.localModel2K) ?? model,
+    resolvedModel4K: trimToUndefined(row?.localModel4K) ?? model,
     timeoutMs: validTimeoutMs(row?.localTimeoutMs) ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS
   };
 }
@@ -355,15 +387,24 @@ function resolveLocalConfigForSave(
       localApiKeyId: existing?.localApiKeyId ?? null,
       localBaseUrl: existing?.localBaseUrl ?? null,
       localModel: existing?.localModel ?? null,
+      localModel2K: existing?.localModel2K ?? null,
+      localModel4K: existing?.localModel4K ?? null,
       localTimeoutMs: existing?.localTimeoutMs ?? null
     };
+  }
+
+  const localModel = Object.hasOwn(input, "model") ? trimToNull(input.model) : (trimToUndefined(existing?.localModel ?? undefined) ?? IMAGE_MODEL);
+  if (!localModel) {
+    throw new Error("Custom OpenAI default image model is required.");
   }
 
   return {
     localApiKey: isHostedAiCoveMode() ? null : resolveLocalApiKey(input, existing),
     localApiKeyId: isHostedAiCoveMode() ? (trimToNull(input.apiKeyId) ?? existing?.localApiKeyId ?? null) : (existing?.localApiKeyId ?? null),
     localBaseUrl: isHostedAiCoveMode() ? hostGatewayRuntimeBaseUrl() : Object.hasOwn(input, "baseUrl") ? trimToNull(input.baseUrl) : (existing?.localBaseUrl ?? null),
-    localModel: Object.hasOwn(input, "model") ? trimToNull(input.model) : (existing?.localModel ?? null),
+    localModel,
+    localModel2K: Object.hasOwn(input, "model2K") ? trimToNull(input.model2K) : (existing?.localModel2K ?? null),
+    localModel4K: Object.hasOwn(input, "model4K") ? trimToNull(input.model4K) : (existing?.localModel4K ?? null),
     localTimeoutMs: Object.hasOwn(input, "timeoutMs")
       ? requiredPositiveInteger(input.timeoutMs, "Custom OpenAI timeout")
       : (existing?.localTimeoutMs ?? null)

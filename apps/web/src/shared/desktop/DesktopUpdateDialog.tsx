@@ -1,4 +1,6 @@
+import { createPortal } from "react-dom";
 import { useI18n } from "../i18n";
+import { useModalFocus } from "../ui/use-modal-focus";
 import { desktopUpdateProgressLabel, type DesktopUpdateDialogState } from "./desktop-updater";
 
 type DesktopUpdateDialogProps = {
@@ -22,8 +24,13 @@ function formatPublishedAt(value: string | null, locale: string): string | null 
 }
 
 export function DesktopUpdateDialog({ state, onClose, onDownload, onInstall }: DesktopUpdateDialogProps) {
-  const { locale, t } = useI18n();
   if (!state.isOpen) return null;
+  return <DesktopUpdateDialogSurface state={state} onClose={onClose} onDownload={onDownload} onInstall={onInstall} />;
+}
+
+function DesktopUpdateDialogSurface({ state, onClose, onDownload, onInstall }: DesktopUpdateDialogProps) {
+  const { locale, t } = useI18n();
+  const dialogRef = useModalFocus<HTMLElement>(onClose);
 
   const publishedAt = formatPublishedAt(state.publishedAt, locale);
   const isBusy = state.status === "checking" || state.status === "downloading" || state.status === "installing";
@@ -31,13 +38,15 @@ export function DesktopUpdateDialog({ state, onClose, onDownload, onInstall }: D
     state.status === "downloading" || state.status === "downloaded" || state.status === "installing" || state.status === "installed";
   const progressLabel = desktopUpdateProgressLabel(state.downloadedBytes, state.totalBytes);
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/45 px-4 py-6" role="presentation">
       <section
         aria-labelledby="desktop-update-title"
         aria-modal="true"
         className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-5 text-neutral-900 shadow-2xl shadow-neutral-950/20"
+        ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
       >
         <div className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">{t("desktopUpdateKicker")}</p>
@@ -85,6 +94,7 @@ export function DesktopUpdateDialog({ state, onClose, onDownload, onInstall }: D
           ) : null}
         </div>
       </section>
-    </div>
+    </div>,
+    document.body
   );
 }

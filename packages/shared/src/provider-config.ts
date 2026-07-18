@@ -22,6 +22,10 @@ export interface CodexAuthSessionView {
 export interface ProviderSourceDetails {
   baseUrl?: string;
   model?: string;
+  model2K?: string;
+  model4K?: string;
+  resolvedModel2K?: string;
+  resolvedModel4K?: string;
   timeoutMs?: number;
   codex?: CodexAuthSessionView;
 }
@@ -50,6 +54,10 @@ export interface LocalOpenAIProviderConfigView {
   apiKeyId?: string;
   baseUrl: string;
   model: string;
+  model2K?: string;
+  model4K?: string;
+  resolvedModel2K: string;
+  resolvedModel4K: string;
   timeoutMs: number;
 }
 
@@ -66,6 +74,8 @@ export interface SaveLocalOpenAIProviderConfig {
   preserveApiKey?: boolean;
   baseUrl?: string;
   model?: string;
+  model2K?: string;
+  model4K?: string;
   timeoutMs?: number;
 }
 

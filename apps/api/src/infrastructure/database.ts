@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS provider_configs (
   local_api_key_id TEXT,
   local_base_url TEXT,
   local_model TEXT,
+  local_model_2k TEXT,
+  local_model_4k TEXT,
   local_timeout_ms INTEGER,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -201,17 +203,23 @@ CREATE TABLE IF NOT EXISTS codex_oauth_tokens (
 CREATE TABLE IF NOT EXISTS generation_records (
   id TEXT PRIMARY KEY NOT NULL,
   user_id TEXT NOT NULL DEFAULT 'standalone',
+  client_request_id TEXT,
   mode TEXT NOT NULL,
   prompt TEXT NOT NULL,
   effective_prompt TEXT NOT NULL,
   preset_id TEXT NOT NULL,
   width INTEGER NOT NULL,
   height INTEGER NOT NULL,
+  resolution_tier TEXT,
+  model TEXT,
+  provider_source_id TEXT,
+  model_fallback INTEGER,
   quality TEXT NOT NULL,
   output_format TEXT NOT NULL,
   count INTEGER NOT NULL,
   status TEXT NOT NULL,
   error TEXT,
+  retry_count INTEGER NOT NULL DEFAULT 0,
   reference_asset_id TEXT REFERENCES assets(id),
   created_at TEXT NOT NULL
 );
@@ -297,6 +305,8 @@ ensureColumn("provider_configs", "local_api_key", "local_api_key TEXT");
 ensureColumn("provider_configs", "local_api_key_id", "local_api_key_id TEXT");
 ensureColumn("provider_configs", "local_base_url", "local_base_url TEXT");
 ensureColumn("provider_configs", "local_model", "local_model TEXT");
+ensureColumn("provider_configs", "local_model_2k", "local_model_2k TEXT");
+ensureColumn("provider_configs", "local_model_4k", "local_model_4k TEXT");
 ensureColumn("provider_configs", "local_timeout_ms", "local_timeout_ms INTEGER");
 ensureColumn("agent_llm_configs", "api_key", "api_key TEXT");
 ensureColumn("agent_llm_configs", "api_key_id", "api_key_id TEXT");
@@ -321,6 +331,19 @@ ensureColumn("agent_skills", "is_required", "is_required INTEGER NOT NULL DEFAUL
 ensureColumn("agent_skills", "trigger_mode", "trigger_mode TEXT NOT NULL DEFAULT 'auto'");
 ensureColumn("agent_skills", "trigger_keywords_json", "trigger_keywords_json TEXT NOT NULL DEFAULT '[]'");
 ensureColumn("agent_skills", "files_json", "files_json TEXT NOT NULL DEFAULT '{}'");
+ensureColumn("generation_records", "resolution_tier", "resolution_tier TEXT");
+ensureColumn("generation_records", "model", "model TEXT");
+ensureColumn("generation_records", "provider_source_id", "provider_source_id TEXT");
+ensureColumn("generation_records", "model_fallback", "model_fallback INTEGER");
+ensureColumn("generation_records", "client_request_id", "client_request_id TEXT");
+ensureColumn("generation_records", "retry_count", "retry_count INTEGER NOT NULL DEFAULT 0");
+sqlite.exec(`
+UPDATE generation_records
+SET client_request_id = id
+WHERE client_request_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS generation_records_user_client_request_idx
+ON generation_records(user_id, client_request_id);
+`);
 
 migrateStorageConfigRows();
 backfillGenerationReferenceAssets();

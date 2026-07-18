@@ -8,6 +8,6 @@ Current specs:
 - [Provider Configuration](provider-configuration.md)
 - [Agent Canvas Generation](agent-canvas-generation.md)
 - [Gallery And Assets](gallery-and-assets.md)
+- [AI Cove Design 前端质量收口与分辨率模型路由](2026-07-13-ai-cove-design-frontend-hardening-resolution-model-routing.md)
 
 When adding a spec, keep it tied to user value, current behavior, acceptance criteria, and verification requirements. Put implementation execution plans under `docs/exec-plans/`.
-

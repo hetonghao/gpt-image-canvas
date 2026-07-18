@@ -130,6 +130,42 @@
   object-fit: cover;
 }
 
+.agent-reference-item[data-load-state="error"] {
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
+  background: color-mix(in srgb, var(--danger) 6%, var(--paper-panel));
+}
+
+.agent-reference-item__fallback {
+  display: grid;
+  cursor: pointer;
+  place-items: center;
+  border: 0;
+  color: var(--danger);
+}
+
+.agent-reference-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.agent-reference-warning__retry {
+  display: inline-flex;
+  min-height: 2.5rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--line));
+  border-radius: 7px;
+  background: var(--paper-panel);
+  color: var(--accent-dark);
+  cursor: pointer;
+  font-weight: 800;
+  padding: 0.4rem 0.65rem;
+}
+
 .agent-reference-item p {
   margin: 0;
   overflow: hidden;
@@ -181,10 +217,11 @@
 }
 
 .agent-empty-state span {
-  max-width: 16rem;
+  max-width: 18rem;
   font-size: 0.74rem;
   font-weight: 600;
   line-height: 1.55;
+  text-wrap: pretty;
 }
 
 .agent-message {
@@ -1346,6 +1383,32 @@
   padding-right: 0.12rem;
 }
 
+@media (max-width: 1023px) {
+  .agent-model-pill {
+    min-height: 2.75rem;
+  }
+
+  .agent-icon-button {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .agent-reference-warning__retry,
+  .agent-param-chip,
+  .agent-size-preset-button {
+    min-height: 2.75rem;
+  }
+
+  .agent-parameter-popover__close {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .agent-parameter-popover .field-control {
+    height: 2.75rem;
+  }
+}
+
 @media (max-width: 767px) {
   .agent-param-group {
     flex-wrap: nowrap;
@@ -1367,6 +1430,28 @@
     right: 0.65rem;
     left: 0.65rem;
     max-height: min(34rem, calc(100dvh - 7rem));
+  }
+}
+
+@media (max-width: 479px) {
+  .agent-chat-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-model-pill {
+    width: 100%;
+  }
+
+  .agent-model-pill__copy strong,
+  .agent-model-pill__copy span {
+    overflow: visible;
+    text-overflow: clip;
+    text-wrap: pretty;
+    white-space: normal;
+  }
+
+  .agent-chat-head__actions {
+    justify-self: end;
   }
 }
 
@@ -1523,6 +1608,32 @@
   min-height: 0;
   grid-template-columns: minmax(14rem, 0.72fr) minmax(0, 1.45fr);
   gap: 0;
+}
+
+.agent-history-dialog__failure {
+  display: flex;
+  min-height: 18rem;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 0.5rem;
+  color: var(--danger);
+  padding: 1.5rem;
+  text-align: center;
+}
+
+.agent-history-dialog__failure strong {
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 900;
+}
+
+.agent-history-dialog__failure span {
+  max-width: 20rem;
+  color: var(--muted-ink);
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.5;
 }
 
 .agent-history-list,

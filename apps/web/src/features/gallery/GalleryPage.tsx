@@ -8,18 +8,19 @@ import {
   Download,
   Check,
   ImageIcon,
+  ImageOff,
   Loader2,
   Maximize2,
   Palette,
   RotateCcw,
   Ruler,
-  Search,
   Sparkles,
   Trash2,
   X,
   XCircle
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   SIZE_PRESETS,
   STYLE_PRESETS,
@@ -31,6 +32,15 @@ import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "
 import { normalizeAssetUrl } from "../../shared/api/asset-url";
 import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
 import { apiFetch } from "../../shared/api/host-token";
+import {
+  assetAvailabilityRevision,
+  clearAssetAvailability,
+  getAssetAvailability,
+  reportAssetAvailability,
+  subscribeAssetAvailability
+} from "../../shared/assets/asset-availability";
+import { SearchField } from "../../shared/ui/SearchField";
+import { useModalFocus } from "../../shared/ui/use-modal-focus";
 
 interface GalleryPageProps {
   onDeleted: (outputId: string) => void;
@@ -55,7 +65,8 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
   const [items, setItems] = useState<GalleryImageItem[]>([]);
   const [query, setQuery] = useState("");
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [pageError, setPageError] = useState("");
+  const [operationError, setOperationError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [expandedPrompts, setExpandedPrompts] = useState<Record<string, boolean>>({});
   const [selectedItem, setSelectedItem] = useState<GalleryImageItem | null>(null);
@@ -73,7 +84,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
 
     async function loadGallery(): Promise<void> {
       setIsLoading(true);
-      setError("");
+      setPageError("");
 
       try {
         const response = await apiFetch("/api/gallery", {
@@ -93,7 +104,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
         }
       } catch (loadError) {
         if (!controller.signal.aborted) {
-          setError(loadError instanceof Error ? loadError.message : t("galleryLoadFailed"));
+          setPageError(loadError instanceof Error ? loadError.message : t("galleryLoadFailed"));
         }
       } finally {
         if (!controller.signal.aborted) {
@@ -108,31 +119,6 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
       controller.abort();
     };
   }, [locale, t]);
-
-  useEffect(() => {
-    if (!selectedItem && !pendingDeleteItem) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") {
-        return;
-      }
-
-      event.preventDefault();
-      if (pendingDeleteItem) {
-        setPendingDeleteItem(null);
-        return;
-      }
-
-      setSelectedItem(null);
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [pendingDeleteItem, selectedItem]);
 
   useEffect(() => {
     return () => {
@@ -179,7 +165,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
 
   function showStatus(message: string): void {
     window.clearTimeout(statusTimerRef.current);
-    setError("");
+    setOperationError("");
     setStatusMessage(message);
     statusTimerRef.current = window.setTimeout(() => {
       setStatusMessage("");
@@ -194,18 +180,18 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
   }
 
   function openExportMode(): void {
-    setError("");
+    if (isLoading || items.length === 0) {
+      return;
+    }
     setExportMode(true);
   }
 
   function closeExportMode(): void {
     setExportMode(false);
     setSelectedExportOutputIds([]);
-    setError("");
   }
 
   function toggleExportSelection(item: GalleryImageItem): void {
-    setError("");
     setExportMode(true);
     setSelectedExportOutputIds((current) => {
       if (current.includes(item.outputId)) {
@@ -217,7 +203,6 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
   }
 
   function selectFilteredExportItems(): void {
-    setError("");
     setExportMode(true);
     setSelectedExportOutputIds((current) => {
       const next = new Set(current);
@@ -229,13 +214,12 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
   }
 
   function clearExportSelection(): void {
-    setError("");
     setSelectedExportOutputIds([]);
   }
 
   async function exportSelectedItems(): Promise<void> {
     if (selectedExportOutputIds.length === 0) {
-      setError(t("galleryExportSelectAtLeastOne"));
+      setOperationError(t("galleryExportSelectAtLeastOne"));
       return;
     }
 
@@ -244,7 +228,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
     };
 
     setIsExporting(true);
-    setError("");
+    setOperationError("");
 
     try {
       const response = await apiFetch("/api/gallery/export", {
@@ -274,7 +258,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
       window.setTimeout(() => window.URL.revokeObjectURL(archiveUrl), 1000);
       showStatus(t("galleryExportStarted", { count: selectedExportOutputIds.length }));
     } catch (exportError) {
-      setError(exportError instanceof Error ? exportError.message : t("galleryExportFailed"));
+      setOperationError(exportError instanceof Error ? exportError.message : t("galleryExportFailed"));
     } finally {
       setIsExporting(false);
     }
@@ -291,7 +275,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
       }, 1800);
       showStatus(t("galleryCopiedPrompt"));
     } catch {
-      setError(t("generationCopyFailed"));
+      setOperationError(t("generationCopyFailed"));
     }
   }
 
@@ -301,13 +285,13 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
   }
 
   function requestDelete(item: GalleryImageItem): void {
-    setError("");
+    setOperationError("");
     setPendingDeleteItem(item);
   }
 
   async function deleteItem(item: GalleryImageItem): Promise<void> {
     setDeletingOutputId(item.outputId);
-    setError("");
+    setOperationError("");
 
     try {
       const response = await apiFetch(`/api/gallery/${encodeURIComponent(item.outputId)}`, {
@@ -318,13 +302,16 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
       }
 
       setItems((current) => current.filter((galleryItem) => galleryItem.outputId !== item.outputId));
+      if (items.length === 1) {
+        closeExportMode();
+      }
       setSelectedItem((current) => (current?.outputId === item.outputId ? null : current));
       setCopiedOutputId((current) => (current === item.outputId ? null : current));
       setPendingDeleteItem(null);
       onDeleted(item.outputId);
       showStatus(t("galleryDeleted"));
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : t("galleryDeleteFailed"));
+      setOperationError(deleteError instanceof Error ? deleteError.message : t("galleryDeleteFailed"));
     } finally {
       setDeletingOutputId(null);
     }
@@ -350,31 +337,36 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
             aria-pressed={exportMode}
             className="gallery-export-entry"
             data-active={exportMode}
+            disabled={isLoading || items.length === 0}
             type="button"
             onClick={exportMode ? closeExportMode : openExportMode}
           >
             <Archive className="size-4" aria-hidden="true" />
             {exportMode ? t("galleryExportExit") : t("galleryExportMode")}
           </button>
-          <div className="gallery-search" role="search">
-            <Search className="size-4" aria-hidden="true" />
-            <input
-              aria-label={t("gallerySearchAria")}
-              className="gallery-search__input"
-              data-testid="gallery-search"
-              id="gallery-search-input"
-              name="gallery-search"
-              placeholder={t("gallerySearchPlaceholder")}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
+          <SearchField
+            ariaLabel={t("gallerySearchAria")}
+            dataTestId="gallery-search"
+            id="gallery-search-input"
+            inputClassName="gallery-search__input"
+            name="gallery-search"
+            placeholder={t("gallerySearchPlaceholder")}
+            value={query}
+            wrapperClassName="gallery-search"
+            onChange={setQuery}
+          />
         </header>
 
-        {error ? (
+        {pageError ? (
           <div className="gallery-alert gallery-alert--error" data-testid="gallery-error" role="alert">
             <XCircle className="size-4 shrink-0" aria-hidden="true" />
-            <p>{error}</p>
+            <p>{pageError}</p>
+          </div>
+        ) : null}
+        {operationError ? (
+          <div className="gallery-alert gallery-alert--error" data-testid="gallery-operation-error" role="alert">
+            <XCircle className="size-4 shrink-0" aria-hidden="true" />
+            <p>{operationError}</p>
           </div>
         ) : null}
         {statusMessage ? (
@@ -401,7 +393,7 @@ export function GalleryPage({ onDeleted, onReuse }: GalleryPageProps) {
             <Loader2 className="size-5 animate-spin" aria-hidden="true" />
             <p>{t("galleryLoading")}</p>
           </div>
-        ) : filteredItems.length === 0 ? (
+        ) : pageError ? null : filteredItems.length === 0 ? (
           <div className="gallery-empty-state" data-testid="gallery-empty">
             <ImageIcon className="size-7" aria-hidden="true" />
             <div>
@@ -558,24 +550,22 @@ function FeaturedGalleryItem({
     <article className="gallery-feature" data-export-mode={selection.exportMode} data-selected={selected} data-testid="gallery-feature">
       <div className="gallery-feature__media">
         {selection.exportMode ? <GallerySelectToggle item={item} selected={selected} onToggle={selection.onToggleSelected} /> : null}
-        <button
-          aria-label={t("galleryActionOpenLatest", { excerpt: promptExcerpt(item.prompt) })}
-          className="gallery-feature__image-button"
-          type="button"
-          onClick={() => onOpen(item)}
+        <GalleryAssetImage
+          alt={item.prompt}
+          assetId={item.asset.id}
+          buttonClassName="gallery-feature__image-button"
+          className="gallery-feature__image"
+          height={item.asset.height}
+          openLabel={t("galleryActionOpenLatest", { excerpt: promptExcerpt(item.prompt) })}
+          src={assetPreviewUrl(item.asset.id, 1024)}
+          width={item.asset.width}
+          onOpen={() => onOpen(item)}
         >
-          <img
-            alt={item.prompt}
-            className="gallery-feature__image"
-            height={item.asset.height}
-            src={assetPreviewUrl(item.asset.id, 1024)}
-            width={item.asset.width}
-          />
           <span className="gallery-feature__badge">{t("galleryBadgeLatest")}</span>
           <span className="gallery-card__zoom">
             <Maximize2 className="size-4" aria-hidden="true" />
           </span>
-        </button>
+        </GalleryAssetImage>
       </div>
 
       <div className="gallery-feature__body">
@@ -641,24 +631,22 @@ function GalleryCard({
     <article className="gallery-card" data-export-mode={selection.exportMode} data-selected={selected} data-testid="gallery-card">
       <div className="gallery-card__media">
         {selection.exportMode ? <GallerySelectToggle item={item} selected={selected} onToggle={selection.onToggleSelected} /> : null}
-        <button
-          aria-label={t("galleryActionOpenImage", { excerpt: promptExcerpt(item.prompt) })}
-          className="gallery-card__image-button"
-          type="button"
-          onClick={() => onOpen(item)}
+        <GalleryAssetImage
+          alt={item.prompt}
+          assetId={item.asset.id}
+          buttonClassName="gallery-card__image-button"
+          className="gallery-card__image"
+          height={item.asset.height}
+          loading="lazy"
+          openLabel={t("galleryActionOpenImage", { excerpt: promptExcerpt(item.prompt) })}
+          src={assetPreviewUrl(item.asset.id, 512)}
+          width={item.asset.width}
+          onOpen={() => onOpen(item)}
         >
-          <img
-            alt={item.prompt}
-            className="gallery-card__image"
-            height={item.asset.height}
-            loading="lazy"
-            src={assetPreviewUrl(item.asset.id, 512)}
-            width={item.asset.width}
-          />
           <span className="gallery-card__zoom">
             <Maximize2 className="size-4" aria-hidden="true" />
           </span>
-        </button>
+        </GalleryAssetImage>
       </div>
 
       <div className="gallery-card__body">
@@ -863,10 +851,18 @@ function GalleryDetailDialog({
 }) {
   const [promptExpanded, setPromptExpanded] = useState(false);
   const { formatDateTime, t } = useI18n();
+  const dialogRef = useModalFocus<HTMLDivElement>(onClose);
 
-  return (
+  return createPortal(
     <div className="gallery-modal-backdrop app-modal-backdrop" data-testid="gallery-detail" role="presentation">
-      <div aria-labelledby="gallery-detail-title" aria-modal="true" className="gallery-modal app-modal-surface" role="dialog">
+      <div
+        aria-labelledby="gallery-detail-title"
+        aria-modal="true"
+        className="gallery-modal app-modal-surface"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
         <header className="gallery-modal__header">
           <div className="gallery-modal__title">
             <p>{t("galleryDetailEyebrow")}</p>
@@ -880,8 +876,9 @@ function GalleryDetailDialog({
 
         <div className="gallery-modal__body">
           <div className="gallery-modal__media">
-            <img
+            <GalleryAssetImage
               alt={item.prompt}
+              assetId={item.asset.id}
               className="gallery-modal__image"
               height={item.asset.height}
               src={normalizeAssetUrl(item.asset.url)}
@@ -937,7 +934,8 @@ function GalleryDetailDialog({
           </button>
         </footer>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -953,15 +951,18 @@ function DeleteGalleryDialog({
   onConfirm: () => void;
 }) {
   const { t } = useI18n();
+  const dialogRef = useModalFocus<HTMLDivElement>(onCancel);
 
-  return (
+  return createPortal(
     <div className="gallery-confirm-backdrop app-modal-backdrop" data-testid="gallery-delete-dialog" role="presentation">
       <div
         aria-describedby="gallery-delete-description"
         aria-labelledby="gallery-delete-title"
         aria-modal="true"
         className="gallery-confirm app-modal-surface"
+        ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
       >
         <div className="gallery-confirm__icon">
           <AlertTriangle className="size-5" aria-hidden="true" />
@@ -982,8 +983,116 @@ function DeleteGalleryDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
+}
+
+function GalleryAssetImage({
+  alt,
+  assetId,
+  buttonClassName,
+  children,
+  className,
+  height,
+  loading,
+  openLabel,
+  src,
+  width,
+  onOpen
+}: {
+  alt: string;
+  assetId: string;
+  buttonClassName?: string;
+  children?: ReactNode;
+  className: string;
+  height: number;
+  loading?: "eager" | "lazy";
+  openLabel?: string;
+  src: string;
+  width: number;
+  onOpen?: () => void;
+}) {
+  const { t } = useI18n();
+  const [failed, setFailed] = useState(() => getAssetAvailability(assetId) === "unavailable");
+  const [revision, setRevision] = useState(() => assetAvailabilityRevision(assetId));
+
+  useEffect(() => {
+    setFailed(getAssetAvailability(assetId) === "unavailable");
+    setRevision(assetAvailabilityRevision(assetId));
+  }, [assetId, src]);
+
+  useLayoutEffect(
+    () =>
+      subscribeAssetAvailability(assetId, () => {
+        setFailed(getAssetAvailability(assetId) === "unavailable");
+        setRevision(assetAvailabilityRevision(assetId));
+      }),
+    [assetId]
+  );
+
+  function retryAsset(): void {
+    clearAssetAvailability(assetId);
+    setFailed(false);
+    setRevision(assetAvailabilityRevision(assetId));
+  }
+
+  function markUnavailable(): void {
+    reportAssetAvailability(assetId, src, "unavailable", revision);
+    setFailed(getAssetAvailability(assetId) === "unavailable");
+  }
+
+  function decodeLoadedImage(image: HTMLImageElement): void {
+    void image
+      .decode()
+      .then(() => {
+        if (image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+          markUnavailable();
+          return;
+        }
+        reportAssetAvailability(assetId, src, "ready", revision);
+      })
+      .catch(markUnavailable);
+  }
+
+  if (failed) {
+    return (
+      <div
+        aria-label={t("galleryAssetUnavailable")}
+        className={`${className} gallery-asset-fallback`}
+        role="group"
+        style={{ aspectRatio: `${width} / ${height}` }}
+      >
+        <ImageOff className="size-5" aria-hidden="true" />
+        <span>{t("galleryAssetUnavailable")}</span>
+        <button type="button" onClick={retryAsset}>
+          <RotateCcw className="size-3.5" aria-hidden="true" />
+          {t("galleryAssetRetry")}
+        </button>
+      </div>
+    );
+  }
+
+  const retrySeparator = src.includes("?") ? "&" : "?";
+  const image = (
+    <img
+      alt={alt}
+      className={className}
+      decoding="async"
+      height={height}
+      loading={loading}
+      src={`${src}${retrySeparator}asset_retry=${revision}`}
+      width={width}
+      onError={markUnavailable}
+      onLoad={(event) => decodeLoadedImage(event.currentTarget)}
+    />
+  );
+  return onOpen ? (
+    <button aria-label={openLabel ?? alt} className={buttonClassName} type="button" onClick={onOpen}>
+      {image}
+      {children}
+    </button>
+  ) : image;
 }
 
 function styleTagLabel(presetId: string, t: Translate): string {

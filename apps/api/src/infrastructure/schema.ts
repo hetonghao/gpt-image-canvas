@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const projects = sqliteTable(
   "projects",
@@ -72,6 +72,8 @@ export const providerConfigs = sqliteTable(
     localApiKeyId: text("local_api_key_id"),
     localBaseUrl: text("local_base_url"),
     localModel: text("local_model"),
+    localModel2K: text("local_model_2k"),
+    localModel4K: text("local_model_4k"),
     localTimeoutMs: integer("local_timeout_ms"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull()
@@ -203,21 +205,30 @@ export const generationRecords = sqliteTable(
   {
     id: text("id").primaryKey(),
     userId: text("user_id").notNull(),
+    clientRequestId: text("client_request_id"),
     mode: text("mode").notNull(),
     prompt: text("prompt").notNull(),
     effectivePrompt: text("effective_prompt").notNull(),
     presetId: text("preset_id").notNull(),
     width: integer("width").notNull(),
     height: integer("height").notNull(),
+    resolutionTier: text("resolution_tier"),
+    model: text("model"),
+    providerSourceId: text("provider_source_id"),
+    modelFallback: integer("model_fallback"),
     quality: text("quality").notNull(),
     outputFormat: text("output_format").notNull(),
     count: integer("count").notNull(),
     status: text("status").notNull(),
     error: text("error"),
+    retryCount: integer("retry_count").notNull().default(0),
     referenceAssetId: text("reference_asset_id").references(() => assets.id),
     createdAt: text("created_at").notNull()
   },
-  (table) => [index("generation_records_user_id_idx").on(table.userId)]
+  (table) => [
+    index("generation_records_user_id_idx").on(table.userId),
+    uniqueIndex("generation_records_user_client_request_idx").on(table.userId, table.clientRequestId)
+  ]
 );
 
 export const generationOutputs = sqliteTable("generation_outputs", {

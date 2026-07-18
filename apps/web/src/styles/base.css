@@ -182,6 +182,19 @@ button {
   transform: translate(-50%, -50%);
 }
 
+@media (max-width: 767px) {
+  .history-icon-action {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .history-icon-action::after,
+  .provider-icon-button::after {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+}
+
 .primary-action:not(:disabled):active,
 .secondary-action:not(:disabled):active,
 .danger-action:not(:disabled):active,

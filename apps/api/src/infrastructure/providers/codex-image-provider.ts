@@ -2,11 +2,12 @@ import type { CodexAccessSession } from "../../domain/providers/codex-auth.js";
 import type {
   EditImageProviderInput,
   ImageProvider,
+  ImageModelRoute,
   ImageProviderInput,
   ProviderResult
 } from "./image-provider.js";
 import { ProviderError, getConfiguredImageModel } from "./image-provider.js";
-import type { ReferenceImageInput } from "../../domain/contracts.js";
+import { resolutionTierForSize, type ImageSize, type ProviderSourceId, type ReferenceImageInput } from "../../domain/contracts.js";
 
 const DEFAULT_CODEX_IMAGE_TIMEOUT_MS = 20 * 60 * 1000;
 const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
@@ -15,6 +16,7 @@ const SUPPORTED_REFERENCE_MIME_TYPES = new Set(["image/png", "image/jpeg", "imag
 export interface CodexImageProviderConfig {
   baseURL: string;
   model: string;
+  sourceId?: ProviderSourceId;
   timeoutMs: number;
   getSession: (signal?: AbortSignal) => Promise<CodexAccessSession | undefined>;
 }
@@ -133,6 +135,19 @@ export function extractCodexImageBase64FromResponseEvent(event: unknown): string
 
 class CodexResponsesImageProvider implements ImageProvider {
   constructor(private readonly config: CodexImageProviderConfig) {}
+
+  get sourceId(): ProviderSourceId | undefined {
+    return this.config.sourceId;
+  }
+
+  resolveModelRoute(size: ImageSize): ImageModelRoute {
+    const tier = resolutionTierForSize(size);
+    return {
+      tier,
+      model: this.config.model,
+      fallbackToDefault: tier !== "1K"
+    };
+  }
 
   async generate(input: ImageProviderInput, signal?: AbortSignal): Promise<ProviderResult> {
     return this.requestImage(input, signal);

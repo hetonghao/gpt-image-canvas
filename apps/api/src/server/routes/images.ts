@@ -28,7 +28,7 @@ export function registerImageRoutes(app: Hono): void {
     }
 
     try {
-      return c.json({ record: startTextToImageGenerationTask(parsed.value, requireHostContext(c)) });
+      return c.json({ record: await startTextToImageGenerationTask(parsed.value, requireHostContext(c)) });
     } catch (error) {
       if (error instanceof ProviderError) {
         return providerErrorJson(c, error);

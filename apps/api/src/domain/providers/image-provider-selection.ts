@@ -17,7 +17,7 @@ import {
   getProviderSourceOrder
 } from "./provider-config.js";
 import type { ProviderSourceId, RuntimeImageProvider } from "../contracts.js";
-import type { HostContext } from "../host/host-adapter.js";
+import { isHostedAiCoveMode, type HostContext } from "../host/host-adapter.js";
 
 export interface ConfiguredImageProviderSelection {
   sourceId: ProviderSourceId;
@@ -30,29 +30,30 @@ export async function createConfiguredImageProvider(signal?: AbortSignal, hostCo
   const selection = await selectConfiguredImageProviderSource(signal, hostContext);
 
   if (selection?.openAIConfig) {
-    return createOpenAIImageProvider(selection.openAIConfig);
+    return createOpenAIImageProvider(selection.openAIConfig, selection.sourceId);
   }
 
   if (selection?.provider === "codex" && selection.codexSession) {
     return createCodexImageProvider({
       baseURL: getCodexResponsesBaseURL(),
       model: getConfiguredImageModel(),
+      sourceId: selection.sourceId,
       timeoutMs: getCodexImageProviderTimeoutMs(),
       getSession: async (requestSignal?: AbortSignal) => selection.codexSession ?? getValidCodexSession(requestSignal, hostContext)
     });
   }
 
-  throw new ProviderError(
-    "missing_provider",
-    "服务器没有配置 OPENAI_API_KEY，也没有可用的 Codex 登录会话。请先登录 Codex 后重试。",
-    401
-  );
+  const message = isHostedAiCoveMode()
+    ? "请先在生成服务配置中选择平台 API Key 和默认图片模型。"
+    : "服务器没有配置 OPENAI_API_KEY，也没有可用的 Codex 登录会话。请先登录 Codex 后重试。";
+  throw new ProviderError("missing_provider", message, 401);
 }
 
 export async function selectConfiguredImageProviderSource(
   signal?: AbortSignal,
   hostContext?: HostContext
 ): Promise<ConfiguredImageProviderSelection | undefined> {
+  // Environment and Codex adapters stay available only for a future non-embedded source order.
   for (const sourceId of getProviderSourceOrder(hostContext)) {
     if (sourceId === "env-openai") {
       const openAIConfig = getEnvironmentOpenAIImageProviderConfig();

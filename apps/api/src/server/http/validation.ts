@@ -628,7 +628,33 @@ function parseLocalOpenAIProviderConfig(input: unknown): ParseResult<SaveLocalOp
         error: errorResponse("invalid_provider_config", "Custom OpenAI model must be a string.")
       };
     }
+    if (!input.model.trim()) {
+      return {
+        ok: false,
+        error: errorResponse("invalid_provider_config", "Custom OpenAI default image model is required.")
+      };
+    }
     config.model = input.model;
+  }
+
+  if (Object.hasOwn(input, "model2K")) {
+    if (typeof input.model2K !== "string") {
+      return {
+        ok: false,
+        error: errorResponse("invalid_provider_config", "Custom OpenAI 2K model must be a string.")
+      };
+    }
+    config.model2K = input.model2K;
+  }
+
+  if (Object.hasOwn(input, "model4K")) {
+    if (typeof input.model4K !== "string") {
+      return {
+        ok: false,
+        error: errorResponse("invalid_provider_config", "Custom OpenAI 4K model must be a string.")
+      };
+    }
+    config.model4K = input.model4K;
   }
 
   if (Object.hasOwn(input, "timeoutMs")) {

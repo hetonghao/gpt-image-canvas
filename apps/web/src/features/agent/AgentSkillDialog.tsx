@@ -27,6 +27,7 @@ import type {
 } from "@gpt-image-canvas/shared";
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
 import { apiFetch } from "../../shared/api/host-token";
+import { useModalFocus } from "../../shared/ui/use-modal-focus";
 
 interface AgentSkillDialogProps {
   onClose: () => void;
@@ -61,6 +62,7 @@ const SKILL_MARKDOWN_FILE = "SKILL.md";
 
 export function AgentSkillDialog({ onClose }: AgentSkillDialogProps) {
   const { locale, t } = useI18n();
+  const dialogRef = useModalFocus<HTMLElement>(onClose);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [skills, setSkills] = useState<AgentSkillSummary[]>([]);
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
@@ -344,7 +346,14 @@ export function AgentSkillDialog({ onClose }: AgentSkillDialogProps) {
 
   return createPortal(
     <div className="agent-skill-dialog-backdrop">
-      <section className="agent-skill-dialog" aria-labelledby="agent-skill-dialog-title" aria-modal="true" role="dialog">
+      <section
+        aria-labelledby="agent-skill-dialog-title"
+        aria-modal="true"
+        className="agent-skill-dialog"
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
         <header className="agent-skill-dialog__header">
           <div className="agent-skill-dialog__title-block">
             <span className="agent-skill-dialog__icon" aria-hidden="true">

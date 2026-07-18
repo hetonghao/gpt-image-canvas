@@ -16,7 +16,15 @@ import {
   type OutputFormat,
   type ReferenceImageInput
 } from "../contracts.js";
-import { readStoredAsset, runReferenceImageGeneration, runTextToImageGeneration } from "../generation/image-generation.js";
+import {
+  cancelGenerationRecord,
+  createRunningReferenceImageGeneration,
+  createRunningTextToImageGeneration,
+  failGenerationRecord,
+  finishReferenceImageGeneration,
+  finishTextToImageGeneration,
+  readStoredAsset
+} from "../generation/image-generation.js";
 import { createConfiguredImageProvider } from "../providers/image-provider-selection.js";
 import type { ImageProvider, ImageProviderInput } from "../../infrastructure/providers/image-provider.js";
 import type { HostContext } from "../host/host-adapter.js";
@@ -178,7 +186,11 @@ function preparePlanForExecution(plan: GenerationPlan, mode: AgentPlanExecutionM
       ...job,
       status: "queued",
       outputs: [],
-      error: undefined
+      error: undefined,
+      resolutionTier: undefined,
+      model: undefined,
+      providerSourceId: undefined,
+      modelFallback: undefined
     };
   });
   return nextPlan;
@@ -201,35 +213,53 @@ async function executeGenerationJob(input: AgentPlanExecutionInput & {
   emitJobStarted(input, input.plan, input.job.id);
   emitPlanUpdated(input, input.plan);
 
+  let generationId: string | undefined;
   try {
     throwIfAborted(input.signal);
     const references = await resolveJobReferences(input.plan, input.job, input.selectedReferencesByKey, input.hostContext);
     throwIfAborted(input.signal);
 
     const request = createJobImageProviderInput(input.plan, input.job);
-    const response =
-      references.referenceImages.length > 0
-        ? await runReferenceImageGeneration(
-            {
-              ...request,
-              referenceImages: references.referenceImages,
-              referenceAssetIds: references.referenceAssetIds,
-              referenceAssetId: references.referenceAssetIds[0]
-            },
-            input.provider,
-            input.signal,
-            input.hostContext
-          )
-        : await runTextToImageGeneration(request, input.provider, input.signal, input.hostContext);
+    let record: GenerationRecord;
+    if (references.referenceImages.length > 0) {
+      const running = await createRunningReferenceImageGeneration(
+        {
+          ...request,
+          referenceImages: references.referenceImages,
+          referenceAssetIds: references.referenceAssetIds,
+          referenceAssetId: references.referenceAssetIds[0]
+        },
+        input.hostContext
+      );
+      generationId = running.record.id;
+      record = await finishReferenceImageGeneration(
+        generationId,
+        running.input,
+        input.provider,
+        input.signal,
+        input.hostContext
+      );
+    } else {
+      const running = createRunningTextToImageGeneration(request, input.hostContext);
+      generationId = running.id;
+      record = await finishTextToImageGeneration(
+        generationId,
+        request,
+        input.provider,
+        input.signal,
+        input.hostContext
+      );
+    }
     throwIfAborted(input.signal);
 
-    input.job.outputs = response.record.outputs;
-    const successfulOutputs = response.record.outputs.filter((output) => output.status === "succeeded" && output.asset);
-    const failedOutputs = response.record.outputs.filter((output) => output.status === "failed");
+    input.job.outputs = record.outputs;
+    applyGenerationRouteToJob(input.job, record);
+    const successfulOutputs = record.outputs.filter((output) => output.status === "succeeded" && output.asset);
+    const failedOutputs = record.outputs.filter((output) => output.status === "failed");
     input.job.status = successfulOutputs.length > 0 && failedOutputs.length === 0 ? "succeeded" : "failed";
     input.job.error =
       input.job.status === "failed"
-        ? response.record.error ?? failedOutputs[0]?.error ?? "Agent image generation failed."
+        ? record.error ?? failedOutputs[0]?.error ?? "Agent image generation failed."
         : undefined;
     input.plan.updatedAt = new Date().toISOString();
 
@@ -240,27 +270,43 @@ async function executeGenerationJob(input: AgentPlanExecutionInput & {
     }
 
     if (input.job.status === "succeeded") {
-      emitJobCompleted(input, input.plan, input.job.id, input.job.outputs, response.record);
+      emitJobCompleted(input, input.plan, input.job.id, input.job.outputs, record);
     } else {
-      emitJobFailed(input, input.plan, input.job.id, input.job.error ?? "Agent image generation failed.");
+      emitJobFailed(input, input.plan, input.job.id, input.job.error ?? "Agent image generation failed.", record);
     }
     emitPlanUpdated(input, input.plan);
   } catch (error) {
     if (isAbortError(error, input.signal)) {
+      const cancelledRecord = generationId ? cancelGenerationRecord(generationId, input.hostContext) : undefined;
+      if (cancelledRecord) {
+        applyGenerationRouteToJob(input.job, cancelledRecord);
+      }
       input.job.status = "cancelled";
       input.job.error = "Agent run was cancelled.";
       input.plan.updatedAt = new Date().toISOString();
+      emitJobCancelled(input, input.plan, input.job.id, cancelledRecord);
       emitPlanUpdated(input, input.plan);
       return;
     }
 
+    const failedRecord = generationId ? failGenerationRecord(generationId, errorToMessage(error), input.hostContext) : undefined;
+    if (failedRecord) {
+      applyGenerationRouteToJob(input.job, failedRecord);
+    }
     input.job.status = "failed";
     input.job.outputs = [];
     input.job.error = errorToMessage(error);
     input.plan.updatedAt = new Date().toISOString();
-    emitJobFailed(input, input.plan, input.job.id, input.job.error);
+    emitJobFailed(input, input.plan, input.job.id, input.job.error, failedRecord);
     emitPlanUpdated(input, input.plan);
   }
+}
+
+function applyGenerationRouteToJob(job: GenerationJob, record: GenerationRecord): void {
+  job.resolutionTier = record.resolutionTier;
+  job.model = record.model;
+  job.providerSourceId = record.providerSourceId;
+  job.modelFallback = record.modelFallback;
 }
 
 function createJobImageProviderInput(plan: GenerationPlan, job: GenerationJob): ImageProviderInput {
@@ -528,7 +574,19 @@ function emitJobCompleted(
   });
 }
 
-function emitJobFailed(input: AgentPlanExecutionInput, plan: GenerationPlan, jobId: string, error: string): void {
+function emitJobCancelled(input: AgentPlanExecutionInput, plan: GenerationPlan, jobId: string, record?: GenerationRecord): void {
+  input.sendEvent({
+    type: "job_cancelled",
+    requestId: input.requestId,
+    runId: input.runId,
+    planId: plan.id,
+    jobId,
+    record,
+    timestamp: new Date().toISOString()
+  });
+}
+
+function emitJobFailed(input: AgentPlanExecutionInput, plan: GenerationPlan, jobId: string, error: string, record?: GenerationRecord): void {
   input.sendEvent({
     type: "job_failed",
     requestId: input.requestId,
@@ -536,6 +594,7 @@ function emitJobFailed(input: AgentPlanExecutionInput, plan: GenerationPlan, job
     planId: plan.id,
     jobId,
     error,
+    record,
     timestamp: new Date().toISOString()
   });
 }

@@ -24,13 +24,13 @@ export function initializeGenerationTaskManager(): void {
   markInterruptedGenerationRecordsFailed();
 }
 
-export function startTextToImageGenerationTask(input: ImageProviderInput, hostContext?: HostContext): GenerationRecord {
+export async function startTextToImageGenerationTask(input: ImageProviderInput, hostContext?: HostContext): Promise<GenerationRecord> {
   const record = createRunningTextToImageGeneration(input, hostContext);
-  if (isTerminalGenerationStatus(record.status) || activeGenerationTasks.has(record.id)) {
+  if (isTerminalGenerationStatus(record.status) || activeGenerationTasks.has(generationTaskKey(record.id, hostContext))) {
     return record;
   }
 
-  startBackgroundGenerationTask(record.id, async (signal) => {
+  startBackgroundGenerationTask(record.id, hostContext, async (signal) => {
     const provider = await createConfiguredImageProvider(signal, hostContext);
     await finishTextToImageGeneration(record.id, input, provider, signal, hostContext);
   });
@@ -40,11 +40,11 @@ export function startTextToImageGenerationTask(input: ImageProviderInput, hostCo
 
 export async function startReferenceImageGenerationTask(input: EditImageProviderInput, hostContext?: HostContext): Promise<GenerationRecord> {
   const running = await createRunningReferenceImageGeneration(input, hostContext);
-  if (isTerminalGenerationStatus(running.record.status) || activeGenerationTasks.has(running.record.id)) {
+  if (isTerminalGenerationStatus(running.record.status) || activeGenerationTasks.has(generationTaskKey(running.record.id, hostContext))) {
     return running.record;
   }
 
-  startBackgroundGenerationTask(running.record.id, async (signal) => {
+  startBackgroundGenerationTask(running.record.id, hostContext, async (signal) => {
     const provider = await createConfiguredImageProvider(signal, hostContext);
     await finishReferenceImageGeneration(running.record.id, running.input, provider, signal, hostContext);
   });
@@ -57,27 +57,36 @@ export function readGenerationTaskRecord(generationId: string, hostContext?: Hos
 }
 
 export function cancelGenerationTask(generationId: string, hostContext?: HostContext): GenerationRecord | undefined {
-  activeGenerationTasks.get(generationId)?.controller.abort();
-  return cancelGenerationRecord(generationId, hostContext);
+  const record = getGenerationRecord(generationId, hostContext);
+  if (!record) {
+    return undefined;
+  }
+  activeGenerationTasks.get(generationTaskKey(record.id, hostContext))?.controller.abort();
+  return cancelGenerationRecord(record.id, hostContext);
 }
 
-function startBackgroundGenerationTask(generationId: string, run: (signal: AbortSignal) => Promise<void>): void {
+function startBackgroundGenerationTask(
+  generationId: string,
+  hostContext: HostContext | undefined,
+  run: (signal: AbortSignal) => Promise<void>
+): void {
   const controller = new AbortController();
-  activeGenerationTasks.set(generationId, { controller });
+  const taskKey = generationTaskKey(generationId, hostContext);
+  activeGenerationTasks.set(taskKey, { controller });
 
   void (async () => {
     try {
       await run(controller.signal);
     } catch (error) {
       if (controller.signal.aborted) {
-        cancelGenerationRecord(generationId);
+        cancelGenerationRecord(generationId, hostContext);
       } else {
-        failGenerationRecord(generationId, errorToMessage(error));
+        failGenerationRecord(generationId, error, hostContext);
       }
     } finally {
-      const activeTask = activeGenerationTasks.get(generationId);
+      const activeTask = activeGenerationTasks.get(taskKey);
       if (activeTask?.controller === controller) {
-        activeGenerationTasks.delete(generationId);
+        activeGenerationTasks.delete(taskKey);
       }
     }
   })();
@@ -87,10 +96,6 @@ function isTerminalGenerationStatus(status: GenerationRecord["status"]): boolean
   return status === "succeeded" || status === "partial" || status === "failed" || status === "cancelled";
 }
 
-function errorToMessage(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
-  return "Generation failed. Try again.";
+function generationTaskKey(generationId: string, hostContext: HostContext | undefined): string {
+  return `${hostContext?.user.id ?? "standalone"}\u0000${generationId}`;
 }

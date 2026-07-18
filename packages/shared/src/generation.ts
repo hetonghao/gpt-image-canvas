@@ -8,8 +8,10 @@ import type {
   ImageSize,
   OutputFormat,
   OutputStatus,
+  ResolutionTier,
   StylePresetId
 } from "./image.js";
+import type { ProviderSourceId } from "./provider-config.js";
 
 export interface ReferenceImageInput {
   dataUrl: string;
@@ -91,6 +93,10 @@ export interface GenerationJob {
   outputs: GenerationOutput[];
   visible: boolean;
   error?: string;
+  resolutionTier?: ResolutionTier;
+  model?: string;
+  providerSourceId?: ProviderSourceId;
+  modelFallback?: boolean;
 }
 
 export interface GenerationDependencyEdge {
@@ -191,11 +197,16 @@ export interface GenerationRecord {
   effectivePrompt: string;
   presetId: string;
   size: ImageSize;
+  resolutionTier?: ResolutionTier;
+  model?: string;
+  providerSourceId?: ProviderSourceId;
+  modelFallback?: boolean;
   quality: ImageQuality;
   outputFormat: OutputFormat;
   count: number;
   status: GenerationStatus;
   error?: string;
+  retryCount?: number;
   referenceAssetIds?: string[];
   referenceAssetId?: string;
   createdAt: string;

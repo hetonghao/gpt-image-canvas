@@ -15,6 +15,7 @@ import {
   ExternalLink,
   History,
   ImageIcon,
+  ImageOff,
   KeyRound,
   Loader2,
   LogOut,
@@ -73,7 +74,22 @@ import {
 } from "../agent/AgentPlanNodeShape";
 import type { PromptRegionEditorHandle } from "./PromptRegionEditor";
 import { generationSubmitActionForProviderState, shouldAutoOpenProviderOnboarding } from "./provider-onboarding";
-import { initialRouteForCurrentRuntime, isAiCoveEmbeddedRuntime, pathForRoute, routeFromLocation, type AppRoute } from "./runtime-route";
+import { acceptsAgentTerminalEvent } from "./agent-event-order";
+import {
+  releaseCanvasAssetPreviews,
+  retainCanvasAssetPreviews,
+  resolveReadableCanvasAssetPreview,
+  retryCanvasAssetPreviews,
+  subscribeCanvasAssetPreviews
+} from "./canvas-asset-resolver";
+import {
+  initialRouteForCurrentRuntime,
+  isAiCoveEmbeddedRuntime,
+  pathForRoute,
+  routeFromLocation,
+  searchForInternalNavigation,
+  type AppRoute
+} from "./runtime-route";
 import {
   CUSTOM_SIZE_PRESET_ID,
   GENERATION_COUNTS,
@@ -124,6 +140,7 @@ import {
   type NormalizedImageRegion,
   type OutputFormat,
   type ProjectState,
+  type ProviderConfigResponse,
   type PromptFavoriteGroup,
   type PromptFavoriteItem,
   type PromptPoolItem,
@@ -143,7 +160,16 @@ import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "
 import { normalizeAssetUrl } from "../../shared/api/asset-url";
 import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
 import { apiFetch, appendHostTokenParam, clearHostCredentials } from "../../shared/api/host-token";
+import {
+  assetAvailabilityRevision,
+  clearAssetAvailability,
+  getAssetAvailability,
+  reportAssetAvailability
+} from "../../shared/assets/asset-availability";
 import { DesktopUpdateDialog } from "../../shared/desktop/DesktopUpdateDialog";
+import { useModalFocus } from "../../shared/ui/use-modal-focus";
+import { CodexLoginDialog, type CodexLoginStatus } from "./CodexLoginDialog";
+import { GenerationRouteMetadata } from "./GenerationRouteMetadata";
 import { revealDesktopAssetFile } from "../../shared/desktop/desktop-asset";
 import { isDesktopAuthSupported, restoreDesktopAuthSession, startDesktopAuthLogin, waitForDesktopAuthSession } from "../../shared/desktop/desktop-auth";
 import { useDesktopSidecarStartup } from "../../shared/desktop/desktop-sidecar-startup";
@@ -468,8 +494,7 @@ type PanelTab = "manual" | "agent";
 type PanelStatusTone = "progress" | "success" | "warning" | "error";
 type PromptPreviewTab = "edit" | "final";
 type RegionAnnotationMode = "none" | "auto" | "manual";
-type CodexLoginStatus = "idle" | "starting" | "pending" | "authorized" | "expired" | "denied" | "error";
-type AgentRunStatus = "idle" | "connecting" | "running";
+type AgentRunStatus = "idle" | "connecting" | "running" | "cancelling";
 type AgentChatMessageRole = "user" | "assistant" | "thinking" | "system" | "error" | "question" | "plan";
 type AgentPlanAction = "execute" | "cancel" | "retry_failed";
 
@@ -1012,6 +1037,39 @@ function regionPromptReferenceKey(reference: Pick<ReferenceSelectionItem, "asset
   return reference.localAssetId ?? reference.assetId ?? `${reference.sourceUrl}|${Math.round(reference.width)}x${Math.round(reference.height)}`;
 }
 
+function referenceAvailabilityAssetId(
+  reference: Pick<ReferenceSelectionItem, "assetId" | "localAssetId" | "sourceUrl" | "width" | "height">
+): string {
+  return regionPromptReferenceKey(reference);
+}
+
+function markReferenceLoaded(reference: ReferenceSelectionItem, revision: number): void {
+  const assetId = referenceAvailabilityAssetId(reference);
+  reportAssetAvailability(assetId, reference.sourceUrl, "ready", revision);
+}
+
+function markReferenceFailed(reference: ReferenceSelectionItem, revision: number): void {
+  const assetId = referenceAvailabilityAssetId(reference);
+  reportAssetAvailability(assetId, reference.sourceUrl, "unavailable", revision);
+}
+
+function decodeReferenceImage(reference: ReferenceSelectionItem, image: HTMLImageElement, revision: number): void {
+  void image
+    .decode()
+    .then(() => {
+      if (image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+        markReferenceFailed(reference, revision);
+        return;
+      }
+      markReferenceLoaded(reference, revision);
+    })
+    .catch(() => markReferenceFailed(reference, revision));
+}
+
+function retryReferenceAsset(reference: ReferenceSelectionItem): void {
+  clearAssetAvailability(referenceAvailabilityAssetId(reference));
+}
+
 function regionPromptReferenceFromSelection(reference: ReferenceSelectionItem): RegionPromptReference {
   return {
     key: regionPromptReferenceKey(reference),
@@ -1134,18 +1192,6 @@ async function writeClipboardText(text: string): Promise<void> {
 
 function formatCreatedTime(value: string, formatDateTime: (value: string) => string): string {
   return formatDateTime(value);
-}
-
-function formatCodexExpiry(value: string, formatDateTime: (value: string, options?: Intl.DateTimeFormatOptions) => string, t: Translate): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return t("timeFallback15Minutes");
-  }
-
-  return formatDateTime(value, {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
 }
 
 function createTldrawAssetId(assetId: string): TLAssetId {
@@ -1851,7 +1897,7 @@ function getOriginalAssetUrl(asset: TLAsset | undefined): string | undefined {
   return asset?.meta && typeof asset.meta.originalUrl === "string" ? asset.meta.originalUrl : undefined;
 }
 
-function resolveCanvasAssetUrl(asset: TLAsset, context: TLAssetContext): string | null {
+function resolveCanvasAssetUrl(asset: TLAsset, context: TLAssetContext): Promise<string> | string | null {
   if (asset.type !== "image") {
     return "src" in asset.props && typeof asset.props.src === "string" ? asset.props.src : null;
   }
@@ -1873,7 +1919,7 @@ function resolveCanvasAssetUrl(asset: TLAsset, context: TLAssetContext): string 
     previewWidthForAssetContext(asset, context),
     initialCanvasPreviewWidths.get(localAssetId) ?? ASSET_PREVIEW_WIDTHS[0]
   );
-  return assetPreviewUrl(localAssetId, previewWidth);
+  return resolveReadableCanvasAssetPreview(localAssetId, assetPreviewUrl(localAssetId, previewWidth));
 }
 
 function previewWidthForAssetContext(asset: Extract<TLAsset, { type: "image" }>, context: TLAssetContext): AssetPreviewWidth {
@@ -1947,6 +1993,64 @@ function CanvasResolutionBadgeOverlay() {
     >
       {tier}
     </span>
+  );
+}
+
+function CanvasAssetAvailabilityOverlay() {
+  const editor = useEditor();
+  const { t } = useI18n();
+  const [, setAvailabilityVersion] = useState(0);
+  const imageAssets = useValue(
+    "canvas image assets",
+    () => editor.getAssets().filter((asset) => asset.type === "image" && getLocalAssetId(asset, asset.props.src ?? undefined)),
+    [editor]
+  );
+  const unavailableAssetIdSet = new Set<string>();
+  for (const asset of imageAssets) {
+    const assetId = getLocalAssetId(asset, asset.props.src ?? undefined);
+    if (assetId && getAssetAvailability(assetId) === "unavailable") unavailableAssetIdSet.add(assetId);
+  }
+  const unavailableAssetIds = Array.from(unavailableAssetIdSet);
+
+  useEffect(() => subscribeCanvasAssetPreviews(() => setAvailabilityVersion((current) => current + 1)), []);
+  useEffect(() => {
+    retainCanvasAssetPreviews();
+    return releaseCanvasAssetPreviews;
+  }, []);
+
+  if (unavailableAssetIds.length === 0) {
+    return null;
+  }
+
+  function retryUnavailableAssets(): void {
+    const failedAssetIds = new Set(unavailableAssetIds);
+    unavailableAssetIds.forEach((assetId) => retryCanvasAssetPreviews(assetId));
+    const retryToken = new Date().toISOString();
+    const retryAssets = imageAssets.flatMap((asset) => {
+      const localAssetId = getLocalAssetId(asset, asset.props.src ?? undefined);
+      if (!localAssetId || !failedAssetIds.has(localAssetId)) return [];
+      return [{
+        ...asset,
+        meta: {
+          ...asset.meta,
+          previewRetryToken: retryToken
+        }
+      }];
+    });
+    editor.updateAssets(retryAssets);
+  }
+
+  return (
+    <div className="canvas-asset-availability" data-testid="canvas-asset-unavailable" role="alert">
+      <ImageOff className="size-4" aria-hidden="true" />
+      <div>
+        <strong>{t("canvasAssetUnavailableTitle", { count: unavailableAssetIds.length })}</strong>
+        <span>{t("canvasAssetUnavailableHint")}</span>
+      </div>
+      <button type="button" onClick={retryUnavailableAssets}>
+        {t("canvasAssetRetry")}
+      </button>
+    </div>
   );
 }
 
@@ -2619,6 +2723,7 @@ function AgentPlanJobDetails({ plan, t }: { plan: GenerationPlan; t: Translate }
         {plan.jobs.map((job) => {
           const dependencies = planJobDependencies(plan, job);
           const references = job.references.map((reference) => planReferenceLabel(reference, t));
+          const hasRouteMetadata = job.resolutionTier !== undefined || job.model !== undefined || job.modelFallback !== undefined;
           return (
             <article className="agent-plan-card__job" data-status={job.status} key={job.id}>
               <span className="agent-plan-card__job-title">
@@ -2640,6 +2745,24 @@ function AgentPlanJobDetails({ plan, t }: { plan: GenerationPlan; t: Translate }
                   : t("agentPlanJobNoReferences")}
               </span>
               {job.error ? <span>{job.error}</span> : null}
+              {hasRouteMetadata ? (
+                <dl className="history-route-list">
+                  <GenerationRouteMetadata
+                    labels={{
+                      legacy: t("generationHistoryRouteLegacy"),
+                      model: t("generationHistoryModel"),
+                      modelFallback: t("generationHistoryModelFallback"),
+                      pending: t("generationHistoryRoutePending"),
+                      resolution: t("generationHistoryResolution"),
+                      route: t("generationHistoryRoute")
+                    }}
+                    model={job.model}
+                    modelFallback={job.modelFallback}
+                    resolutionTier={job.resolutionTier}
+                    size={job.size ?? plan.defaults.size}
+                  />
+                </dl>
+              ) : null}
             </article>
           );
         })}
@@ -2746,6 +2869,7 @@ function AgentHistoryDialog({
   onClose,
   onRestore,
   onSelectConversation,
+  resolveRestoreFocus,
   selectedConversationId,
   summaries,
   t
@@ -2759,17 +2883,23 @@ function AgentHistoryDialog({
   onClose: () => void;
   onRestore: (conversation: AgentConversation) => void;
   onSelectConversation: (conversationId: string) => void;
+  resolveRestoreFocus: () => HTMLElement | null;
   selectedConversationId: string | null;
   summaries: AgentConversationSummary[];
   t: Translate;
 }) {
-  return (
+  const dialogRef = useModalFocus<HTMLElement>(onClose, { resolveRestoreFocus });
+  const isHistoryUnavailable = Boolean(error && !isLoading && summaries.length === 0 && !conversation);
+
+  return createPortal(
     <div className="agent-history-backdrop app-modal-backdrop" data-testid="agent-history-dialog" role="presentation" onClick={onClose}>
       <section
         aria-labelledby="agent-history-title"
         aria-modal="true"
         className="agent-history-dialog app-modal-surface"
+        ref={dialogRef}
         role="dialog"
+        tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <header className="agent-history-dialog__header">
@@ -2787,13 +2917,19 @@ function AgentHistoryDialog({
           </button>
         </header>
 
-        {error ? (
+        {error && !isHistoryUnavailable ? (
           <p className="agent-history-dialog__alert" role="alert">
             {error}
           </p>
         ) : null}
 
-        <div className="agent-history-dialog__body">
+        {isHistoryUnavailable ? (
+          <div className="agent-history-dialog__failure" role="alert">
+            <XCircle className="size-5" aria-hidden="true" />
+            <strong>{error}</strong>
+            <span>{t("agentHistoryLoadRecovery")}</span>
+          </div>
+        ) : <div className="agent-history-dialog__body">
           <aside className="agent-history-list" aria-label={t("agentHistoryListLabel")}>
             {isLoading ? (
               <div className="agent-history-empty" role="status">
@@ -2874,9 +3010,10 @@ function AgentHistoryDialog({
               </div>
             )}
           </section>
-        </div>
+        </div>}
       </section>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -3795,6 +3932,7 @@ export function App() {
   const [isAgentSkillDialogOpen, setIsAgentSkillDialogOpen] = useState(false);
   const [storageConfig, setStorageConfig] = useState<StorageConfigResponse | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
+  const [providerConfig, setProviderConfig] = useState<ProviderConfigResponse | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [authError, setAuthError] = useState("");
   const [isCodexLoginOpen, setIsCodexLoginOpen] = useState(false);
@@ -3808,6 +3946,7 @@ export function App() {
   const [isStorageSaving, setIsStorageSaving] = useState(false);
   const [isStorageTesting, setIsStorageTesting] = useState(false);
   const [referenceSelection, setReferenceSelection] = useState<ReferenceSelection>(() => missingReferenceSelection(t));
+  const [, setReferenceAvailabilityVersion] = useState(0);
   const [regionAnnotationMode, setRegionAnnotationMode] = useState<RegionAnnotationMode>("none");
   const [promptPreviewTab, setPromptPreviewTab] = useState<PromptPreviewTab>("edit");
   const [isRegionModifierPressed, setIsRegionModifierPressed] = useState(false);
@@ -3837,6 +3976,7 @@ export function App() {
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
   const [currentAgentConversationId, setCurrentAgentConversationId] = useState<string | null>(null);
   const [isAgentHistoryOpen, setIsAgentHistoryOpen] = useState(false);
+  const agentHistoryTriggerRef = useRef<HTMLButtonElement>(null);
   const [agentHistorySummaries, setAgentHistorySummaries] = useState<AgentConversationSummary[]>([]);
   const [selectedAgentHistoryId, setSelectedAgentHistoryId] = useState<string | null>(null);
   const [selectedAgentConversation, setSelectedAgentConversation] = useState<AgentConversation | null>(null);
@@ -3876,6 +4016,7 @@ export function App() {
   const agentSocketReconnectDelayRef = useRef(AGENT_SOCKET_RECONNECT_INITIAL_MS);
   const agentConnectionIdRef = useRef<string | null>(null);
   const activeAgentRunIdRef = useRef<string | null>(null);
+  const cancelledAgentRunIdsRef = useRef<Set<string>>(new Set());
   const currentAgentConversationIdRef = useRef<string | null>(null);
   currentAgentConversationIdRef.current = currentAgentConversationId;
   const agentHistorySaveTimerRef = useRef<number | undefined>();
@@ -3905,7 +4046,7 @@ export function App() {
     authProvider: authStatus?.provider ?? null,
     isAuthLoading
   });
-  const isAgentRunning = agentRunStatus === "connecting" || agentRunStatus === "running";
+  const isAgentRunning = agentRunStatus !== "idle";
   const agentRunStatusLabel = t("agentRunStatus", { status: agentRunStatus });
   const agentCancelRunLabel = `${agentRunStatusLabel}: ${t("agentCancelRun")}`;
   const trimmedAgentInput = agentInput.trim();
@@ -3940,7 +4081,27 @@ export function App() {
   const agentQualitySummary = t("qualityLabel", { quality: agentQuality });
   const agentFormatSummary = t("outputFormatLabel", { format: agentOutputFormat });
   const agentThinkingSummary = agentThinkingChipLabel(locale, agentThinkingType, agentReasoningEffort);
-  const agentReferenceCount = agentReferenceSelection.references.length;
+  const readyAgentReferences = agentReferenceSelection.references.filter(
+    (reference) => getAssetAvailability(referenceAvailabilityAssetId(reference)) === "ready"
+  );
+  const unavailableAgentReferences = agentReferenceSelection.references.filter(
+    (reference) => getAssetAvailability(referenceAvailabilityAssetId(reference)) === "unavailable"
+  );
+  const unavailableAgentReferenceCount = unavailableAgentReferences.length;
+  const pendingAgentReferenceCount = agentReferenceSelection.references.length - readyAgentReferences.length - unavailableAgentReferenceCount;
+  const agentReferenceCount = readyAgentReferences.length;
+  const agentReferenceHint =
+    agentReferenceSelection.references.length === 0
+      ? agentReferenceSelection.hint
+      : pendingAgentReferenceCount > 0
+        ? t("agentReferenceChecking", { count: pendingAgentReferenceCount })
+        : readyAgentReferences.length > 0
+          ? t("agentReferenceReady", { count: readyAgentReferences.length, max: MAX_AGENT_SELECTED_REFERENCES })
+          : t("agentReferenceUnavailable", { count: unavailableAgentReferenceCount });
+  const agentReferenceWarning = [
+    agentReferenceSelection.warning,
+    unavailableAgentReferenceCount > 0 ? t("agentReferenceUnavailable", { count: unavailableAgentReferenceCount }) : undefined
+  ].filter((message): message is string => Boolean(message)).join(t("commonListSeparator"));
   const agentReferenceSummary = t("agentParamReferences", {
     count: agentReferenceCount,
     max: MAX_AGENT_SELECTED_REFERENCES
@@ -3957,6 +4118,24 @@ export function App() {
 
   const trimmedPrompt = prompt.trim();
   const dimensionValidationMessage = sizeValidationMessage(width, height, t, locale);
+  const selectedResolutionTier = resolutionTierForSize({ width, height });
+  const activeProviderSource = providerConfig?.activeSource
+    ? providerConfig.sources.find((source) => source.id === providerConfig.activeSource?.id)
+    : undefined;
+  const selectedResolutionModel =
+    selectedResolutionTier === "2K"
+      ? activeProviderSource?.details.model2K
+      : selectedResolutionTier === "4K"
+        ? activeProviderSource?.details.model4K
+        : activeProviderSource?.details.model;
+  const resolvedResolutionModel =
+    selectedResolutionTier === "2K"
+      ? activeProviderSource?.details.resolvedModel2K
+      : selectedResolutionTier === "4K"
+        ? activeProviderSource?.details.resolvedModel4K
+        : activeProviderSource?.details.model;
+  const resolutionModelFallback =
+    selectedResolutionTier !== "1K" && Boolean(resolvedResolutionModel) && !selectedResolutionModel;
   const isReferenceMode = generationMode === "reference";
   const isRegionAnnotationActive = isReferenceMode && regionAnnotationMode !== "none";
   const regionPromptReferences = useMemo(
@@ -3969,9 +4148,21 @@ export function App() {
     referenceSelection,
     regionPromptReferences
   });
+  const activeReferenceAssetIds = activeReferenceItems.map(referenceAvailabilityAssetId);
+  const hasUnavailableReference = activeReferenceAssetIds.some((assetId) => getAssetAvailability(assetId) === "unavailable");
   const submittedPromptPreview = isRegionAnnotationActive ? promptWithRegionTokens(prompt, regionPromptItems) : prompt;
   const promptValidationMessage = submittedPromptPreview.trim() ? "" : t("promptRequired");
-  const isReferenceReady = isReferenceMode && activeReferenceItems.length > 0;
+  const isReferenceReady =
+    isReferenceMode &&
+    activeReferenceAssetIds.length > 0 &&
+    !hasUnavailableReference &&
+    activeReferenceAssetIds.every((assetId) => getAssetAvailability(assetId) === "ready");
+
+  useEffect(
+    () => subscribeCanvasAssetPreviews(() => setReferenceAvailabilityVersion((current) => current + 1)),
+    []
+  );
+
   const regionSummaryState = regionSummaryAvailability({
     agentConfig,
     isAgentConfigLoading,
@@ -3979,21 +4170,29 @@ export function App() {
     summaryConfig
   });
   const canUseRegionSummary = regionSummaryState.status === "ready";
-  const referenceValidationMessage = referenceValidationCopy({
-    hasPendingRegionPrompt,
-    isReferenceMode,
-    isReferenceReady,
-    isRegionAnnotationActive,
-    referenceSelection,
-    t
-  });
-  const referenceStateTitle = referenceStateTitleCopy({
-    activeReferenceCount: activeReferenceItems.length,
-    isReferenceReady,
-    isRegionAnnotationActive,
-    t
-  });
-  const referenceStateHint = isRegionAnnotationActive ? t("regionPromptCanvasHint") : referenceSelection.hint;
+  const referenceValidationMessage = hasUnavailableReference
+    ? t("generationReferenceUnavailable")
+    : referenceValidationCopy({
+        hasPendingRegionPrompt,
+        isReferenceMode,
+        isReferenceReady,
+        isRegionAnnotationActive,
+        referenceSelection,
+        t
+      });
+  const referenceStateTitle = hasUnavailableReference
+    ? t("generationReferenceUnavailableTitle")
+    : referenceStateTitleCopy({
+        activeReferenceCount: activeReferenceItems.length,
+        isReferenceReady,
+        isRegionAnnotationActive,
+        t
+      });
+  const referenceStateHint = hasUnavailableReference
+    ? t("generationReferenceUnavailable")
+    : isRegionAnnotationActive
+      ? t("regionPromptCanvasHint")
+      : referenceSelection.hint;
   const regionAnnotationModeHint = regionAnnotationModeHintCopy(regionAnnotationMode, t);
   const regionAnnotationStatus = regionAnnotationStatusCopy({
     agentConfigError,
@@ -4016,6 +4215,7 @@ export function App() {
           <>
             <CanvasThemeSync onChange={setIsCanvasDarkMode} />
             <CanvasResolutionBadgeOverlay />
+            <CanvasAssetAvailabilityOverlay />
           </>
         ),
         SnapIndicator: CanvasSnapIndicator,
@@ -4029,8 +4229,8 @@ export function App() {
       shouldAutoOpenCanvasRef.current = false;
     }
 
-    const nextPath = pathForRoute(nextRoute);
-    if (window.location.pathname !== nextPath) {
+    const nextPath = pathForRoute(nextRoute, searchForInternalNavigation(window.location.search));
+    if (`${window.location.pathname}${window.location.search}` !== nextPath) {
       if (options.replace) {
         window.history.replaceState(null, "", nextPath);
       } else {
@@ -4134,6 +4334,32 @@ export function App() {
       }
     }
   }, [locale, t]);
+  const loadProviderConfig = useCallback(async (signal?: AbortSignal): Promise<ProviderConfigResponse | null> => {
+    try {
+      const response = await apiFetch("/api/provider-config", { signal });
+      if (!response.ok) {
+        return null;
+      }
+
+      const config = (await response.json()) as ProviderConfigResponse;
+      if (!signal?.aborted) {
+        setProviderConfig(config);
+      }
+      return config;
+    } catch (error) {
+      if (signal?.aborted) {
+        return null;
+      }
+      if (error instanceof Error) {
+        return null;
+      }
+      throw error;
+    }
+  }, []);
+  const refreshProviderState = useCallback(async (): Promise<AuthStatusResponse | null> => {
+    const [status] = await Promise.all([loadAuthStatus(), loadProviderConfig()]);
+    return status;
+  }, [loadAuthStatus, loadProviderConfig]);
 
   const startDesktopAuth = useCallback(async (): Promise<void> => {
     if (!desktopAuthSupported) {
@@ -4474,12 +4700,12 @@ export function App() {
 
     const controller = new AbortController();
 
-    void loadAuthStatus(controller.signal);
+    void Promise.all([loadAuthStatus(controller.signal), loadProviderConfig(controller.signal)]);
 
     return () => {
       controller.abort();
     };
-  }, [isHostSessionBlocked, isHostSessionChecked, loadAuthStatus]);
+  }, [isHostSessionBlocked, isHostSessionChecked, loadAuthStatus, loadProviderConfig]);
 
   useEffect(() => {
     if (!isHostSessionChecked || isHostSessionBlocked) {
@@ -6488,6 +6714,7 @@ export function App() {
     agentPlanSelectedReferencesRef.current.clear();
     agentPlanCreatedRunIdsRef.current.clear();
     agentUserInputRunIdsRef.current.clear();
+    cancelledAgentRunIdsRef.current.clear();
     agentOutputPlacementCountsRef.current.clear();
     deleteAgentJobLoadingPlaceholdersForRun();
     agentJobPlaceholdersRef.current.clear();
@@ -6560,6 +6787,10 @@ export function App() {
   function isStaleAgentRunEvent(event: Pick<AgentServerEvent, "runId">): boolean {
     const activeRunId = activeAgentRunIdRef.current;
     return Boolean(event.runId && (!activeRunId || event.runId !== activeRunId));
+  }
+
+  function isStaleAgentTerminalEvent(event: Pick<AgentServerEvent, "runId">): boolean {
+    return !acceptsAgentTerminalEvent(activeAgentRunIdRef.current, cancelledAgentRunIdsRef.current, event.runId);
   }
 
   function runIdForAgentEvent(event: Pick<AgentServerEvent, "runId">): string | undefined {
@@ -7097,7 +7328,7 @@ export function App() {
         }
         return;
       case "plan_updated":
-        if (isStaleAgentRunEvent(event)) {
+        if (isStaleAgentTerminalEvent(event)) {
           return;
         }
         if (!isGenerationPlan(event.plan)) {
@@ -7149,9 +7380,21 @@ export function App() {
           runId: runIdForAgentEvent(event)
         });
         return;
+      case "job_cancelled":
+        if (event.record) {
+          setGenerationHistory((history) =>
+            [event.record as GenerationRecord, ...history.filter((record) => record.id !== event.record?.id)].slice(0, 20)
+          );
+        }
+        return;
       case "job_failed":
         if (isStaleAgentRunEvent(event)) {
           return;
+        }
+        if (event.record) {
+          setGenerationHistory((history) =>
+            [event.record as GenerationRecord, ...history.filter((record) => record.id !== event.record?.id)].slice(0, 20)
+          );
         }
         markAgentJobPlaceholdersFailed(event.planId, event.jobId, event.error);
         addAgentMessage({
@@ -7211,6 +7454,13 @@ export function App() {
         }
         if (event.runId) {
           pendingAgentSelectedReferencesRef.current.delete(event.runId);
+          cancelledAgentRunIdsRef.current.add(event.runId);
+          if (cancelledAgentRunIdsRef.current.size > 16) {
+            const oldestRunId = cancelledAgentRunIdsRef.current.values().next().value;
+            if (typeof oldestRunId === "string") {
+              cancelledAgentRunIdsRef.current.delete(oldestRunId);
+            }
+          }
         }
         activeAgentRunIdRef.current = null;
         setAgentRunStatus("idle");
@@ -7223,11 +7473,12 @@ export function App() {
         });
         return;
       case "run_done":
-        if (isStaleAgentRunEvent(event)) {
+        if (isStaleAgentTerminalEvent(event)) {
           return;
         }
         if (event.runId) {
           pendingAgentSelectedReferencesRef.current.delete(event.runId);
+          cancelledAgentRunIdsRef.current.delete(event.runId);
         }
         if (!event.runId || activeAgentRunIdRef.current === event.runId) {
           activeAgentRunIdRef.current = null;
@@ -7511,9 +7762,9 @@ export function App() {
 
     try {
       let selectedReferences: AgentSelectedCanvasReference[] = [];
-      if (agentReferenceSelection.references.length > 0) {
+      if (readyAgentReferences.length > 0) {
         selectedReferences = await buildAgentSelectedReferences({
-          references: agentReferenceSelection.references,
+          references: readyAgentReferences,
           t
         });
       }
@@ -7546,28 +7797,37 @@ export function App() {
     }
   }
 
-  function cancelAgentRun(): void {
+  async function cancelAgentRun(): Promise<void> {
     const runId = activeAgentRunIdRef.current;
-    const socket = agentSocketRef.current;
-    if (!runId || !socket || socket.readyState !== WebSocket.OPEN) {
-      activeAgentRunIdRef.current = null;
-      setAgentRunStatus("idle");
-      stopAgentSocketHeartbeat();
-      resetAgentSocketReconnectState();
-      addAgentMessage({
-        role: "system",
-        content: t("agentRunCancelled")
-      });
+    if (!runId || agentRunStatus === "cancelling") {
       return;
     }
 
-    socket.send(
-      JSON.stringify({
-        type: "cancel_run",
-        requestId: `agent-cancel-${crypto.randomUUID()}`,
+    setAgentRunStatus("cancelling");
+    try {
+      const currentSocket = agentSocketRef.current;
+      const socket = currentSocket?.readyState === WebSocket.OPEN ? currentSocket : await ensureAgentSocket();
+      if (activeAgentRunIdRef.current !== runId) {
+        return;
+      }
+
+      socket.send(
+        JSON.stringify({
+          type: "cancel_run",
+          requestId: `agent-cancel-${crypto.randomUUID()}`,
+          runId
+        })
+      );
+    } catch {
+      if (activeAgentRunIdRef.current === runId) {
+        setAgentRunStatus("running");
+      }
+      addAgentMessage({
+        role: "error",
+        content: t("agentCancelFailed"),
         runId
-      })
-    );
+      });
+    }
   }
 
   async function sendAgentPlanAction(plan: GenerationPlan, action: AgentPlanAction): Promise<void> {
@@ -7614,9 +7874,9 @@ export function App() {
 
     try {
       let selectedReferences = agentPlanSelectedReferencesRef.current.get(plan.id);
-      if (!selectedReferences && agentReferenceSelection.references.length > 0) {
+      if (!selectedReferences && readyAgentReferences.length > 0) {
         selectedReferences = await buildAgentSelectedReferences({
-          references: agentReferenceSelection.references,
+          references: readyAgentReferences,
           t
         });
       }
@@ -7768,7 +8028,15 @@ export function App() {
           <div className="canvas-loading-state canvas-host-session-state" role="alert">
             <AlertTriangle className="size-5 text-amber-600" aria-hidden="true" />
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-neutral-800">{t("hostSessionRequired")}</p>
+              <p className="text-sm font-semibold text-neutral-800">
+                {t("hostSessionRequiredOpenPrefix")} <span className="canvas-host-session-state__brand">AI Cove</span>{" "}
+                {t("hostSessionRequiredOpenMiddle")} <span className="canvas-host-session-state__brand">AI Cove Design</span>
+                {t("hostSessionRequiredRetryPrefix")}
+                <span className="canvas-host-session-state__action">
+                  {t("hostSessionRequiredRetryAction")} <span className="canvas-host-session-state__brand">AI Cove</span>
+                </span>
+                {t("hostSessionRequiredEnd")}
+              </p>
               <p className="mt-1 text-xs text-neutral-500">{hostSessionError}</p>
               {desktopAuthError ? (
                 <p className="mt-2 text-xs font-medium text-red-600" role="alert">
@@ -8142,14 +8410,16 @@ export function App() {
 
           {isReferenceMode ? (
             <section
-              className={`rounded-md border px-3 py-3 ${
-                isReferenceReady ? "border-blue-200 bg-blue-50 text-blue-800" : "border-neutral-200 bg-neutral-50 text-neutral-600"
-              }`}
-              data-reference-state={isReferenceReady ? "ready" : "none"}
+              className="reference-state-card rounded-md border px-3 py-3"
+              data-reference-state={hasUnavailableReference ? "error" : isReferenceReady ? "ready" : "none"}
               data-testid="reference-state"
             >
               <div className="flex items-start gap-2">
-                <ImageIcon className={`mt-0.5 size-4 ${isReferenceReady ? "text-blue-600" : "text-neutral-400"}`} aria-hidden="true" />
+                {hasUnavailableReference ? (
+                  <ImageOff className="reference-state-card__icon mt-0.5 size-4" aria-hidden="true" />
+                ) : (
+                  <ImageIcon className="reference-state-card__icon mt-0.5 size-4" aria-hidden="true" />
+                )}
                 <div className="min-w-0">
                   <p className="text-sm font-semibold">
                     {referenceStateTitle}
@@ -8159,20 +8429,47 @@ export function App() {
                   </p>
                   {activeReferenceItems.length > 0 ? (
                     <div className="reference-preview-list">
-                      {activeReferenceItems.map((reference, index) => (
-                        <div className="reference-preview-card" key={`${reference.sourceUrl}-${index}`}>
+                      {activeReferenceItems.map((reference, index) => {
+                        const referenceKey = regionPromptReferenceKey(reference);
+                        const availabilityAssetId = referenceAvailabilityAssetId(reference);
+                        const availabilityState = availabilityAssetId ? getAssetAvailability(availabilityAssetId) : undefined;
+                        const availabilityRevision = availabilityAssetId ? assetAvailabilityRevision(availabilityAssetId) : 0;
+                        const referenceFailed = availabilityState === "unavailable";
+                        return (
+                        <div
+                          className="reference-preview-card"
+                          data-load-state={referenceFailed ? "error" : availabilityState === "ready" ? "ready" : "loading"}
+                          key={referenceKey}
+                        >
                           <span className="reference-preview-card__index">{index + 1}</span>
-                          <img
-                            alt={t("generationReferenceAlt", { index: index + 1, name: reference.name })}
-                            className="reference-preview-card__image"
-                            src={reference.sourceUrl}
-                          />
+                          {referenceFailed ? (
+                            <button
+                              aria-label={t("canvasAssetRetry")}
+                              className="reference-preview-card__image reference-preview-card__fallback cursor-pointer border-0 p-0"
+                              title={t("canvasAssetRetry")}
+                              type="button"
+                              onClick={() => retryReferenceAsset(reference)}
+                            >
+                              <RotateCcw className="size-4" aria-hidden="true" />
+                            </button>
+                          ) : (
+                            <img
+                              alt={t("generationReferenceAlt", { index: index + 1, name: reference.name })}
+                              className="reference-preview-card__image"
+                              decoding="async"
+                              key={`${availabilityAssetId ?? referenceKey}-${availabilityRevision}`}
+                              src={reference.sourceUrl}
+                              onError={() => markReferenceFailed(reference, availabilityRevision)}
+                              onLoad={(event) => decodeReferenceImage(reference, event.currentTarget, availabilityRevision)}
+                            />
+                          )}
                           <p className="min-w-0 flex-1 truncate text-xs font-medium" data-testid="reference-name">
                             {reference.name}
                             <span>{Math.round(reference.width)} x {Math.round(reference.height)}</span>
                           </p>
                         </div>
-                      ))}
+                        );
+                      })}
                       <button
                         className="secondary-action h-8 shrink-0 px-2 text-xs"
                         type="button"
@@ -8252,6 +8549,24 @@ export function App() {
                 <option value={CUSTOM_SIZE_PRESET_ID}>{t("customSizeOption")}</option>
               </select>
             </label>
+            {resolutionModelFallback ? (
+              <div className="resolution-model-notice" data-testid="resolution-model-fallback" role="status">
+                <AlertTriangle className="size-4" aria-hidden="true" />
+                <div className="resolution-model-notice__copy">
+                  <p>
+                    <span>{t("resolutionModelMissing", { tier: selectedResolutionTier })}</span>{" "}
+                    <span>{t("resolutionModelUseDefault")}</span>{" "}
+                    <span className="resolution-model-notice__model">
+                      {resolvedResolutionModel}
+                    </span>{" "}
+                    <span>{t("resolutionModelKeepSize", { tier: selectedResolutionTier })}</span>
+                  </p>
+                  <button type="button" onClick={() => openProviderConfigDialog("image") }>
+                    {activeProviderSource?.kind === "local" ? t("resolutionModelConfigure") : t("resolutionModelViewSource")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -8289,7 +8604,7 @@ export function App() {
 
           <div>
             <span className="control-label">{t("generationCountLabel")}</span>
-            <div className="mt-2 grid grid-cols-3 gap-2">
+            <div className="mt-2 grid grid-cols-3 gap-2" data-testid="generation-count-control">
               {PRIMARY_GENERATION_COUNTS.map((item) => (
                 <button
                   className={item === count ? "segmented-control is-active" : "segmented-control"}
@@ -8400,6 +8715,7 @@ export function App() {
                   const isRecordRunning = isActiveGenerationRecord(record) && Boolean(activeTask);
                   const cloudFailedCount = cloudFailureCount(record);
                   const cloudFailureMessage = firstCloudFailureMessage(record);
+                  const historyError = record.outputs.find((output) => output.status === "failed" && output.error)?.error ?? record.error;
 
                   return (
                     <article
@@ -8424,12 +8740,31 @@ export function App() {
                               {record.size.width} x {record.size.height}
                             </dd>
                           </div>
+                          <GenerationRouteMetadata
+                            labels={{
+                              legacy: t("generationHistoryRouteLegacy"),
+                              model: t("generationHistoryModel"),
+                              modelFallback: t("generationHistoryModelFallback"),
+                              pending: t("generationHistoryRoutePending"),
+                              resolution: t("generationHistoryResolution"),
+                              route: t("generationHistoryRoute")
+                            }}
+                            model={record.model}
+                            modelFallback={record.modelFallback}
+                            resolutionTier={record.resolutionTier}
+                          />
                           <div className="inline-flex items-center gap-1">
                             <dt className="sr-only">{t("generationHistoryOutputCount")}</dt>
                             <dd>
                               {t("generationImageOutputCount", { successful: successfulOutputCount(record), total: totalOutputs })}
                             </dd>
                           </div>
+                          {record.retryCount && record.retryCount > 0 ? (
+                            <div className="inline-flex items-center gap-1 text-amber-700" data-testid="history-retry-count">
+                              <dt className="sr-only">{t("generationHistoryRetryCount", { count: record.retryCount })}</dt>
+                              <dd>{t("generationHistoryRetryCount", { count: record.retryCount })}</dd>
+                            </div>
+                          ) : null}
                           <div className="inline-flex items-center gap-1">
                             <dt className="sr-only">{t("generationHistoryCreatedAt")}</dt>
                             <dd>{formatCreatedTime(record.createdAt, formatDateTime)}</dd>
@@ -8444,6 +8779,7 @@ export function App() {
                             </div>
                           ) : null}
                         </dl>
+                        {historyError ? <p className="history-item__error" role="alert">{historyError}</p> : null}
                       </div>
 
                       <div className="history-actions">
@@ -8607,6 +8943,7 @@ export function App() {
                 aria-label={t("agentHistoryOpen")}
                 className="agent-icon-button"
                 data-testid="agent-history-open"
+                ref={agentHistoryTriggerRef}
                 title={t("agentHistoryOpen")}
                 type="button"
                 onClick={openAgentHistoryDialog}
@@ -8994,30 +9331,62 @@ export function App() {
               <div className="agent-reference-summary">
                 <div>
                   <strong>{t("agentReferencesTitle")}</strong>
-                  <span>{agentReferenceSelection.hint}</span>
+                  <span>{agentReferenceHint}</span>
                 </div>
                 <span>{agentReferenceSelection.references.length} / {MAX_AGENT_SELECTED_REFERENCES}</span>
               </div>
-              {agentReferenceSelection.warning ? (
-                <p className="agent-inline-warning" data-testid="agent-reference-warning" role="alert">
-                  {agentReferenceSelection.warning}
-                </p>
+              {agentReferenceWarning ? (
+                <div className="agent-inline-warning agent-reference-warning" data-testid="agent-reference-warning" role="alert">
+                  <span>{agentReferenceWarning}</span>
+                  {unavailableAgentReferenceCount > 0 ? (
+                    <button className="agent-reference-warning__retry" type="button" onClick={() => unavailableAgentReferences.forEach(retryReferenceAsset)}>
+                      <RotateCcw className="size-3.5" aria-hidden="true" />
+                      {t("canvasAssetRetry")}
+                    </button>
+                  ) : null}
+                </div>
               ) : null}
               {agentReferenceSelection.references.length > 0 ? (
                 <div className="agent-reference-list">
-                  {agentReferenceSelection.references.map((reference, index) => (
-                    <article className="agent-reference-item" data-testid="agent-reference-item" key={`${reference.sourceUrl}-${index}`}>
-                      <img
-                        alt={t("generationReferenceAlt", { index: index + 1, name: agentReferenceLabel(reference, index, t) })}
-                        className="agent-reference-item__image"
-                        src={reference.sourceUrl}
-                      />
+                  {agentReferenceSelection.references.map((reference, index) => {
+                    const availabilityAssetId = referenceAvailabilityAssetId(reference);
+                    const availabilityState = getAssetAvailability(availabilityAssetId);
+                    const availabilityRevision = assetAvailabilityRevision(availabilityAssetId);
+                    return (
+                      <article
+                        className="agent-reference-item"
+                        data-load-state={availabilityState === "unavailable" ? "error" : availabilityState === "ready" ? "ready" : "loading"}
+                        data-testid="agent-reference-item"
+                        key={availabilityAssetId}
+                      >
+                      {availabilityState === "unavailable" ? (
+                        <button
+                          aria-label={t("canvasAssetRetry")}
+                          className="agent-reference-item__image agent-reference-item__fallback"
+                          title={t("canvasAssetRetry")}
+                          type="button"
+                          onClick={() => retryReferenceAsset(reference)}
+                        >
+                          <RotateCcw className="size-4" aria-hidden="true" />
+                        </button>
+                      ) : (
+                        <img
+                          alt={t("generationReferenceAlt", { index: index + 1, name: agentReferenceLabel(reference, index, t) })}
+                          className="agent-reference-item__image"
+                          decoding="async"
+                          key={`${availabilityAssetId}-${availabilityRevision}`}
+                          src={reference.sourceUrl}
+                          onError={() => markReferenceFailed(reference, availabilityRevision)}
+                          onLoad={(event) => decodeReferenceImage(reference, event.currentTarget, availabilityRevision)}
+                        />
+                      )}
                       <div className="min-w-0">
                         <p>{agentReferenceLabel(reference, index, t)}</p>
                         <span>{Math.round(reference.width)} x {Math.round(reference.height)}</span>
                       </div>
-                    </article>
-                  ))}
+                      </article>
+                    );
+                  })}
                 </div>
               ) : null}
             </section>
@@ -9044,7 +9413,8 @@ export function App() {
                 data-testid="agent-cancel-button"
                 title={agentCancelRunLabel}
                 type="button"
-                onClick={cancelAgentRun}
+                disabled={agentRunStatus !== "running"}
+                onClick={() => void cancelAgentRun()}
               >
                 <CircleStop className="size-4" aria-hidden="true" />
               </button>
@@ -9082,6 +9452,7 @@ export function App() {
           onClose={closeAgentHistoryDialog}
           onRestore={restoreAgentConversation}
           onSelectConversation={selectAgentHistoryConversation}
+          resolveRestoreFocus={() => agentHistoryTriggerRef.current}
         />
       ) : null}
 
@@ -9382,81 +9753,15 @@ export function App() {
         </div>
       ) : null}
 
-      {isCodexLoginOpen ? createPortal(
-        (
-        <div className="app-modal-backdrop fixed inset-0 z-[3000] flex items-center justify-center bg-neutral-950/45 px-4 py-6" data-testid="codex-login-dialog">
-          <div
-            aria-labelledby="codex-login-title"
-            aria-modal="true"
-            className="codex-login-dialog app-modal-surface"
-            role="dialog"
-          >
-            <div className="codex-login-dialog__header">
-              <div className="min-w-0">
-                <h2 id="codex-login-title">{t("codexLoginTitle")}</h2>
-                <p>{t("codexLoginSubtitle")}</p>
-              </div>
-              <button
-                aria-label={t("codexCloseLogin")}
-                className="history-icon-action"
-                type="button"
-                onClick={closeCodexLoginDialog}
-              >
-                <X className="size-4" aria-hidden="true" />
-              </button>
-            </div>
-
-            <div className="codex-login-dialog__body">
-              {codexLoginStatus === "starting" ? (
-                <div className="codex-login-dialog__status" role="status">
-                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                  {t("codexCreatingCode")}
-                </div>
-              ) : null}
-
-              {codexDevice ? (
-                <>
-                  <div className="codex-device-code" data-testid="codex-user-code">
-                    {codexDevice.userCode}
-                  </div>
-                  <div className="codex-login-dialog__actions">
-                    <a className="primary-action h-10" href={codexDevice.verificationUrl} target="_blank" rel="noreferrer">
-                      <ExternalLink className="size-4" aria-hidden="true" />
-                      {t("codexOpenLoginPage")}
-                    </a>
-                    <button className="secondary-action h-10" type="button" onClick={() => void copyCodexUserCode()}>
-                      <Copy className="size-4" aria-hidden="true" />
-                      {t("codexCopyCode")}
-                    </button>
-                  </div>
-                  <p className="codex-login-dialog__hint">
-                    {t("codexCodeExpires", { time: formatCodexExpiry(codexDevice.expiresAt, formatDateTime, t) })}
-                  </p>
-                </>
-              ) : null}
-
-              {codexLoginMessage ? (
-                <p
-                  className={`codex-login-dialog__message codex-login-dialog__message--${codexLoginStatus}`}
-                  data-testid="codex-login-message"
-                  role={codexLoginStatus === "pending" || codexLoginStatus === "authorized" ? "status" : "alert"}
-                >
-                  {codexLoginStatus === "pending" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
-                  {codexLoginMessage}
-                </p>
-              ) : null}
-
-              {codexLoginStatus === "expired" || codexLoginStatus === "denied" || codexLoginStatus === "error" ? (
-                <button className="secondary-action h-10" type="button" onClick={() => void startCodexLogin()}>
-                  <KeyRound className="size-4" aria-hidden="true" />
-                  {t("codexRestart")}
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </div>
-        ),
-        document.body
+      {isCodexLoginOpen ? (
+        <CodexLoginDialog
+          device={codexDevice}
+          message={codexLoginMessage}
+          status={codexLoginStatus}
+          onClose={closeCodexLoginDialog}
+          onCopyCode={copyCodexUserCode}
+          onRestart={startCodexLogin}
+        />
       ) : null}
       </main>
       {regionFocusFrames.length > 0 || regionFocusPreviews.length > 0
@@ -9582,7 +9887,7 @@ export function App() {
             onClose={closeProviderConfigDialog}
             onLogoutCodex={logoutCodexSession}
             onRefreshAgentConfig={loadAgentConfig}
-            onRefreshAuthStatus={loadAuthStatus}
+            onRefreshAuthStatus={refreshProviderState}
             onRefreshSummaryConfig={loadSummaryConfig}
             onSaved={providerConfigDialogMode === "onboarding" ? closeSavedProviderOnboarding : undefined}
             onStartCodexLogin={startCodexLogin}
