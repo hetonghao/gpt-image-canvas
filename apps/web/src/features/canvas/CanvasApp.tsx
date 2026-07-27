@@ -159,7 +159,7 @@ import {
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
 import { normalizeAssetUrl } from "../../shared/api/asset-url";
 import { assetDownloadUrl, assetPreviewUrl } from "../../shared/api/assets";
-import { apiFetch, appendHostTokenParam, clearHostCredentials } from "../../shared/api/host-token";
+import { apiFetch, appendHostTokenParam, clearHostCredentials, HOST_CREDENTIALS_UPDATED_EVENT } from "../../shared/api/host-token";
 import {
   assetAvailabilityRevision,
   clearAssetAvailability,
@@ -3969,6 +3969,7 @@ export function App() {
   const [isSummaryConfigLoading, setIsSummaryConfigLoading] = useState(true);
   const [summaryConfigError, setSummaryConfigError] = useState("");
   const [hostSession, setHostSession] = useState<HostSessionResponse | null>(null);
+  const [hostCredentialsVersion, setHostCredentialsVersion] = useState(0);
   const [isHostSessionChecked, setIsHostSessionChecked] = useState(false);
   const [hostSessionError, setHostSessionError] = useState("");
   const [desktopAuthError, setDesktopAuthError] = useState("");
@@ -4499,6 +4500,12 @@ export function App() {
   ]);
 
   useEffect(() => {
+    const handleHostCredentialsUpdate = (): void => setHostCredentialsVersion((version) => version + 1);
+    window.addEventListener(HOST_CREDENTIALS_UPDATED_EVENT, handleHostCredentialsUpdate);
+    return () => window.removeEventListener(HOST_CREDENTIALS_UPDATED_EVENT, handleHostCredentialsUpdate);
+  }, []);
+
+  useEffect(() => {
     const updateRoute = (): void => {
       setRoute(routeFromLocation(isAiCoveMode ? "canvas" : "home"));
     };
@@ -4632,7 +4639,7 @@ export function App() {
     return () => {
       controller.abort();
     };
-  }, [desktopAuthSupported, desktopSidecarStartup.message, desktopSidecarStartup.status, locale, t]);
+  }, [desktopAuthSupported, desktopSidecarStartup.message, desktopSidecarStartup.status, hostCredentialsVersion, locale, t]);
 
   useEffect(() => {
     if (!isHostSessionChecked || isHostSessionBlocked) {

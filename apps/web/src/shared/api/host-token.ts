@@ -1,5 +1,9 @@
 const HOST_TOKEN_STORAGE_KEY = "ai-cove-design.hostToken";
 const HOST_USER_ID_STORAGE_KEY = "ai-cove-design.hostUserId";
+const HOST_TOKEN_COOKIE_KEY = "ai_cove_design_access";
+const HOST_CREDENTIALS_MESSAGE_TYPE = "ai-cove-design.host-credentials";
+const HOST_READY_MESSAGE_TYPE = "ai-cove-design.ready";
+export const HOST_CREDENTIALS_UPDATED_EVENT = "ai-cove-design:host-credentials-updated";
 
 let cachedHostToken: string | null | undefined;
 let cachedHostUserId: string | null | undefined;
@@ -32,6 +36,36 @@ export function clearHostCredentials(): void {
   removeStoredHostCredential(HOST_USER_ID_STORAGE_KEY);
 }
 
+export function installHostCredentialsMessageBridge(): () => void {
+  if (typeof window === "undefined" || window.parent === window) {
+    return () => undefined;
+  }
+
+  const expectedOrigin = readAuthParentOrigin();
+  if (!expectedOrigin) {
+    return () => undefined;
+  }
+
+  const receiveCredentials = (event: MessageEvent<unknown>): void => {
+    if (event.source !== window.parent || event.origin !== expectedOrigin || !isRecord(event.data)) {
+      return;
+    }
+
+    const token = typeof event.data.token === "string" ? event.data.token.trim() : "";
+    const userId = typeof event.data.userId === "string" || typeof event.data.userId === "number" ? String(event.data.userId).trim() : "";
+    if (event.data.type !== HOST_CREDENTIALS_MESSAGE_TYPE || !token || !userId) {
+      return;
+    }
+
+    saveHostCredentials(token, userId);
+    window.dispatchEvent(new Event(HOST_CREDENTIALS_UPDATED_EVENT));
+  };
+
+  window.addEventListener("message", receiveCredentials);
+  window.parent.postMessage({ type: HOST_READY_MESSAGE_TYPE }, expectedOrigin);
+  return () => window.removeEventListener("message", receiveCredentials);
+}
+
 export function getHostToken(): string | null {
   if (cachedHostToken !== undefined) {
     return cachedHostToken;
@@ -60,7 +94,7 @@ export function withHostTokenParam(url: string): string {
   }
 
   const nextUrl = new URL(url, window.location.href);
-  if (token) {
+  if (token && !usesCookieHostToken()) {
     nextUrl.searchParams.set("token", token);
   }
   if (userId) {
@@ -71,7 +105,7 @@ export function withHostTokenParam(url: string): string {
 
 export function appendHostTokenParam(url: URL): URL {
   const token = getHostToken();
-  if (token) {
+  if (token && !usesCookieHostToken()) {
     url.searchParams.set("token", token);
   }
   const userId = getHostUserId();
@@ -129,6 +163,31 @@ function readTokenFromLocation(): string {
   }
 
   return new URLSearchParams(window.location.search).get("token")?.trim() ?? "";
+}
+
+function readAuthParentOrigin(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  const raw = new URLSearchParams(window.location.search).get("auth_parent_origin")?.trim();
+  if (!raw) {
+    return "";
+  }
+
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "";
+  }
+}
+
+function usesCookieHostToken(): boolean {
+  return Boolean(readAuthParentOrigin());
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function getHostUserId(): string | null {
@@ -195,6 +254,11 @@ function persistHostToken(token: string): void {
   } catch {
     // sessionStorage is preferred; localStorage is only a refresh fallback.
   }
+
+  if (usesCookieHostToken()) {
+    const secure = new URL(window.location.href).protocol === "https:" ? "; Secure" : "";
+    document.cookie = `${HOST_TOKEN_COOKIE_KEY}=${encodeURIComponent(token)}; Path=/api; SameSite=Strict${secure}`;
+  }
 }
 
 function persistHostUserId(userId: string): void {
@@ -230,5 +294,11 @@ function removeStoredHostCredential(key: string): void {
     window.localStorage.removeItem(key);
   } catch {
     // sessionStorage is preferred; localStorage is only a refresh fallback.
+  }
+
+
+  if (key === HOST_TOKEN_STORAGE_KEY && usesCookieHostToken()) {
+    const secure = new URL(window.location.href).protocol === "https:" ? "; Secure" : "";
+    document.cookie = `${HOST_TOKEN_COOKIE_KEY}=; Path=/api; Max-Age=0; SameSite=Strict${secure}`;
   }
 }

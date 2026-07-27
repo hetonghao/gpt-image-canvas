@@ -3,6 +3,8 @@ import type { HostModelsResponse } from "../domain/contracts.js";
 import { hostSessionResponse, listHostApiKeys, listHostModels, resolveHostContext, type HostContext } from "../domain/host/host-adapter.js";
 import { errorResponse } from "./http/errors.js";
 
+const DESIGN_ACCESS_COOKIE_NAME = "ai_cove_design_access";
+
 export type HostVariables = {
   hostContext?: HostContext;
 };
@@ -17,10 +19,11 @@ export const hostContextMiddleware: MiddlewareHandler<{ Variables: HostVariables
     return;
   }
 
+  const cookie = c.req.header("cookie");
   const resolved = await resolveHostContext({
     authorization: c.req.header("authorization"),
-    cookie: c.req.header("cookie"),
-    token: c.req.query("token"),
+    cookie,
+    token: c.req.query("token")?.trim() || extractDesignAccessTokenFromCookie(cookie),
     userId: c.req.query("user_id") ?? c.req.header("new-api-user"),
     signal: c.req.raw.signal
   });
@@ -32,6 +35,28 @@ export const hostContextMiddleware: MiddlewareHandler<{ Variables: HostVariables
   c.set("hostContext", resolved.context);
   await next();
 };
+
+export function extractDesignAccessTokenFromCookie(cookieHeader: string | undefined): string | undefined {
+  if (!cookieHeader) {
+    return undefined;
+  }
+
+  const prefix = `${DESIGN_ACCESS_COOKIE_NAME}=`;
+  const encoded = cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))
+    ?.slice(prefix.length);
+  if (!encoded) {
+    return undefined;
+  }
+
+  try {
+    return decodeURIComponent(encoded).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function isPublicApiPath(path: string): boolean {
   return path === "/api/health" || path.startsWith("/api/desktop-auth/") || path === "/api/pool" || path.startsWith("/api/pool/");
