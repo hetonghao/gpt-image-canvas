@@ -4,7 +4,7 @@ Use this before changing product behavior, user flows, prompt planning, provider
 
 ## Product Promise
 
-`gpt-image-canvas` is a local-first AI image canvas for creators. It combines tldraw, GPT Image 2 or OpenAI-compatible image providers, local SQLite storage, Agent planning, and optional Tencent Cloud COS or Cloudflare R2 / S3-compatible backup into one workstation.
+`gpt-image-canvas` is a local-first AI image canvas for creators. It combines Excalidraw, GPT Image 2 or OpenAI-compatible image providers, local SQLite storage, Agent planning, and optional Tencent Cloud COS or Cloudflare R2 / S3-compatible backup into one workstation.
 
 The product should help users move from intent to usable image assets without losing control of prompts, references, plans, outputs, or credentials.
 
@@ -45,6 +45,10 @@ Important plan limits:
 - Dependency source jobs used downstream must produce exactly 1 output.
 - Generated anchor jobs are visible canvas images and count against the cap.
 
+### Canvas Persistence
+
+The production canvas uses the versioned Excalidraw project schema. Image elements keep an opaque Excalidraw `fileId` mapped to a user-scoped platform asset UUID; scene saves do not embed image bytes or authenticated URLs. Legacy canvas conversion is an offline release step, not a first-open runtime branch.
+
 ### Gallery And Assets
 
 Gallery should make local outputs easy to browse, locate, download, rerun, and inspect. Cloud backup status is useful metadata, not a blocker for local availability.
@@ -60,4 +64,3 @@ Provider configuration is part of the product, not an admin afterthought. Users 
 - Do not invent selected image contents when vision is not available.
 - Do not discard local assets just because cloud upload failed.
 - Do not make onboarding require credentials before the user can understand the app.
-

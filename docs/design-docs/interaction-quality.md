@@ -1,8 +1,8 @@
 # Interaction Quality
 
-Use this guide when polishing visible UI in `apps/web`: buttons, toolbars, Gallery cards, provider configuration, Agent panels, dialogs, thumbnails, and tldraw-adjacent controls.
+Use this guide when polishing visible UI in `apps/web`: buttons, toolbars, Gallery cards, provider configuration, Agent panels, dialogs, thumbnails, and Excalidraw-adjacent controls.
 
-This is a project-specific distillation of small design engineering details. Do not copy external skill text into the repo; turn it into rules that fit the warm paper, ink, copper, teal, and tldraw canvas interface.
+This is a project-specific distillation of small design engineering details. Do not copy external skill text into the repo; turn it into rules that fit the warm paper, ink, copper, teal, and Excalidraw canvas interface.
 
 ## Product Fit
 
@@ -61,7 +61,7 @@ Generated images and references need a neutral edge so they read clearly on pape
 - In dark mode, `--image-outline` should be `rgba(255, 255, 255, 0.1)`.
 - Do not use tinted palette neutrals, accent colors, or ink colors for image outlines.
 - Apply this to app-owned image surfaces: Gallery images, reference previews, Agent output thumbs, and home previews.
-- Be careful with tldraw internals. Do not override tldraw image selection styles unless the story is explicitly about canvas rendering.
+- Be careful with Excalidraw internals. Do not override image selection styles unless the story is explicitly about canvas rendering.
 
 ## Motion
 

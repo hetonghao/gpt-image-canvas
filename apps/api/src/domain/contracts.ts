@@ -22,7 +22,8 @@ export {
   resolutionTierForSize,
   sizeToApiValue,
   validateImageSize,
-  validateSceneImageSize
+  validateSceneImageSize,
+  validateExcalidrawProjectSnapshot
 } from "@gpt-image-canvas/shared";
 
 export type {
@@ -80,6 +81,8 @@ export type {
   OutputFormat,
   OutputStatus,
   ProjectState,
+  CanvasAssetReference,
+  ExcalidrawProjectSnapshot,
   ProviderConfigResponse,
   ProviderSourceDetails,
   ProviderSourceId,

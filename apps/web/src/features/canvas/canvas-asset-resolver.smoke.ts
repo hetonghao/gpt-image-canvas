@@ -23,7 +23,7 @@ test("returns and caches a readable canvas preview URL", async () => {
     decodeImage: async () => true
   });
 
-  // When: tldraw resolves the same preview more than once.
+  // When: the canvas resolves the same preview more than once.
   const first = resolver.resolve("readable", "/api/assets/readable/preview?width=1024");
   const second = resolver.resolve("readable", "/api/assets/readable/preview?width=1024");
 
@@ -66,7 +66,7 @@ test("uses the stable placeholder when the preview endpoint fails", async () => 
     decodeImage: async () => true
   });
 
-  // When: tldraw resolves the historical asset.
+  // When: the canvas resolves the historical asset.
   const previewUrl = "/api/assets/missing/preview?width=1024";
   const resolved = await resolver.resolve("missing", previewUrl);
 
@@ -84,7 +84,7 @@ test("uses the stable placeholder when the response cannot be decoded", async ()
     decodeImage: async () => false
   });
 
-  // When: tldraw resolves the corrupt preview.
+  // When: the canvas resolves the corrupt preview.
   const resolved = await resolver.resolve("corrupt", "/api/assets/corrupt/preview?width=1024");
 
   // Then: the same stable unavailable state is rendered.

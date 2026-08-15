@@ -51,10 +51,10 @@ async function main(): Promise<void> {
       const selectedProvider = new FakeImageProvider();
       const selectedReference = {
         id: "selected-1",
-        assetId: `asset:${selectedAssetId}`,
+        assetId: selectedAssetId,
         label: "Selected fixture"
       } satisfies AgentSelectedCanvasReference;
-      const selectedReferencePlan = selectedReferencePlanFixture(`asset:${selectedAssetId}`);
+      const selectedReferencePlan = selectedReferencePlanFixture(selectedAssetId);
       const selectedReferenceRun = await executeGenerationPlan({
         plan: selectedReferencePlan,
         selectedReferences: [selectedReference],
@@ -66,8 +66,22 @@ async function main(): Promise<void> {
         isRunActive: () => true,
         sendEvent: () => undefined
       });
-      expect(selectedReferenceRun.status === "succeeded", "selected references with tldraw asset: prefix resolve to stored assets");
+      expect(selectedReferenceRun.status === "succeeded", "selected references resolve to stored assets");
       expect(selectedProvider.editCalls === 1, "selected reference run uses edit generation");
+
+      const legacyAssetId = ["asset", selectedAssetId].join(":");
+      const legacySelectedReferenceRun = await executeGenerationPlan({
+        plan: selectedReferencePlanFixture(legacyAssetId),
+        selectedReferences: [{ ...selectedReference, assetId: legacyAssetId }],
+        mode: "execute",
+        provider: new FakeImageProvider(),
+        requestId: "smoke-legacy-selected-reference",
+        runId: "run-legacy-selected-reference",
+        signal: new AbortController().signal,
+        isRunActive: () => true,
+        sendEvent: () => undefined
+      });
+      expect(legacySelectedReferenceRun.status === "failed", "legacy canvas asset handles are rejected");
 
       const localSelectedProvider = new FakeImageProvider();
       const localSelectedReference = {

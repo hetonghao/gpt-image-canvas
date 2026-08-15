@@ -24,14 +24,13 @@ try {
 
   test("project saves return a lightweight acknowledgement", () => {
     const snapshot = {
-      document: {
-        store: {
-          "page:1": {
-            id: "page:1",
-            typeName: "record"
-          }
-        }
-      }
+      format: "ai-cove-excalidraw",
+      version: 1,
+      scene: {
+        elements: [{ id: "text-1", type: "text", text: "Saved Excalidraw scene" }],
+        appState: {}
+      },
+      assets: {}
     };
 
     const result = saveProjectSnapshot({ snapshotJson: JSON.stringify(snapshot) }, hostContext);
@@ -48,65 +47,30 @@ try {
   test("project payloads above 5MB still save so large canvases remain usable", () => {
     const largePayload = parseProjectPayload({
       snapshot: {
-        note: "x".repeat(LARGE_PROJECT_SNAPSHOT_BYTES + 1)
+        format: "ai-cove-excalidraw",
+        version: 1,
+        scene: {
+          elements: [{ id: "text-1", type: "text", text: "x".repeat(LARGE_PROJECT_SNAPSHOT_BYTES + 1) }],
+          appState: {}
+        },
+        assets: {}
       }
     });
 
     assert.equal(largePayload.ok, true);
   });
 
-  test("project snapshots omit unreferenced asset records", () => {
-    const snapshot = {
-      document: {
-        store: {
-          "document:document": {
-            id: "document:document",
-            typeName: "document"
+  test("legacy project snapshots are rejected", () => {
+    assert.throws(
+      () =>
+        saveProjectSnapshot(
+          {
+            snapshotJson: JSON.stringify({ document: { store: { "page:1": { id: "page:1", typeName: "record" } } } })
           },
-          "page:page": {
-            id: "page:page",
-            typeName: "page"
-          },
-          "asset:visible": {
-            id: "asset:visible",
-            typeName: "asset",
-            type: "image",
-            props: {
-              src: "/api/assets/visible",
-              w: 1,
-              h: 1
-            }
-          },
-          "asset:orphan": {
-            id: "asset:orphan",
-            typeName: "asset",
-            type: "image",
-            props: {
-              src: "data:image/png;base64,AAAA",
-              w: 1,
-              h: 1
-            }
-          },
-          "shape:visible": {
-            id: "shape:visible",
-            typeName: "shape",
-            type: "image",
-            props: {
-              assetId: "asset:visible",
-              w: 1,
-              h: 1
-            }
-          }
-        }
-      }
-    };
-
-    saveProjectSnapshot({ snapshotJson: JSON.stringify(snapshot) }, hostContext);
-
-    const project = getProjectState(hostContext);
-    const store = (project.snapshot as typeof snapshot).document.store;
-    assert.ok(store["asset:visible"], "referenced assets should be preserved");
-    assert.ok(!("asset:orphan" in store), "unreferenced assets should be removed from project snapshots");
+          hostContext
+        ),
+      /AI Cove Excalidraw scene/
+    );
   });
 
   console.log("project-store.smoke.ts passed");

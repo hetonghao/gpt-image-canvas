@@ -739,25 +739,12 @@ async function persistAgentSelectedReferences(
 }
 
 function storedAssetIdForAgentReference(assetId: string, hostContext: HostContext): string | undefined {
-  for (const candidate of storedAssetIdCandidates(assetId)) {
-    const stored = getStoredAssetFile(candidate, hostContext);
-    if (stored) {
-      return stored.id;
-    }
+  const trimmedAssetId = assetId.trim();
+  if (!trimmedAssetId) {
+    return undefined;
   }
 
-  return undefined;
-}
-
-function storedAssetIdCandidates(assetId: string): string[] {
-  const trimmed = assetId.trim();
-  const candidates = [trimmed];
-  const tldrawAssetMatch = /^asset:(.+)$/u.exec(trimmed);
-  if (tldrawAssetMatch?.[1]) {
-    candidates.push(tldrawAssetMatch[1]);
-  }
-
-  return candidates.filter((candidate, index) => candidate && candidates.indexOf(candidate) === index);
+  return getStoredAssetFile(trimmedAssetId, hostContext)?.id;
 }
 
 function fileNameForSelectedReference(reference: AgentSelectedCanvasReference): string | undefined {

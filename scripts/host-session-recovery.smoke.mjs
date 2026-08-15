@@ -37,23 +37,23 @@ async function runScenario({ baseUrl, browser }, scenario, initialFailure) {
     await page.goto(`${baseUrl}/canvas?ui_mode=embedded&user_id=42`);
     if (initialFailure) {
       await page.locator(".canvas-host-session-state").waitFor();
-      assert.equal(await page.locator(".tl-container").count(), 0, `${scenario.name}: initial auth failure must not mount Tldraw`);
+      assert.equal(await page.getByTestId("excalidraw-canvas").count(), 0, `${scenario.name}: initial auth failure must not mount Excalidraw`);
       return;
     }
 
-    const editorContainer = page.locator(".tl-container");
+    const editorContainer = page.getByTestId("excalidraw-canvas");
     await editorContainer.waitFor({ state: "attached" });
     await page.evaluate(() => {
-      window.__hostSessionEditorContainer = document.querySelector(".tl-container");
+      window.__hostSessionEditorContainer = document.querySelector('[data-testid="excalidraw-canvas"]');
       return window.failNextHostSession();
     });
     await page.evaluate(() => window.dispatchEvent(new Event("ai-cove-design:host-credentials-updated")));
     const recoveryOverlay = page.locator('[data-testid="canvas-host-session-overlay"]');
     await recoveryOverlay.waitFor({ state: "visible" });
 
-    assert.equal(await editorContainer.count(), 1, `${scenario.name}: host-session recheck must keep Tldraw mounted`);
+    assert.equal(await editorContainer.count(), 1, `${scenario.name}: host-session recheck must keep Excalidraw mounted`);
     assert.equal(
-      await page.evaluate(() => document.querySelector(".tl-container") === window.__hostSessionEditorContainer),
+      await page.evaluate(() => document.querySelector('[data-testid="excalidraw-canvas"]') === window.__hostSessionEditorContainer),
       true,
       `${scenario.name}: host-session recheck must keep the same editor DOM instance`
     );

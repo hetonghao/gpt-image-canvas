@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Local AI image canvas for prompt-to-image generation, reference-image generation, and multi-step Agent planning. It combines tldraw, Hono, SQLite, and GPT Image 2 into a local-first creative workspace.
+Local AI image canvas for prompt-to-image generation, reference-image generation, and multi-step Agent planning. It combines Excalidraw 0.18.1, Hono, SQLite, and GPT Image 2 into a local-first creative workspace.
 
 ## Preview
 
@@ -10,7 +10,7 @@ Local AI image canvas for prompt-to-image generation, reference-image generation
 
 ## What It Does
 
-- Create and arrange AI-generated images on a tldraw canvas.
+- Create and arrange AI-generated images on an Excalidraw canvas.
 - Generate from text prompts or use selected canvas images as references.
 - Save project state, generation history, and generated assets locally.
 - Configure image providers from `.env`, the in-app provider dialog, or Codex login.
@@ -98,6 +98,8 @@ Agent planning uses a separate OpenAI-compatible chat configuration from the ima
 
 When `supportsVision` is enabled, selected images are attached to the planning request as multimodal inputs. When disabled, selected images are passed only as reference handles for later image generation. Agent messages are not persisted in this version; plan nodes already on the canvas are saved with the normal canvas snapshot.
 
+Canvas persistence uses the versioned Excalidraw project schema. Legacy canvas conversion is an offline release operation; the production runtime does not migrate old snapshots when a user opens `/canvas`.
+
 Plan execution is DAG-based. Independent jobs can run in parallel, jobs that reference generated outputs wait for their dependencies, and `Retry failed` reruns failed or blocked jobs while keeping successful upstream outputs. A single plan is capped at 16 generated images, including intermediate anchors.
 
 ## Cloud Backup
@@ -128,7 +130,7 @@ Saving cloud storage settings performs a test upload and delete before the confi
 
 ```text
 apps/api         Hono API, SQLite storage, provider selection, Agent planning/execution
-apps/web         Vite + React + tldraw web app
+apps/web         Vite + React + Excalidraw web app
 packages/shared  Shared contracts and constants
 docs             Project docs and preview assets
 data             Local runtime data, ignored by Git

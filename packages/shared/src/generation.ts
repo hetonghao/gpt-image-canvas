@@ -173,6 +173,8 @@ export interface GeneratedAsset {
   mimeType: string;
   width: number;
   height: number;
+  byteSize?: number;
+  contentSha256?: string;
   cloud?: GeneratedAssetCloudInfo;
 }
 

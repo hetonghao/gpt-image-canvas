@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-GPT Image Canvas 是一个本地优先的 AI 图像画布，支持文生图、参考图生成和多步骤 Agent 规划。项目基于 tldraw、Hono、SQLite 和 GPT Image 2 构建，适合在本机完成创作、管理历史和保存生成资产。
+GPT Image Canvas 是一个本地优先的 AI 图像画布，支持文生图、参考图生成和多步骤 Agent 规划。项目基于 Excalidraw 0.18.1、Hono、SQLite 和 GPT Image 2 构建，适合在本机完成创作、管理历史和保存生成资产。
 
 ## 效果图
 
@@ -10,7 +10,7 @@ GPT Image Canvas 是一个本地优先的 AI 图像画布，支持文生图、�
 
 ## 能做什么
 
-- 在 tldraw 画布上生成、摆放和管理 AI 图像。
+- 在 Excalidraw 画布上生成、摆放和管理 AI 图像。
 - 支持文本提示词生成，也支持选中画布图片作为参考图生成。
 - 默认将项目快照、生成历史和生成资产保存在本地。
 - 支持从 `.env`、应用内配置弹窗或 Codex 登录中选择生成服务。
@@ -98,6 +98,8 @@ Agent 规划使用独立于图像 provider 的 OpenAI 兼容聊天配置。请�
 
 开启 `supportsVision` 时，选中的图片会作为多模态输入传给规划模型。关闭时，选中图片只作为后续生图的 reference handle，Agent 不应声称自己看过图片内容。当前版本不持久化 Agent 对话消息；刷新页面会清空对话，但已经落在画布上的计划节点会随普通 canvas snapshot 保存。
 
+画布持久化使用带版本的 Excalidraw 项目格式。遗留画布只在发布前的离线迁移中转换，正式运行时不会在用户打开 `/canvas` 时在线迁移旧快照。
+
 计划执行按 DAG 调度。互不依赖的 job 可以并发运行；引用上游生成图的 job 会等待依赖完成；`Retry failed` 会只重跑失败或被阻塞的 job，并保留已成功的上游输出。单个计划最多生成 16 张图，包含中间锚点图。
 
 ## 云端备份
@@ -128,7 +130,7 @@ R2 / S3 字段默认值来自：
 
 ```text
 apps/api         Hono API、SQLite 存储、provider 选择、Agent 规划与执行
-apps/web         Vite + React + tldraw Web 应用
+apps/web         Vite + React + Excalidraw Web 应用
 packages/shared  共享契约和常量
 docs             项目文档和预览素材
 data             本地运行时数据，已被 Git 忽略

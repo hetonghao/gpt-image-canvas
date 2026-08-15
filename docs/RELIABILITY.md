@@ -5,7 +5,7 @@ Use this before changing API routes, provider selection, Agent execution, asset 
 ## Runtime Shape
 
 - `apps/api`: Hono API, WebSocket upgrade handling, SQLite persistence, provider selection, image generation, Agent planning and execution, asset storage.
-- `apps/web`: Vite React and tldraw client, served by Vite in development and by the built API app in production.
+- `apps/web`: Vite React and Excalidraw client, served by Vite in development and by the built API app in production.
 - `packages/shared`: shared contracts, image presets, validation helpers, provider types, storage types, and Agent event types.
 
 ## Persistence
@@ -19,7 +19,8 @@ Important persistence rules:
 - Never write generated assets outside the configured data/assets path.
 - Validate asset paths before reading from disk.
 - Keep generation records, outputs, reference assets, and asset rows consistent.
-- If changing snapshot format, preserve old project restore behavior or document migration behavior.
+- Project snapshots use the versioned Excalidraw schema: persist scene data plus user-scoped asset metadata, never embedded image files or authenticated URLs.
+- Legacy snapshot conversion is offline-only. The formal API must reject old snapshot formats rather than silently clear or migrate them on first open.
 - Do not run local `pnpm dev` and Docker against the same `data/` directory at the same time.
 
 ## Provider Reliability
@@ -82,4 +83,3 @@ docker compose config --quiet --no-env-resolution
 ```
 
 Do not run plain `docker compose config` when `.env` may contain real secrets.
-

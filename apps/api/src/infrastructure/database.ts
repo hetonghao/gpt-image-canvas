@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS assets (
   mime_type TEXT NOT NULL,
   width INTEGER NOT NULL,
   height INTEGER NOT NULL,
+  byte_size INTEGER,
+  content_sha256 TEXT,
   cloud_provider TEXT,
   cloud_bucket TEXT,
   cloud_region TEXT,
@@ -287,6 +289,12 @@ ensureColumn("assets", "cloud_etag", "cloud_etag TEXT");
 ensureColumn("assets", "cloud_request_id", "cloud_request_id TEXT");
 ensureColumn("assets", "cloud_endpoint", "cloud_endpoint TEXT");
 ensureColumn("assets", "cloud_force_path_style", "cloud_force_path_style INTEGER");
+ensureColumn("assets", "byte_size", "byte_size INTEGER");
+ensureColumn("assets", "content_sha256", "content_sha256 TEXT");
+sqlite.exec(`
+CREATE UNIQUE INDEX IF NOT EXISTS assets_user_content_sha256_idx
+ON assets(user_id, content_sha256);
+`);
 ensureColumn("storage_configs", "endpoint_mode", "endpoint_mode TEXT");
 ensureColumn("storage_configs", "account_id", "account_id TEXT");
 ensureColumn("storage_configs", "endpoint", "endpoint TEXT");

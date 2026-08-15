@@ -4,7 +4,7 @@
   "private": true,
   "license": "MIT",
   "packageManager": "pnpm@9.14.2",
-  "description": "Local professional AI canvas powered by tldraw and GPT Image 2.",
+  "description": "Local professional AI canvas powered by Excalidraw and GPT Image 2.",
   "engines": {
     "node": ">=24.15.0 <26"
   },

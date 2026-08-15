@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve } from "node:path";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import sharp from "sharp";
@@ -54,6 +54,10 @@ export interface StoredAssetFile {
   fileName: string;
   filePath: string;
   mimeType: string;
+  width: number;
+  height: number;
+  byteSize?: number;
+  contentSha256?: string;
   cloud?: StoredCloudAssetLocation;
 }
 
@@ -107,12 +111,6 @@ type PersistedGenerationInput = ImageProviderInput & {
 type RunningReferenceGeneration = {
   record: GenerationRecord;
   input: EditImageProviderInput;
-};
-
-const mimeTypes: Record<OutputFormat, string> = {
-  jpeg: "image/jpeg",
-  png: "image/png",
-  webp: "image/webp"
 };
 
 export function createRunningTextToImageGeneration(
@@ -283,33 +281,21 @@ async function ensureReferenceAssetIds(input: EditImageProviderInput, hostContex
 }
 
 function persistedReferenceAssetId(assetId: string | undefined, hostContext?: HostContext): string | undefined {
-  if (!assetId) {
+  const trimmedAssetId = assetId?.trim();
+  if (!trimmedAssetId) {
     return undefined;
   }
 
-  for (const candidateAssetId of persistedReferenceAssetIdCandidates(assetId)) {
-    const asset = db
-      .select({ id: assets.id })
-      .from(assets)
-      .where(and(eq(assets.id, candidateAssetId), eq(assets.userId, hostUserId(hostContext))))
-      .get();
-    if (asset?.id) {
-      return asset.id;
-    }
+  const asset = db
+    .select({ id: assets.id })
+    .from(assets)
+    .where(and(eq(assets.id, trimmedAssetId), eq(assets.userId, hostUserId(hostContext))))
+    .get();
+  if (asset?.id) {
+    return asset.id;
   }
 
   return undefined;
-}
-
-function persistedReferenceAssetIdCandidates(assetId: string): string[] {
-  const trimmedAssetId = assetId.trim();
-  const candidates = [trimmedAssetId];
-  const tldrawAssetMatch = /^asset:(.+)$/u.exec(trimmedAssetId);
-  if (tldrawAssetMatch?.[1]) {
-    candidates.push(tldrawAssetMatch[1]);
-  }
-
-  return candidates.filter((candidate, index, values) => candidate && values.indexOf(candidate) === index);
 }
 
 export async function saveReferenceImageInput(input: ReferenceImageInput, hostContext?: HostContext): Promise<GeneratedAsset> {
@@ -322,40 +308,16 @@ export async function saveUploadedImageAsset(input: ReferenceImageInput, hostCon
 
 async function saveImageAssetInput(input: ReferenceImageInput, hostContext?: HostContext): Promise<GeneratedAsset> {
   const parsed = referenceDataUrlToBytes(input);
-  const imageSize = await readImageSize(parsed.bytes);
-  if (!imageSize) {
-    throw new ProviderError("unsupported_provider_behavior", "Reference image dimensions could not be read.", 400);
-  }
-
-  const assetId = randomUUID();
-  const extension = extensionForMimeType(parsed.mimeType);
-  const fileName = fileNameForAsset(input.fileName, assetId, extension);
-  const relativePath = `assets/${assetId}.${extension}`;
-  const filePath = resolve(runtimePaths.dataDir, relativePath);
-  const createdAt = new Date().toISOString();
-
-  await localAssetStorage.putObject({ filePath, bytes: parsed.bytes });
-  db.insert(assets)
-    .values({
-      id: assetId,
-      userId: hostUserId(hostContext),
-      fileName,
-      relativePath,
-      mimeType: parsed.mimeType,
-      width: imageSize.width,
-      height: imageSize.height,
-      createdAt
-    })
-    .run();
-
-  return {
-    id: assetId,
-    url: `/api/assets/${assetId}`,
-    fileName,
-    mimeType: parsed.mimeType,
-    width: imageSize.width,
-    height: imageSize.height
-  };
+  const saved = await persistImageAssetBytes(
+    {
+      bytes: parsed.bytes,
+      fileName: input.fileName,
+      invalidImageMessage: "Reference image dimensions could not be read.",
+      invalidImageStatus: 400
+    },
+    hostContext
+  );
+  return saved.asset;
 }
 
 function fileNameForAsset(inputFileName: string | undefined, assetId: string, extension: string): string {
@@ -416,6 +378,10 @@ export function getStoredAssetFile(assetId: string, hostContext?: HostContext): 
     fileName: asset.fileName,
     filePath,
     mimeType: asset.mimeType,
+    width: asset.width,
+    height: asset.height,
+    byteSize: asset.byteSize ?? undefined,
+    contentSha256: asset.contentSha256 ?? undefined,
     cloud: toCloudAssetLocation(asset)
   };
 }
@@ -458,8 +424,12 @@ export async function readStoredAssetMetadata(assetId: string, hostContext?: Hos
 
   return {
     id: asset.file.id,
+    fileName: asset.file.fileName,
+    mimeType: asset.file.mimeType,
     width: size.width,
-    height: size.height
+    height: size.height,
+    byteSize: asset.bytes.byteLength,
+    contentSha256: createHash("sha256").update(asset.bytes).digest("hex")
   };
 }
 
@@ -565,57 +535,126 @@ async function saveProviderImage(
   _signal?: AbortSignal,
   hostContext?: HostContext
 ): Promise<SavedProviderImage> {
-  const assetId = randomUUID();
-  const fileName = `${assetId}.${input.outputFormat === "jpeg" ? "jpg" : input.outputFormat}`;
-  const relativePath = `assets/${fileName}`;
-  const filePath = resolve(runtimePaths.dataDir, relativePath);
-  const mimeType = mimeTypes[input.outputFormat];
   const bytes = Buffer.from(image.b64Json, "base64");
-  const imageSize = await readImageSize(bytes);
-
-  if (!imageSize) {
-    throw new ProviderError("unsupported_provider_behavior", "Generated image dimensions could not be read.", 502);
-  }
-
-  await localAssetStorage.putObject({ filePath, bytes });
-  const cloudStorage = await saveAssetToConfiguredCloud(
+  return persistImageAssetBytes(
     {
-      fileName,
       bytes,
-      mimeType,
-      createdAt: new Date().toISOString()
+      fileName: `generated.${input.outputFormat === "jpeg" ? "jpg" : input.outputFormat}`,
+      invalidImageMessage: "Generated image dimensions could not be read.",
+      invalidImageStatus: 502
     },
     hostContext
   );
+}
+
+async function persistImageAssetBytes(
+  input: {
+    bytes: Buffer;
+    fileName?: string;
+    invalidImageMessage: string;
+    invalidImageStatus: number;
+  },
+  hostContext?: HostContext
+): Promise<SavedProviderImage> {
+  const image = await inspectImage(input.bytes);
+  if (!image) {
+    throw new ProviderError("unsupported_provider_behavior", input.invalidImageMessage, input.invalidImageStatus);
+  }
+
+  const userId = hostUserId(hostContext);
+  const contentSha256 = createHash("sha256").update(input.bytes).digest("hex");
+  const existing = db
+    .select()
+    .from(assets)
+    .where(and(eq(assets.userId, userId), eq(assets.contentSha256, contentSha256)))
+    .get();
+  if (existing) {
+    return {
+      asset: toGeneratedAsset(existing)!
+    };
+  }
+
+  const assetId = randomUUID();
+  const extension = extensionForMimeType(image.mimeType);
+  const fileName = fileNameForAsset(input.fileName, assetId, extension);
+  const relativePath = `assets/${assetId}.${extension}`;
+  const filePath = resolve(runtimePaths.dataDir, relativePath);
+  const createdAt = new Date().toISOString();
+
+  await localAssetStorage.putObject({ filePath, bytes: input.bytes });
+  const cloudStorage = await saveAssetToConfiguredCloud(
+    {
+      fileName,
+      bytes: input.bytes,
+      mimeType: image.mimeType,
+      createdAt
+    },
+    hostContext
+  );
+
+  db.insert(assets)
+    .values({
+      id: assetId,
+      userId,
+      fileName,
+      relativePath,
+      mimeType: image.mimeType,
+      width: image.width,
+      height: image.height,
+      byteSize: input.bytes.byteLength,
+      contentSha256,
+      cloudProvider: cloudStorage?.provider ?? null,
+      cloudBucket: cloudStorage?.bucket ?? null,
+      cloudRegion: cloudStorage?.region ?? null,
+      cloudObjectKey: cloudStorage?.objectKey ?? null,
+      cloudStatus: cloudStorage?.status ?? null,
+      cloudError: cloudStorage?.error ?? null,
+      cloudUploadedAt: cloudStorage?.uploadedAt ?? null,
+      cloudEtag: cloudStorage?.etag ?? null,
+      cloudRequestId: cloudStorage?.requestId ?? null,
+      cloudEndpoint: cloudStorage?.endpoint ?? null,
+      cloudForcePathStyle: cloudStorage?.provider === "s3" ? (cloudStorage.forcePathStyle ? 1 : 0) : null,
+      createdAt
+    })
+    .run();
 
   return {
     asset: {
       id: assetId,
       url: `/api/assets/${assetId}`,
       fileName,
-      mimeType,
-      width: imageSize.width,
-      height: imageSize.height,
+      mimeType: image.mimeType,
+      width: image.width,
+      height: image.height,
+      byteSize: input.bytes.byteLength,
+      contentSha256,
       cloud: toGeneratedAssetCloud(cloudStorage)
     },
     cloudStorage
   };
 }
 
-async function readImageSize(bytes: Buffer): Promise<ImageSize | undefined> {
+async function inspectImage(bytes: Buffer): Promise<(ImageSize & { mimeType: string }) | undefined> {
   try {
     const metadata = await sharp(bytes).metadata();
-    if (!metadata.width || !metadata.height) {
+    const mimeType = metadata.format === "jpeg" ? "image/jpeg" : metadata.format === "png" ? "image/png" : metadata.format === "webp" ? "image/webp" : undefined;
+    if (!metadata.width || !metadata.height || !mimeType) {
       return undefined;
     }
 
     return {
       width: metadata.width,
-      height: metadata.height
+      height: metadata.height,
+      mimeType
     };
   } catch {
     return undefined;
   }
+}
+
+async function readImageSize(bytes: Buffer): Promise<ImageSize | undefined> {
+  const image = await inspectImage(bytes);
+  return image ? { width: image.width, height: image.height } : undefined;
 }
 
 function withProviderRoute(input: PersistedGenerationInput, provider: ImageProvider): PersistedGenerationInput {
@@ -798,32 +837,6 @@ function insertGenerationOutputs(generationId: string, outputs: BatchOutputResul
   const createdAt = new Date().toISOString();
 
   for (const output of outputs) {
-    if (output.asset) {
-      db.insert(assets)
-        .values({
-          id: output.asset.id,
-          userId: hostUserId(hostContext),
-          fileName: output.asset.fileName,
-          relativePath: `assets/${output.asset.fileName}`,
-          mimeType: output.asset.mimeType,
-          width: output.asset.width,
-          height: output.asset.height,
-          cloudProvider: output.cloudStorage?.provider ?? null,
-          cloudBucket: output.cloudStorage?.bucket ?? null,
-          cloudRegion: output.cloudStorage?.region ?? null,
-          cloudObjectKey: output.cloudStorage?.objectKey ?? null,
-          cloudStatus: output.cloudStorage?.status ?? null,
-          cloudError: output.cloudStorage?.error ?? null,
-          cloudUploadedAt: output.cloudStorage?.uploadedAt ?? null,
-          cloudEtag: output.cloudStorage?.etag ?? null,
-          cloudRequestId: output.cloudStorage?.requestId ?? null,
-          cloudEndpoint: output.cloudStorage?.endpoint ?? null,
-          cloudForcePathStyle: output.cloudStorage?.provider === "s3" ? (output.cloudStorage.forcePathStyle ? 1 : 0) : null,
-          createdAt
-        })
-        .run();
-    }
-
     db.insert(generationOutputs)
       .values({
         id: output.id,
@@ -973,6 +986,8 @@ function toGeneratedAsset(asset: (typeof assets.$inferSelect) | undefined): Gene
     mimeType: asset.mimeType,
     width: asset.width,
     height: asset.height,
+    byteSize: asset.byteSize ?? undefined,
+    contentSha256: asset.contentSha256 ?? undefined,
     cloud:
       (asset.cloudProvider === "cos" || asset.cloudProvider === "s3") && (asset.cloudStatus === "uploaded" || asset.cloudStatus === "failed")
         ? {

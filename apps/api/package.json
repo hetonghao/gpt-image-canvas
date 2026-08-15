@@ -13,6 +13,8 @@
     "smoke:image-provider-ai-cove-error": "tsx src/smoke/image-provider-ai-cove-error.smoke.ts",
     "smoke:executor": "tsx src/smoke/agent-executor-smoke.ts",
     "smoke:planner": "tsx src/smoke/agent-planner-smoke.ts",
+    "migrate:excalidraw": "tsx src/migration/cli.ts",
+    "smoke:migration": "tsx src/smoke/offline-migration.smoke.ts",
     "typecheck": "pnpm --filter @gpt-image-canvas/shared build && tsc -p tsconfig.json --noEmit",
     "start": "node dist/index.js"
   },

@@ -12,30 +12,10 @@
   background: var(--canvas-paper);
 }
 
-[data-testid="canvas-shell"] .tl-theme__light,
-[data-testid="canvas-shell"] .tl-theme__dark {
-  --tl-color-background: var(--canvas-paper);
-  --tl-color-grid: var(--canvas-paper-grid);
-}
-
-[data-testid="canvas-shell"] .canvas-snap-indicator .tl-snap-indicator {
-  stroke: var(--focus);
-  stroke-linecap: round;
-  stroke-width: 1.4;
-  filter: drop-shadow(0 0 2px rgb(255 253 248 / 0.88));
-}
-
-[data-testid="canvas-shell"] .canvas-snap-indicator .tl-snap-point {
-  stroke: var(--accent-dark);
-}
-
-.app-root[data-canvas-theme="dark"] [data-testid="canvas-shell"] .canvas-snap-indicator .tl-snap-indicator {
-  stroke: #5eead4;
-  filter: drop-shadow(0 0 3px rgb(15 17 20 / 0.82));
-}
-
-.app-root[data-canvas-theme="dark"] [data-testid="canvas-shell"] .canvas-snap-indicator .tl-snap-point {
-  stroke: #f5a46f;
+[data-testid="canvas-shell"] .excalidraw {
+  --color-surface-lowest: var(--canvas-paper);
+  --color-surface-low: var(--paper-soft);
+  --color-primary: var(--focus);
 }
 
 .ai-panel {

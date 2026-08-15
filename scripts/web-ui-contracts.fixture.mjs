@@ -35,57 +35,58 @@ function projectFixture() {
     id: "default",
     name: "Browser Contract Fixture",
     snapshot: {
-      document: {
-        store: {
-          "document:document": { gridSize: 10, name: "", meta: {}, id: "document:document", typeName: "document" },
-          "page:page": { meta: {}, id: "page:page", name: "页面 1", index: "a1", typeName: "page" },
-          "asset:fixture": {
-            id: "asset:fixture",
-            type: "image",
-            typeName: "asset",
-            props: { name: "fixture.png", src: "/api/assets/canvas-asset", w: 128, h: 128, fileSize: transparentPng.length, mimeType: "image/png", isAnimated: false },
-            meta: { localAssetId: "canvas-asset" }
-          },
-          "shape:fixture": {
-            x: 320,
-            y: 280,
-            rotation: 0,
-            isLocked: false,
-            opacity: 1,
-            meta: {},
-            id: "shape:fixture",
-            type: "image",
-            props: { w: 128, h: 128, assetId: "asset:fixture", playing: true, url: "", crop: null, flipX: false, flipY: false, altText: "" },
-            parentId: "page:page",
-            index: "a1",
-            typeName: "shape"
-          }
-        },
-        schema: {
-          schemaVersion: 2,
-          sequences: {
-            "com.tldraw.store": 5, "com.tldraw.asset": 1, "com.tldraw.camera": 1, "com.tldraw.document": 2,
-            "com.tldraw.instance": 26, "com.tldraw.instance_page_state": 5, "com.tldraw.page": 1,
-            "com.tldraw.instance_presence": 6, "com.tldraw.pointer": 1, "com.tldraw.shape": 4,
-            "com.tldraw.asset.bookmark": 2, "com.tldraw.asset.image": 6, "com.tldraw.asset.video": 5,
-            "com.tldraw.shape.group": 0, "com.tldraw.shape.text": 4, "com.tldraw.shape.bookmark": 2,
-            "com.tldraw.shape.draw": 4, "com.tldraw.shape.geo": 11, "com.tldraw.shape.note": 10,
-            "com.tldraw.shape.line": 5, "com.tldraw.shape.frame": 1, "com.tldraw.shape.arrow": 8,
-            "com.tldraw.shape.highlight": 3, "com.tldraw.shape.embed": 4, "com.tldraw.shape.image": 5,
-            "com.tldraw.shape.video": 4, "com.tldraw.shape.generation-placeholder": 0,
-            "com.tldraw.shape.agent-plan-node": 0, "com.tldraw.binding.arrow": 1
-          }
+      format: "ai-cove-excalidraw",
+      version: 1,
+      scene: {
+        elements: [{
+          id: "image-fixture",
+          type: "image",
+          x: 320,
+          y: 280,
+          width: 128,
+          height: 128,
+          angle: 0,
+          strokeColor: "transparent",
+          backgroundColor: "transparent",
+          fillStyle: "solid",
+          strokeWidth: 1,
+          strokeStyle: "solid",
+          roughness: 0,
+          opacity: 100,
+          groupIds: [],
+          frameId: null,
+          index: "a0",
+          roundness: null,
+          seed: 1966142085,
+          version: 1,
+          versionNonce: 1511457909,
+          isDeleted: false,
+          boundElements: null,
+          updated: 1752451200000,
+          link: null,
+          locked: false,
+          fileId: "file-fixture",
+          status: "saved",
+          scale: [1, 1],
+          crop: null
+        }],
+        appState: {
+          gridSize: null,
+          selectedElementIds: { "image-fixture": true },
+          theme: "light",
+          viewBackgroundColor: "#f8f6f1"
         }
       },
-      session: {
-        version: 0,
-        currentPageId: "page:page",
-        exportBackground: true,
-        isFocusMode: false,
-        isDebugMode: false,
-        isToolLocked: false,
-        isGridMode: false,
-        pageStates: [{ pageId: "page:page", camera: { x: 0, y: 0, z: 1 }, selectedShapeIds: ["shape:fixture"], focusedGroupId: null }]
+      assets: {
+        "file-fixture": {
+          assetId: "canvas-asset",
+          fileName: "fixture.png",
+          mimeType: "image/png",
+          width: 1,
+          height: 1,
+          byteSize: transparentPng.length,
+          contentSha256: "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
+        }
       }
     },
     history: [],
@@ -135,6 +136,7 @@ function favoriteFixture(sourceId, userId) {
 
 export function createBrowserFixture() {
   const state = {
+    canvasAuthFailure: false,
     canvasReady: false,
     favoriteFailure: false,
     favoriteMutationDelayMs: 0,
@@ -243,6 +245,20 @@ export function createBrowserFixture() {
     if (/^\/api\/assets\/(canvas|gallery)-asset\/preview$/u.test(url.pathname) && method === "GET") {
       const ready = url.pathname.includes("canvas") ? state.canvasReady : state.galleryReady;
       return ready ? route.fulfill({ body: transparentPng, contentType: "image/png", status: 200 }) : json(route, { code: "not_found", message: "Fixture asset unavailable." }, 404);
+    }
+    if (url.pathname === "/api/assets/canvas-asset/metadata" && method === "GET") {
+      if (state.canvasAuthFailure) {
+        return json(route, { code: "unauthorized", message: "Fixture canvas session expired." }, 401);
+      }
+      return json(route, {
+        assetId: "canvas-asset",
+        fileName: "fixture.png",
+        mimeType: "image/png",
+        width: 1,
+        height: 1,
+        byteSize: transparentPng.length,
+        contentSha256: "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
+      });
     }
     if (/^\/fixture\/pool-image\/\d+\.png$/u.test(url.pathname) && method === "GET") {
       state.poolImageRequests.push(url.pathname);

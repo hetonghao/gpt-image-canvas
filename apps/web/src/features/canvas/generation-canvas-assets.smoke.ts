@@ -1,74 +1,77 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import test from "node:test";
+import type { CanvasAssetReference } from "@gpt-image-canvas/shared";
+import type { CanvasImageShape } from "./canvas-editor";
+import { assetFromReference, fetchAssetFile } from "./excalidraw-asset-io";
+import { shapeSkeleton } from "./excalidraw-shapes";
 
-const currentDir = path.dirname(fileURLToPath(import.meta.url));
-const source = await readFile(path.join(currentDir, "CanvasApp.tsx"), "utf8");
+test("hydrates and inserts a generated asset as a displayable Excalidraw image", async () => {
+  // Given: a generated asset is available through the authenticated asset endpoint.
+  const platformAssetId = "generated-asset";
+  const fileId = "generated-file";
+  const bytes = new TextEncoder().encode("generated-image-bytes");
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const contentSha256 = Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, "0")
+  ).join("");
+  const reference = {
+    assetId: platformAssetId,
+    fileName: "generated.png",
+    mimeType: "image/png",
+    width: 64,
+    height: 48,
+    byteSize: bytes.byteLength,
+    contentSha256
+  } satisfies CanvasAssetReference;
 
-assert.match(
-  source,
-  /const GENERATED_ASSET_INITIAL_PREVIEW_WIDTH: AssetPreviewWidth = 1024;/u,
-  "generated images should start with the same 1K preview size that gallery cards already prove reliable"
-);
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL) => {
+      assert.equal(String(input), `/api/assets/${platformAssetId}`);
+      return new Response(bytes, { status: 200, headers: { "Content-Type": reference.mimeType } });
+    }
+  });
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    value: async () => ({ width: reference.width, height: reference.height, close: () => undefined })
+  });
+  Object.defineProperty(globalThis, "FileReader", {
+    configurable: true,
+    value: class {
+      result: string | null = null;
+      onerror: (() => void) | null = null;
+      onload: (() => void) | null = null;
 
-assert.match(
-  source,
-  /function generatedCanvasDisplayUrl\(asset: Pick<GeneratedAsset, "id">\): string \{[\s\S]*return assetPreviewUrl\(asset\.id, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH\);[\s\S]*\}/u,
-  "generated canvas images should use one helper for their display preview URL"
-);
-
-const createImageAssetBody = functionBody("createImageAsset");
-const createImageShapeBody = functionBody("createImageShape");
-const preloadGeneratedAssetPreviewBody = functionBody("preloadGeneratedAssetPreview");
-const resolveCanvasAssetUrlBody = functionBody("resolveCanvasAssetUrl");
-
-assert.match(createImageAssetBody, /const displayUrl = generatedCanvasDisplayUrl\(asset\);/u, "tldraw assets should derive src from the display preview helper");
-assert.match(createImageAssetBody, /src: displayUrl/u, "tldraw asset fallback src should be the generated preview URL");
-assert.match(createImageAssetBody, /originalUrl: generatedCanvasOriginalUrl\(asset\)/u, "generated assets should retain their original URL for original-resolution operations");
-assert.doesNotMatch(createImageAssetBody, /src:\s*normalizeAssetUrl\(asset\.url\)/u, "generated asset display src should not use the raw asset URL directly");
-
-assert.match(createImageShapeBody, /url: generatedCanvasOriginalUrl\(asset\)/u, "shape link URL should keep opening the original generated asset");
-assert.doesNotMatch(createImageShapeBody, /url:\s*normalizeAssetUrl\(asset\.url\)/u, "createImageShape should use the shared original URL helper");
-
-assert.match(
-  preloadGeneratedAssetPreviewBody,
-  /preloadImageUrl\(generatedCanvasDisplayUrl\(asset\), signal\)/u,
-  "preload and canvas rendering should target the same generated image display URL"
-);
-
-assert.match(
-  resolveCanvasAssetUrlBody,
-  /if \(context\.shouldResolveToOriginal\) \{[\s\S]*return getOriginalAssetUrl\(asset\) \?\? sourceUrl;[\s\S]*\}/u,
-  "original-resolution resolution should use the stored original URL instead of the preview fallback"
-);
-assert.match(
-  resolveCanvasAssetUrlBody,
-  /return resolveReadableCanvasAssetPreview\(localAssetId, assetPreviewUrl\(localAssetId, previewWidth\)\);/u,
-  "canvas previews should verify readability before tldraw renders them"
-);
-
-process.stdout.write("generation-canvas-assets.smoke.ts passed\n");
-
-function functionBody(functionName: string): string {
-  const signatureIndex = source.indexOf(`function ${functionName}`);
-  assert.notEqual(signatureIndex, -1, `${functionName} should exist`);
-
-  const openBraceIndex = source.indexOf("{\n", signatureIndex);
-  assert.notEqual(openBraceIndex, -1, `${functionName} should have a body`);
-
-  let depth = 0;
-  for (let index = openBraceIndex; index < source.length; index += 1) {
-    const char = source[index];
-    if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return source.slice(openBraceIndex, index + 1);
+      readAsDataURL(_blob: Blob): void {
+        this.result = "data:image/png;base64,Z2VuZXJhdGVkLWltYWdlLWJ5dGVz";
+        this.onload?.();
       }
     }
-  }
+  });
 
-  assert.fail(`${functionName} body should close`);
-}
+  // When: the canvas creates the Excalidraw image skeleton and hydrates its linked file.
+  const skeleton = shapeSkeleton<CanvasImageShape>({
+    id: "generated-shape",
+    type: "image",
+    x: 12,
+    y: 34,
+    props: { assetId: fileId, w: reference.width, h: reference.height, altText: "generated result" }
+  })[0];
+  assert.ok(skeleton);
+  assert.equal(skeleton.type, "image");
+  if (skeleton.type !== "image" || !skeleton.fileId) assert.fail("Excalidraw image should reference a file");
+  const file = await fetchAssetFile(reference, skeleton.fileId);
+  const asset = assetFromReference(skeleton.fileId, reference);
+
+  // Then: Excalidraw can display the hydrated file through the same id used by the inserted image.
+  assert.equal(skeleton.status, "saved");
+  assert.equal(skeleton.fileId, file.id);
+  assert.match(file.dataURL, /^data:image\/png;base64,/u);
+  assert.equal(asset.id, skeleton.fileId);
+  assert.equal(asset.props.src, `/api/assets/${platformAssetId}`);
+  assert.equal(asset.props.w, reference.width);
+  assert.equal(asset.props.h, reference.height);
+  assert.equal(asset.meta.localAssetId, platformAssetId);
+  assert.equal(asset.meta.originalUrl, `/api/assets/${platformAssetId}`);
+});

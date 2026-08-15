@@ -11,11 +11,11 @@ test("keeps the mounted canvas alive while a host-session recheck is blocked", (
   assert.match(
     canvasSource,
     /const hasMountedEditor = editorHasMountedRef\.current;\s+const shouldBlockCanvasForHostSession = isHostSessionBlocked && !hasMountedEditor;\s+const shouldShowHostSessionRecovery = isHostSessionBlocked && hasMountedEditor;/u,
-    "Host-session errors after Tldraw mounts must not unmount the editor"
+    "Host-session errors after the editor mounts must not unmount the canvas"
   );
   assert.match(
     canvasSource,
-    /\{shouldBlockCanvasForHostSession \? <div role="alert">\{hostSessionErrorPanel\}<\/div> : isProjectLoaded \?/u,
+    /\{route !== "canvas" \? null : shouldBlockCanvasForHostSession \? <div role="alert">\{hostSessionErrorPanel\}<\/div> : isProjectLoaded \?/u,
     "The initial host-session block should remain separate from the mounted-editor path"
   );
   assert.match(
@@ -40,7 +40,7 @@ test("keeps the mounted editor callback stable during host-session recovery", ()
   assert.doesNotMatch(
     canvasSource,
     /\}, \[isHostSessionBlocked, locale, saveProjectSnapshot, t\]\);/u,
-    "A host-session recheck must not replace the Tldraw onMount callback"
+    "A host-session recheck must not replace the mounted-editor callback"
   );
 });
 
@@ -53,7 +53,7 @@ test("keeps the canvas mounted when editor cleanup races a host-session failure"
   assert.match(
     canvasSource,
     /editorHasMountedRef\.current = true;/u,
-    "Tldraw mount must preserve the recovery boundary"
+    "Canvas editor mount must preserve the recovery boundary"
   );
   assert.match(
     canvasSource,

@@ -24,6 +24,8 @@ export const assets = sqliteTable(
     mimeType: text("mime_type").notNull(),
     width: integer("width").notNull(),
     height: integer("height").notNull(),
+    byteSize: integer("byte_size"),
+    contentSha256: text("content_sha256"),
     cloudProvider: text("cloud_provider"),
     cloudBucket: text("cloud_bucket"),
     cloudRegion: text("cloud_region"),
@@ -37,7 +39,10 @@ export const assets = sqliteTable(
     cloudForcePathStyle: integer("cloud_force_path_style"),
     createdAt: text("created_at").notNull()
   },
-  (table) => [index("assets_user_id_idx").on(table.userId)]
+  (table) => [
+    index("assets_user_id_idx").on(table.userId),
+    uniqueIndex("assets_user_content_sha256_idx").on(table.userId, table.contentSha256)
+  ]
 );
 
 export const storageConfigs = sqliteTable(

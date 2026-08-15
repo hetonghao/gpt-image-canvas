@@ -2,7 +2,7 @@
 
 ## The Canvas Is The Product
 
-The primary surface is the working tldraw canvas. Navigation, provider state, Agent controls, history, and Gallery should support the canvas rather than compete with it.
+The primary surface is the working Excalidraw canvas. Navigation, provider state, Agent controls, history, and Gallery should support the canvas rather than compete with it.
 
 ## Local Control Builds Trust
 
@@ -19,4 +19,3 @@ Generated outputs are not decorative samples. The UI should make them easy to pl
 ## Quiet Tools Beat Loud Decoration
 
 The app should feel focused, warm, and professional. Use visual polish to improve scanning and feedback, not to decorate empty space.
-

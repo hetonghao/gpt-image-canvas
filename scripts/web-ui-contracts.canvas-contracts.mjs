@@ -10,31 +10,152 @@ async function visiblePanelControl(page, testId) {
   return control;
 }
 
-function waitForPreview(page, assetId) {
-  return page.waitForResponse((response) => new URL(response.url()).pathname === `/api/assets/${assetId}/preview`);
+function waitForAsset(page, assetId) {
+  return page.waitForResponse((response) => new URL(response.url()).pathname === `/api/assets/${assetId}`);
 }
 
 function viewportTargetSize(viewport) {
   return viewport.width <= 768 ? 44 : 40;
 }
 
+function boxesOverlap(left, right) {
+  return left.x < right.x + right.width
+    && left.x + left.width > right.x
+    && left.y < right.y + right.height
+    && left.y + left.height > right.y;
+}
+
+async function requireBox(locator, message) {
+  const box = await locator.boundingBox();
+  assert.ok(box, message);
+  return box;
+}
+
+async function assertNoOverlap(left, right, message) {
+  const [leftBox, rightBox] = await Promise.all([
+    requireBox(left, `${message}: first surface is visible`),
+    requireBox(right, `${message}: second surface is visible`)
+  ]);
+  assert.equal(boxesOverlap(leftBox, rightBox), false, message);
+}
+
+async function canvasImageCenter(page, viewport) {
+  if (viewport.width <= 768) {
+    const trigger = page.getByTestId("open-ai-panel");
+    if (await trigger.getAttribute("aria-expanded") === "true") {
+      await page.locator(".ai-panel-close").click();
+      await page.waitForFunction(() => document.querySelector('[data-testid="open-ai-panel"]')?.getAttribute("aria-expanded") === "false");
+    }
+  }
+  const shell = await page.getByTestId("canvas-shell").boundingBox();
+  assert.ok(shell, "Canvas shell exposes an interaction surface");
+  return { x: shell.x + shell.width / 2, y: shell.y + shell.height / 2 };
+}
+
+async function regionBounds(page) {
+  const value = await page.getByTestId("region-selection").locator("polygon").getAttribute("points");
+  assert.ok(value, "Region selection exposes its polygon geometry");
+  const points = value.trim().split(/\s+/u).map((point) => point.split(",").map(Number));
+  const xs = points.map(([x]) => x);
+  const ys = points.map(([, y]) => y);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  const right = Math.max(...xs);
+  const bottom = Math.max(...ys);
+  return { left, top, width: right - left, height: bottom - top };
+}
+
 export async function runCanvasContracts({ baseUrl, fixture, page, viewport }) {
   fixture.state.canvasReady = false;
   const targetSize = viewportTargetSize(viewport);
   await page.goto(`${baseUrl}/?ui_mode=embedded`);
+  await page.getByTestId("excalidraw-canvas").waitFor();
   const canvasAssetAlert = page.getByTestId("canvas-asset-unavailable");
   await canvasAssetAlert.waitFor();
   assert.match(await canvasAssetAlert.innerText(), /画布图片不可用/u, "Canvas uses the shared unavailable asset state");
   const canvasRetry = canvasAssetAlert.getByRole("button", { name: "重新检查" });
   assert.ok((await canvasRetry.boundingBox())?.height >= targetSize, "Canvas retry keeps the viewport target size");
-  const canvasFailedRetry = waitForPreview(page, "canvas-asset");
-  await canvasRetry.click();
+  const exportControls = page.getByTestId("canvas-export-controls");
+  await exportControls.waitFor();
+  const blockedExport = page.getByTestId("canvas-export-png");
+  assert.ok((await blockedExport.boundingBox())?.height >= targetSize, "Canvas export keeps the viewport target size");
+  await blockedExport.click();
+  const exportError = exportControls.getByRole("alert");
+  assert.match(
+    await exportError.innerText(),
+    /图片尚未完整恢复/u,
+    "Canvas export blocks incomplete assets with a typed recovery state"
+  );
+  const excalidrawToolbar = page.locator(".excalidraw .App-toolbar").first();
+  await assertNoOverlap(canvasAssetAlert, excalidrawToolbar, "Canvas asset warning clears the Excalidraw toolbar");
+  await assertNoOverlap(exportControls, excalidrawToolbar, "Canvas export controls clear the Excalidraw toolbar");
+  await assertNoOverlap(exportError, canvasAssetAlert, "Canvas export error and asset warning remain legible");
+  if (viewport.width <= 768) {
+    const favoriteTrigger = page.getByTestId("prompt-favorites-trigger");
+    const primaryAction = page.getByTestId("open-ai-panel");
+    assert.equal((await primaryAction.innerText()).trim(), "生成到画布", "Recovered canvas keeps the complete primary action label");
+    assert.equal(await primaryAction.evaluate((element) => element.scrollWidth <= element.clientWidth), true, "Recovered canvas primary action does not clip");
+    for (const [left, right, message] of [
+      [exportControls, favoriteTrigger, "Canvas export controls clear prompt favorites"],
+      [exportError, favoriteTrigger, "Canvas export error clears prompt favorites"],
+      [exportControls, primaryAction, "Canvas export controls clear the primary action"],
+      [exportError, primaryAction, "Canvas export error clears the primary action"],
+      [favoriteTrigger, primaryAction, "Prompt favorites clear the primary action"]
+    ]) await assertNoOverlap(left, right, message);
+
+    const shellBox = await requireBox(page.getByTestId("canvas-shell"), "Canvas shell exposes mobile control geometry");
+    const excalidrawTargets = page.locator(".excalidraw label.ToolIcon, .excalidraw button");
+    for (const target of await excalidrawTargets.all()) {
+      if (!await target.isVisible()) continue;
+      const box = await target.boundingBox();
+      if (!box) continue;
+      if (box.y < shellBox.y + 220) {
+        assert.ok(box.width >= 44 && box.height >= 44, "Excalidraw top and right controls keep 44px pointer targets");
+      }
+      if (box.y > shellBox.y + shellBox.height - 100) {
+        for (const overlay of [exportControls, exportError, favoriteTrigger, primaryAction]) {
+          const overlayBox = await requireBox(overlay, "Canvas mobile overlay exposes geometry");
+          assert.equal(boxesOverlap(box, overlayBox), false, "Canvas overlays reserve the Excalidraw bottom controls");
+        }
+      }
+    }
+  }
+  const canvasFailedRetry = waitForAsset(page, "canvas-asset");
+  await exportControls.getByRole("button", { name: "重试资源" }).click();
   assert.equal((await canvasFailedRetry).status(), 404, "Canvas retry observes the failed preview response");
+  assert.equal(await page.getByTestId("excalidraw-canvas").isVisible(), true, "A single missing asset stays isolated inside the mounted canvas");
+
+  await blockedExport.click();
+  fixture.state.canvasAuthFailure = true;
+  const authenticationFailure = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/assets/canvas-asset/metadata"
+  );
+  await exportControls.getByRole("button", { name: "重试资源" }).click();
+  assert.equal((await authenticationFailure).status(), 401, "Mounted asset retry observes the authentication failure");
+  const blockingError = page.getByTestId("canvas-startup-state");
+  await blockingError.waitFor();
+  assert.equal(await blockingError.getAttribute("data-stage"), "error", "Authentication failure becomes a blocking canvas error");
+  assert.equal(await page.getByTestId("excalidraw-canvas").count(), 0, "Blocking canvas error unmounts the editor surface");
+  assert.match(await blockingError.innerText(), /AI Cove 会话已失效/u, "Blocking canvas error explains the expired session");
+  const startupRetry = blockingError.getByRole("button", { name: "重试" });
+  const leaveCanvas = blockingError.getByRole("link", { name: "返回首页" });
+  assert.ok((await startupRetry.boundingBox())?.height >= targetSize, "Blocking canvas retry keeps the viewport target size");
+  assert.ok((await leaveCanvas.boundingBox())?.height >= targetSize, "Blocking canvas leave action keeps the viewport target size");
+  assert.equal(await leaveCanvas.getAttribute("href"), "/", "Blocking canvas error exposes the existing home route");
+
+  fixture.state.canvasAuthFailure = false;
   fixture.state.canvasReady = true;
-  const canvasRecoveredRetry = waitForPreview(page, "canvas-asset");
-  await canvasRetry.click();
-  assert.equal((await canvasRecoveredRetry).ok(), true, "Canvas retry observes the recovered preview response");
+  const canvasRecoveredRetry = waitForAsset(page, "canvas-asset");
+  await startupRetry.click();
+  assert.equal((await canvasRecoveredRetry).ok(), true, "Blocking canvas retry rehydrates the recovered asset");
+  await page.getByTestId("excalidraw-canvas").waitFor();
   await canvasAssetAlert.waitFor({ state: "hidden" });
+  for (const [format, fileName] of [["excalidraw", "ai-cove-canvas.excalidraw"], ["png", "ai-cove-canvas.png"], ["svg", "ai-cove-canvas.svg"]]) {
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByTestId(`canvas-export-${format}`).click();
+    const download = await downloadPromise;
+    assert.equal(download.suggestedFilename(), fileName, `Canvas ${format} export uses the expected file name`);
+  }
 
   const providerTrigger = page.getByTestId("global-provider-settings");
   await providerTrigger.click();
@@ -147,6 +268,8 @@ export async function runCanvasContracts({ baseUrl, fixture, page, viewport }) {
   await page.keyboard.press("Escape");
   await providerDialog.waitFor({ state: "hidden" });
 
+  const imageCenter = await canvasImageCenter(page, viewport);
+  await page.mouse.click(imageCenter.x, imageCenter.y);
   await page.evaluate(() => {
     window.__referenceOriginalDecode = HTMLImageElement.prototype.decode;
     HTMLImageElement.prototype.decode = function decodeFixtureImage() {
@@ -166,7 +289,46 @@ export async function runCanvasContracts({ baseUrl, fixture, page, viewport }) {
   });
   await referenceState.getByRole("button", { name: "重新检查" }).click();
   await page.waitForFunction(() => document.querySelector('[data-testid="reference-state"]')?.getAttribute("data-reference-state") === "ready");
-  await page.getByTestId("mode-text").click();
+
+  await page.getByTestId("region-mode-manual").click();
+  const regionCenter = await canvasImageCenter(page, viewport);
+  assert.equal(
+    await page.getByText(/Double click the image or press Enter to crop the image/iu).isVisible(),
+    false,
+    "zh-CN region mode suppresses the untranslated Excalidraw crop hint"
+  );
+  await page.mouse.click(regionCenter.x, regionCenter.y);
+  await page.getByTestId("manual-region-popover").waitFor();
+  const clickRegion = await regionBounds(page);
+  assert.ok(clickRegion.width > 0 && clickRegion.height > 0, "Region click creates a visible default rectangle");
+
+  await page.mouse.move(clickRegion.left + clickRegion.width / 2, clickRegion.top + clickRegion.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(clickRegion.left + clickRegion.width / 2 - 12, clickRegion.top + clickRegion.height / 2 - 10);
+  await page.mouse.up();
+  const movedRegion = await regionBounds(page);
+  assert.ok(movedRegion.left < clickRegion.left && movedRegion.top < clickRegion.top, "Region rectangle moves through direct manipulation");
+  assert.ok(Math.abs(movedRegion.width - clickRegion.width) < 1 && Math.abs(movedRegion.height - clickRegion.height) < 1, "Moving preserves the region size");
+
+  const northwestHandle = await page.getByTestId("region-selection-resize-nw").locator(".region-selection-handle__dot").boundingBox();
+  assert.ok(northwestHandle, "Region exposes the northwest resize handle");
+  await page.mouse.move(northwestHandle.x + northwestHandle.width / 2, northwestHandle.y + northwestHandle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(northwestHandle.x + northwestHandle.width / 2 - 12, northwestHandle.y + northwestHandle.height / 2 - 10);
+  await page.mouse.up();
+  const resizedRegion = await regionBounds(page);
+  assert.ok(resizedRegion.width > movedRegion.width && resizedRegion.height > movedRegion.height, "Region corner resize changes both dimensions");
+  await page.getByTestId("manual-region-popover").getByRole("button", { name: "取消" }).click();
+
+  await page.mouse.move(regionCenter.x - 36, regionCenter.y - 24);
+  await page.mouse.down();
+  await page.mouse.move(regionCenter.x + 36, regionCenter.y + 24);
+  await page.mouse.up();
+  await page.getByTestId("manual-region-popover").waitFor();
+  const dragRegion = await regionBounds(page);
+  assert.ok(dragRegion.width > clickRegion.width && dragRegion.height > clickRegion.height, "Region drag creates the explicit dragged rectangle");
+  await page.getByTestId("manual-region-popover").getByRole("button", { name: "取消" }).click();
+  await (await visiblePanelControl(page, "mode-text")).click();
 
   await page.evaluate(() => {
     window.__agentOriginalDecode = HTMLImageElement.prototype.decode;

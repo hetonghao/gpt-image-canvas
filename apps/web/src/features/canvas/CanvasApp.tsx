@@ -36,52 +36,32 @@ import {
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
-  DefaultSnapIndicator,
-  Tldraw,
-  type Editor,
-  type TLAsset,
-  type TLAssetContext,
-  type TLAssetId,
-  type TLAssetStore,
-  type TLEditorSnapshot,
-  type TLImageShape,
-  type TLShapePartial,
-  type TLShapeId,
-  type TLStoreSnapshot,
-  type TLComponents,
-  type TldrawOptions,
-  type TLUserPreferences,
-  type TLSnapIndicatorProps,
-  useIsDarkMode,
-  useEditor,
-  useTldrawUser,
-  useValue
-} from "tldraw";
-import {
   GENERATION_PLACEHOLDER_MOTION_CHANGE_EVENT,
   GENERATION_PLACEHOLDER_MOTION_QUIET_CLASS,
   GENERATION_PLACEHOLDER_TYPE,
-  GenerationPlaceholderShapeUtil,
   type GenerationPlaceholderShape
 } from "./GenerationPlaceholderShape";
 import {
-  AGENT_PLAN_NODE_TYPE,
-  AgentPlanNodeShapeUtil,
   hasFailedPlanJob,
   isAgentPlanNodeShape,
   isGenerationPlan,
   summarizeGenerationPlanOutputs
 } from "../agent/AgentPlanNodeShape";
+import {
+  useCanvasEditor,
+  useCanvasEditorValue,
+  type CanvasAsset,
+  type CanvasAssetId,
+  type CanvasEditor,
+  type CanvasImageShape,
+  type CanvasShape,
+  type CanvasShapeId,
+  type CanvasShapePartial
+} from "./canvas-editor";
 import type { PromptRegionEditorHandle } from "./PromptRegionEditor";
 import { generationSubmitActionForProviderState, shouldAutoOpenProviderOnboarding } from "./provider-onboarding";
 import { acceptsAgentTerminalEvent } from "./agent-event-order";
-import {
-  releaseCanvasAssetPreviews,
-  retainCanvasAssetPreviews,
-  resolveReadableCanvasAssetPreview,
-  retryCanvasAssetPreviews,
-  subscribeCanvasAssetPreviews
-} from "./canvas-asset-resolver";
+import { subscribeCanvasAssetPreviews } from "./canvas-asset-resolver";
 import {
   initialRouteForCurrentRuntime,
   isAiCoveEmbeddedRuntime,
@@ -124,6 +104,7 @@ import {
   type CodexDevicePollResponse,
   type CodexDeviceStartResponse,
   type CodexLogoutResponse,
+  type ExcalidrawProjectSnapshot,
   type GalleryImageItem,
   type GenerationCount,
   type GenerationJob,
@@ -154,7 +135,8 @@ import {
   type StorageConfigResponse,
   type StorageTestResult,
   type SummaryLlmConfigView,
-  type StylePresetId
+  type StylePresetId,
+  validateExcalidrawProjectSnapshot
 } from "@gpt-image-canvas/shared";
 import { localizedApiErrorMessage, useI18n, type Locale, type Translate } from "../../shared/i18n";
 import { normalizeAssetUrl } from "../../shared/api/asset-url";
@@ -185,7 +167,6 @@ import magicWandAutoIconUrl from "../../assets/magic-wand-auto.png";
 import magicWandManualIconUrl from "../../assets/magic-wand-manual.png";
 import {
   createManualRegionPromptItem,
-  defaultRegionForPoint,
   finalRegionPromptForModel,
   insertRegionPromptDocumentTokenAtCursor,
   promptIncludesRegionItemToken,
@@ -204,6 +185,19 @@ import {
   type RegionSummaryAvailability
 } from "./region-prompt";
 import { referenceAssetIdsForRequest, shouldSendReferenceImages } from "./reference-request";
+import {
+  locateAgentPlanNode as locateAgentPlanNodeOnCanvas,
+  upsertAgentPlanNode
+} from "./agent-plan-canvas";
+import {
+  defaultRegionForImagePoint,
+  imageRegionPageCorners,
+  moveImageRegion,
+  normalizedImagePointFromPagePoint,
+  regionFromImageDrag,
+  resizeImageRegion,
+  type RegionResizeHandle
+} from "./region-geometry";
 
 const AUTOSAVE_DEBOUNCE_MS = 1200;
 const GENERATION_POLL_INTERVAL_MS = 1500;
@@ -227,13 +221,6 @@ const RESOLUTION_BADGE_MIN_SCALE = 0.52;
 const RESOLUTION_BADGE_SMALL_IMAGE_SIDE = 32;
 const RESOLUTION_BADGE_FULL_SIZE_IMAGE_SIDE = 220;
 const CANVAS_DEFAULT_SNAP_MODE = true;
-const shapeUtils = [GenerationPlaceholderShapeUtil, AgentPlanNodeShapeUtil];
-const tldrawOptions = {
-  debouncedZoomThreshold: 80
-} satisfies Partial<TldrawOptions>;
-const TLDRAW_LICENSE_KEY =
-  "tldraw-2026-08-08/WyJ3dGU4bldjRyIsWyIqIl0sMTYsIjIwMjYtMDgtMDgiXQ.Xt7lTydUhMnKfHfp+g8Mrs9gtJjlB8uPyYMniFEfRfruCYdYEl9J0uZl0lMAf6o7GdDB1zXOVhWLFAipssI6Cw";
-const TLDRAW_USER_ID = "gpt-image-canvas-local-user";
 type ProviderConfigTab = "image" | "agent";
 type ProviderConfigDialogMode = "default" | "onboarding";
 type MagicWandRegionIconVariant = "auto" | "manual";
@@ -268,23 +255,7 @@ function setGenerationPlaceholderMotionQuiet(isQuiet: boolean): void {
   }
 }
 
-function tldrawLocaleForLocale(locale: Locale): NonNullable<TLUserPreferences["locale"]> {
-  return locale === "zh-CN" ? "zh-cn" : "en";
-}
-
-function localeForTldrawLocale(locale: TLUserPreferences["locale"]): Locale | undefined {
-  if (locale === "zh-cn") {
-    return "zh-CN";
-  }
-
-  if (locale === "en") {
-    return "en";
-  }
-
-  return undefined;
-}
-
-function localizeDefaultPageName(editor: Editor, locale: Locale): void {
+function localizeDefaultPageName(editor: CanvasEditor, locale: Locale): void {
   if (locale !== "zh-CN") {
     return;
   }
@@ -374,53 +345,6 @@ const defaultStorageConfigForm: StorageConfigFormState = {
   }
 };
 
-const canvasAssetStore: TLAssetStore = {
-  async upload(_asset, file) {
-    return uploadCanvasAsset(file);
-  },
-  resolve(asset, context) {
-    return resolveCanvasAssetUrl(asset, context);
-  }
-};
-
-async function uploadCanvasAsset(file: File): Promise<{ src: string; meta: { localAssetId: string } }> {
-  const response = await apiFetch("/api/assets", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      dataUrl: await blobToDataUrl(file),
-      fileName: file.name
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(await readAssetUploadError(response));
-  }
-
-  const asset = (await response.json()) as GeneratedAsset;
-  return {
-    src: normalizeAssetUrl(asset.url),
-    meta: {
-      localAssetId: asset.id
-    }
-  };
-}
-
-async function readAssetUploadError(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { error?: { message?: unknown } };
-    if (typeof body.error?.message === "string" && body.error.message.trim()) {
-      return body.error.message;
-    }
-  } catch {
-    // Fall through to the generic upload error.
-  }
-
-  return `Asset upload failed (${response.status}).`;
-}
-
 const promptStarters = [
   {
     labelKey: "promptStarterProductLabel",
@@ -468,6 +392,7 @@ const LazyHomePage = lazy(() => import("../home/HomePage").then((module) => ({ d
 const LazyAgentSkillDialog = lazy(() => import("../agent/AgentSkillDialog").then((module) => ({ default: module.AgentSkillDialog })));
 const LazyProviderConfigDialog = lazy(() => import("../provider-config/ProviderConfigDialog").then((module) => ({ default: module.ProviderConfigDialog })));
 const LazyPromptRegionEditor = lazy(() => import("./PromptRegionEditor").then((module) => ({ default: module.PromptRegionEditor })));
+const LazyExcalidrawCanvas = lazy(() => import("./ExcalidrawCanvas").then((module) => ({ default: module.ExcalidrawCanvas })));
 
 function preloadGalleryPage(): void {
   void loadGalleryPageModule();
@@ -487,7 +412,7 @@ function preloadPromptPoolPage(): void {
   void loadPromptPoolPageModule();
 }
 
-type PersistedSnapshot = TLEditorSnapshot | TLStoreSnapshot;
+type PersistedSnapshot = ExcalidrawProjectSnapshot | null;
 type SaveStatus = "loading" | "saved" | "pending" | "saving" | "error";
 type GenerationMode = "text" | "reference";
 type PanelTab = "manual" | "agent";
@@ -518,7 +443,7 @@ interface AgentChatAssetPreview {
   jobId: string;
   outputId?: string;
   planId?: string;
-  shapeId?: TLShapeId;
+  shapeId?: CanvasShapeId;
   url: string;
 }
 
@@ -595,7 +520,7 @@ function agentChatMessagesFromConversation(messages: AgentConversationMessage[])
           jobId: preview.jobId,
           outputId: preview.outputId,
           planId: preview.planId,
-          shapeId: preview.shapeId as TLShapeId | undefined,
+          shapeId: preview.shapeId as CanvasShapeId | undefined,
           url: normalizeAssetUrl(preview.url)
         }))
       }
@@ -622,7 +547,7 @@ interface GenerationReferenceInput {
 }
 
 interface GenerationPlaceholderPlacement {
-  id: TLShapeId;
+  id: CanvasShapeId;
   x: number;
   y: number;
   width: number;
@@ -686,7 +611,7 @@ interface StorageSecretTouchedState {
 }
 
 interface ReferenceSelectionItem {
-  assetId: TLAssetId | null;
+  assetId: CanvasAssetId | null;
   localAssetId?: string;
   name: string;
   sourceUrl: string;
@@ -756,14 +681,24 @@ interface RegionFocusFrame {
   height: number;
 }
 
-interface ManualRegionDraft {
+interface RegionSelectionDraft {
   id: string;
   insertionIndex: number;
   reference: ReferenceSelectionItem;
+  imageShapeId: CanvasShapeId;
+  mode: Exclude<RegionAnnotationMode, "none">;
   region: NormalizedImageRegion;
   x: number;
   y: number;
   label: string;
+  isDrawing: boolean;
+}
+
+interface RegionCanvasDrag {
+  draftId: string;
+  imageShapeId: CanvasShapeId;
+  pointerId: number;
+  startPagePoint: { x: number; y: number };
 }
 
 function missingReferenceSelection(t: Translate): ReferenceSelection {
@@ -817,6 +752,8 @@ function generationValidationMessage(promptValue: string, widthValue: number, he
   return promptValue.trim() ? sizeValidationMessage(widthValue, heightValue, t, locale) : t("promptRequired");
 }
 
+class ProjectSnapshotValidationError extends Error {}
+
 function imageSizeValidationMessage(reason: ImageSizeValidationReason | undefined, t: Translate, locale: Locale): string {
   const numberFormat = new Intl.NumberFormat(locale);
 
@@ -840,10 +777,6 @@ function imageSizeValidationMessage(reason: ImageSizeValidationReason | undefine
     default:
       return t("imageSizeUnsupportedPreset");
   }
-}
-
-function isPersistedSnapshot(value: unknown): value is PersistedSnapshot {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isGenerationResponse(value: unknown): value is GenerationResponse {
@@ -900,61 +833,6 @@ function generationWarningMessage(record: GenerationRecord, insertedCount: numbe
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isLoadingGenerationPlaceholderRecord(value: unknown): boolean {
-  const props = isRecord(value) && isRecord(value.props) ? value.props : undefined;
-  const requestId = typeof props?.requestId === "string" ? props.requestId : "";
-
-  return (
-    isRecord(value) &&
-    value.typeName === "shape" &&
-    value.type === GENERATION_PLACEHOLDER_TYPE &&
-    props !== undefined &&
-    props.status === "loading" &&
-    (requestId.startsWith("agent-") || /^\d+$/u.test(requestId))
-  );
-}
-
-function isAgentPlanNodeSnapshotRecord(value: unknown): value is Record<string, unknown> {
-  return isRecord(value) && value.typeName === "shape" && value.type === AGENT_PLAN_NODE_TYPE;
-}
-
-function filterLoadingPlaceholdersFromStoreSnapshot<TSnapshot>(snapshot: TSnapshot): TSnapshot {
-  if (!isRecord(snapshot) || !isRecord(snapshot.store)) {
-    return snapshot;
-  }
-
-  let changed = false;
-  const nextStore: Record<string, unknown> = {};
-  for (const [id, record] of Object.entries(snapshot.store)) {
-    if (isLoadingGenerationPlaceholderRecord(record)) {
-      changed = true;
-      continue;
-    }
-
-    if (isAgentPlanNodeSnapshotRecord(record)) {
-      changed = true;
-      continue;
-    }
-
-    nextStore[id] = record;
-  }
-
-  return changed ? ({ ...snapshot, store: nextStore } as TSnapshot) : snapshot;
-}
-
-function filterLoadingPlaceholdersFromSnapshot<TSnapshot>(snapshot: TSnapshot): TSnapshot {
-  if (!isRecord(snapshot)) {
-    return snapshot;
-  }
-
-  if (isRecord(snapshot.document)) {
-    const document = filterLoadingPlaceholdersFromStoreSnapshot(snapshot.document);
-    return document === snapshot.document ? snapshot : ({ ...snapshot, document } as TSnapshot);
-  }
-
-  return filterLoadingPlaceholdersFromStoreSnapshot(snapshot);
 }
 
 function coerceStylePresetId(value: string): StylePresetId {
@@ -1084,7 +962,7 @@ function regionPromptReferenceFromSelection(reference: ReferenceSelectionItem): 
 
 function selectionReferenceFromRegionPrompt(reference: RegionPromptReference): ReferenceSelectionItem {
   return {
-    assetId: reference.assetId as TLAssetId | null,
+    assetId: reference.assetId as CanvasAssetId | null,
     localAssetId: reference.localAssetId,
     name: reference.name,
     sourceUrl: reference.sourceUrl,
@@ -1194,12 +1072,12 @@ function formatCreatedTime(value: string, formatDateTime: (value: string) => str
   return formatDateTime(value);
 }
 
-function createTldrawAssetId(assetId: string): TLAssetId {
-  return `asset:${assetId}` as TLAssetId;
+function createCanvasAssetId(): CanvasAssetId {
+  return `file-${crypto.randomUUID()}`;
 }
 
-function createTldrawShapeId(): TLShapeId {
-  return `shape:${crypto.randomUUID()}` as TLShapeId;
+function createCanvasShapeId(): CanvasShapeId {
+  return `shape-${crypto.randomUUID()}`;
 }
 
 function displaySize(size: ImageSize): { width: number; height: number } {
@@ -1210,7 +1088,7 @@ function displaySize(size: ImageSize): { width: number; height: number } {
   };
 }
 
-function createCenteredPlacements(editor: Editor, countValue: GenerationCount, size: ImageSize): GenerationPlaceholderPlacement[] {
+function createCenteredPlacements(editor: CanvasEditor, countValue: GenerationCount, size: ImageSize): GenerationPlaceholderPlacement[] {
   const placeholderSize = displaySize(size);
   const columns = countValue >= 8 ? 4 : countValue === 1 ? 1 : 2;
   const rows = Math.ceil(countValue / columns);
@@ -1228,7 +1106,7 @@ function createCenteredPlacements(editor: Editor, countValue: GenerationCount, s
     const row = Math.floor(index / columns);
 
     return {
-      id: createTldrawShapeId(),
+      id: createCanvasShapeId(),
       x: originX + column * (cellWidth + gap),
       y: originY + row * (cellHeight + gap),
       width: placeholderSize.width,
@@ -1240,7 +1118,7 @@ function createCenteredPlacements(editor: Editor, countValue: GenerationCount, s
 }
 
 function createGenerationPlaceholdersFromPlacements(
-  editor: Editor,
+  editor: CanvasEditor,
   placements: GenerationPlaceholderPlacement[],
   requestId: string,
   options: { selectPlaceholders?: boolean } = {}
@@ -1277,21 +1155,12 @@ function createGenerationPlaceholdersFromPlacements(
 }
 
 function createGenerationPlaceholders(
-  editor: Editor,
+  editor: CanvasEditor,
   input: GenerationSubmitInput,
   requestId: string,
   options: { selectPlaceholders?: boolean } = {}
 ): ActiveGenerationPlaceholders {
   return createGenerationPlaceholdersFromPlacements(editor, createCenteredPlacements(editor, input.count, input.size), requestId, options);
-}
-
-function deleteAgentPlanNodes(editor: Editor): number {
-  const planNodeIds = editor.getCurrentPageShapes().flatMap((shape) => (isAgentPlanNodeShape(shape) ? [shape.id] : []));
-  if (planNodeIds.length > 0) {
-    editor.deleteShapes(planNodeIds);
-  }
-
-  return planNodeIds.length;
 }
 
 function agentPlanOutputLayout(plan: GenerationPlan): AgentOutputPlacementLayout {
@@ -1311,7 +1180,7 @@ function agentPlanOutputLayout(plan: GenerationPlan): AgentOutputPlacementLayout
 }
 
 function agentOutputPlacementForSize(
-  editor: Editor,
+  editor: CanvasEditor,
   targetSize: ImageSize,
   index: number,
   layout?: AgentOutputPlacementLayout
@@ -1331,7 +1200,7 @@ function agentOutputPlacementForSize(
   const row = Math.floor(index / columns);
 
   return {
-    id: createTldrawShapeId(),
+    id: createCanvasShapeId(),
     x: baseX + column * (cellWidth + gap) + (cellWidth - size.width) / 2,
     y: baseY + row * (cellHeight + gap) + (cellHeight - size.height) / 2,
     width: size.width,
@@ -1342,7 +1211,7 @@ function agentOutputPlacementForSize(
 }
 
 function agentOutputPlacement(
-  editor: Editor,
+  editor: CanvasEditor,
   _planId: string | undefined,
   asset: GeneratedAsset,
   index: number
@@ -1361,7 +1230,7 @@ function isGenerationPlaceholderShape(shape: unknown): shape is GenerationPlaceh
   return isRecord(shape) && shape.type === GENERATION_PLACEHOLDER_TYPE;
 }
 
-function livePlacement(editor: Editor, placement: GenerationPlaceholderPlacement): GenerationPlaceholderPlacement {
+function livePlacement(editor: CanvasEditor, placement: GenerationPlaceholderPlacement): GenerationPlaceholderPlacement {
   const shape = editor.getShape(placement.id);
   if (!isGenerationPlaceholderShape(shape)) {
     return placement;
@@ -1384,7 +1253,7 @@ function generatedCanvasOriginalUrl(asset: Pick<GeneratedAsset, "url">): string 
   return normalizeAssetUrl(asset.url);
 }
 
-function createImageAsset(asset: GeneratedAsset): TLAsset {
+function createImageAsset(asset: GeneratedAsset, id: CanvasAssetId): CanvasAsset {
   initialCanvasPreviewWidths.set(asset.id, GENERATED_ASSET_INITIAL_PREVIEW_WIDTH);
   rememberAssetMetadata(asset.id, {
     width: asset.width,
@@ -1393,7 +1262,7 @@ function createImageAsset(asset: GeneratedAsset): TLAsset {
   const displayUrl = generatedCanvasDisplayUrl(asset);
 
   return {
-    id: createTldrawAssetId(asset.id),
+    id,
     typeName: "asset",
     type: "image",
     props: {
@@ -1406,20 +1275,25 @@ function createImageAsset(asset: GeneratedAsset): TLAsset {
     },
     meta: {
       localAssetId: asset.id,
-      originalUrl: generatedCanvasOriginalUrl(asset)
+      originalUrl: generatedCanvasOriginalUrl(asset),
+      byteSize: asset.byteSize,
+      contentSha256: asset.contentSha256
     }
   };
+}
+
+function existingCanvasAssetId(editor: CanvasEditor, platformAssetId: string): CanvasAssetId | undefined {
+  return editor.getAssets().find((asset) => asset.meta.localAssetId === platformAssetId)?.id;
 }
 
 function createImageShape(
   asset: GeneratedAsset,
   placement: GenerationPlaceholderPlacement,
-  promptValue: string
-): Partial<TLImageShape> & { id: TLShapeId; type: "image" } {
-  const assetId = createTldrawAssetId(asset.id);
-
+  promptValue: string,
+  assetId: CanvasAssetId
+): Partial<CanvasImageShape> & { id: CanvasShapeId; type: "image" } {
   return {
-    id: createTldrawShapeId(),
+    id: createCanvasShapeId(),
     type: "image",
     x: placement.x,
     y: placement.y,
@@ -1437,11 +1311,11 @@ function createImageShape(
   };
 }
 
-function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGenerationPlaceholders, record: GenerationRecord, t: Translate): number {
-  const assets: TLAsset[] = [];
-  const imageShapes: Array<Partial<TLImageShape> & { id: TLShapeId; type: "image" }> = [];
-  const replacedPlaceholderIds: TLShapeId[] = [];
-  const failedUpdates: Array<TLShapePartial<GenerationPlaceholderShape>> = [];
+function replaceGenerationPlaceholders(editor: CanvasEditor, placeholderSet: ActiveGenerationPlaceholders, record: GenerationRecord, t: Translate): number {
+  const assets: CanvasAsset[] = [];
+  const imageShapes: Array<Partial<CanvasImageShape> & { id: CanvasShapeId; type: "image" }> = [];
+  const replacedPlaceholderIds: CanvasShapeId[] = [];
+  const failedUpdates: Array<CanvasShapePartial<GenerationPlaceholderShape>> = [];
 
   placeholderSet.placements.forEach((placement, index) => {
     const placeholderShape = editor.getShape(placement.id);
@@ -1452,8 +1326,11 @@ function replaceGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGen
     const output = record.outputs[index];
     if (output?.status === "succeeded" && output.asset) {
       const resolvedPlacement = livePlacement(editor, placement);
-      assets.push(createImageAsset(output.asset));
-      imageShapes.push(createImageShape(output.asset, resolvedPlacement, record.prompt));
+      const assetId = existingCanvasAssetId(editor, output.asset.id) ?? createCanvasAssetId();
+      if (!editor.getAsset(assetId) && !assets.some((asset) => asset.id === assetId)) {
+        assets.push(createImageAsset(output.asset, assetId));
+      }
+      imageShapes.push(createImageShape(output.asset, resolvedPlacement, record.prompt, assetId));
       replacedPlaceholderIds.push(placement.id);
       return;
     }
@@ -1568,7 +1445,7 @@ function waitForGenerationPollInterval(signal: AbortSignal): Promise<void> {
   });
 }
 
-function markGenerationPlaceholdersFailed(editor: Editor, placeholderSet: ActiveGenerationPlaceholders, error: string): void {
+function markGenerationPlaceholdersFailed(editor: CanvasEditor, placeholderSet: ActiveGenerationPlaceholders, error: string): void {
   const updates = placeholderSet.placements.flatMap((placement) => {
     const shape = editor.getShape(placement.id);
     if (!isGenerationPlaceholderShape(shape) || shape.props.status !== "loading") {
@@ -1583,7 +1460,7 @@ function markGenerationPlaceholdersFailed(editor: Editor, placeholderSet: Active
           status: "failed",
           error
         }
-      } satisfies TLShapePartial<GenerationPlaceholderShape>
+      } satisfies CanvasShapePartial<GenerationPlaceholderShape>
     ];
   });
 
@@ -1592,7 +1469,7 @@ function markGenerationPlaceholdersFailed(editor: Editor, placeholderSet: Active
   }
 }
 
-function deleteLoadingGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGenerationPlaceholders): void {
+function deleteLoadingGenerationPlaceholders(editor: CanvasEditor, placeholderSet: ActiveGenerationPlaceholders): void {
   const loadingPlaceholderIds = placeholderSet.placements.flatMap((placement) => {
     const shape = editor.getShape(placement.id);
     return isGenerationPlaceholderShape(shape) && shape.props.status === "loading" ? [placement.id] : [];
@@ -1603,14 +1480,14 @@ function deleteLoadingGenerationPlaceholders(editor: Editor, placeholderSet: Act
   }
 }
 
-function hasLoadingGenerationPlaceholders(editor: Editor, placeholderSet: ActiveGenerationPlaceholders): boolean {
+function hasLoadingGenerationPlaceholders(editor: CanvasEditor, placeholderSet: ActiveGenerationPlaceholders): boolean {
   return placeholderSet.placements.some((placement) => {
     const shape = editor.getShape(placement.id);
     return isGenerationPlaceholderShape(shape) && shape.props.status === "loading";
   });
 }
 
-function firstLiveGenerationPlaceholder(editor: Editor, placeholderSet: ActiveGenerationPlaceholders): TLShapeId | undefined {
+function firstLiveGenerationPlaceholder(editor: CanvasEditor, placeholderSet: ActiveGenerationPlaceholders): CanvasShapeId | undefined {
   return placeholderSet.placements.find((placement) => isGenerationPlaceholderShape(editor.getShape(placement.id)))?.id;
 }
 
@@ -1622,7 +1499,7 @@ function isTerminalGenerationRecord(record: GenerationRecord): boolean {
   return record.status === "succeeded" || record.status === "partial" || record.status === "failed" || record.status === "cancelled";
 }
 
-function placeholderSetForGenerationRecord(editor: Editor, record: GenerationRecord): ActiveGenerationPlaceholders | undefined {
+function placeholderSetForGenerationRecord(editor: CanvasEditor, record: GenerationRecord): ActiveGenerationPlaceholders | undefined {
   const placements = editor
     .getCurrentPageShapes()
     .flatMap((shape) => {
@@ -1658,7 +1535,7 @@ function placeholderSetForGenerationRecord(editor: Editor, record: GenerationRec
     : undefined;
 }
 
-function resolveReferenceSelection(editor: Editor, t: Translate): ReferenceSelection {
+function resolveReferenceSelection(editor: CanvasEditor, t: Translate): ReferenceSelection {
   const selectedShapes = editor.getSelectedShapes();
 
   if (selectedShapes.length === 0) {
@@ -1681,7 +1558,7 @@ function resolveReferenceSelection(editor: Editor, t: Translate): ReferenceSelec
 
   const references: Array<ReferenceSelectionItem & { sortX: number; sortY: number }> = [];
   for (const shape of selectedShapes) {
-    const reference = referenceItemForImageShape(editor, shape as TLImageShape);
+    const reference = referenceItemForImageShape(editor, shape as CanvasImageShape);
     if (!reference) {
       return {
         status: "unreadable",
@@ -1711,10 +1588,10 @@ function resolveReferenceSelection(editor: Editor, t: Translate): ReferenceSelec
   };
 }
 
-function resolveAgentReferenceSelection(editor: Editor, t: Translate): AgentReferenceSelection {
+function resolveAgentReferenceSelection(editor: CanvasEditor, t: Translate): AgentReferenceSelection {
   const selectedShapes = editor.getSelectedShapes();
   const selectedImages = selectedShapes
-    .flatMap((shape) => (shape.type === "image" ? [shape as TLImageShape] : []))
+    .flatMap((shape) => (shape.type === "image" ? [shape as CanvasImageShape] : []))
     .map((imageShape) => ({
       imageShape,
       bounds: editor.getShapePageBounds(imageShape)
@@ -1826,16 +1703,16 @@ function areAgentReferenceSelectionsEqual(left: AgentReferenceSelection, right: 
   );
 }
 
-function getImageSourceUrl(shape: TLImageShape, asset: TLAsset | undefined): string | undefined {
+function getImageSourceUrl(shape: CanvasImageShape, asset: CanvasAsset | undefined): string | undefined {
   const assetSrc = asset?.type === "image" && typeof asset.props.src === "string" ? asset.props.src : undefined;
   return assetSrc || shape.props.url || undefined;
 }
 
-function getAssetMimeType(asset: TLAsset | undefined): string | undefined {
+function getAssetMimeType(asset: CanvasAsset | undefined): string | undefined {
   return asset?.type === "image" && typeof asset.props.mimeType === "string" ? asset.props.mimeType : undefined;
 }
 
-function isReadableReferenceSource(sourceUrl: string, asset: TLAsset | undefined): boolean {
+function isReadableReferenceSource(sourceUrl: string, asset: CanvasAsset | undefined): boolean {
   const assetMimeType = getAssetMimeType(asset);
   if (assetMimeType && !isSupportedReferenceImageType(assetMimeType)) {
     return false;
@@ -1857,7 +1734,7 @@ function isReadableReferenceSource(sourceUrl: string, asset: TLAsset | undefined
   }
 }
 
-function getReferenceName(asset: TLAsset | undefined, sourceUrl: string): string {
+function getReferenceName(asset: CanvasAsset | undefined, sourceUrl: string): string {
   if (asset?.type === "image" && asset.props.name) {
     return asset.props.name;
   }
@@ -1870,7 +1747,7 @@ function getReferenceName(asset: TLAsset | undefined, sourceUrl: string): string
   }
 }
 
-function getLocalAssetId(asset: TLAsset | undefined, sourceUrl?: string): string | undefined {
+function getLocalAssetId(asset: CanvasAsset | undefined, sourceUrl?: string): string | undefined {
   const localAssetId = asset?.meta && typeof asset.meta.localAssetId === "string" ? asset.meta.localAssetId : undefined;
   if (localAssetId) {
     return localAssetId;
@@ -1893,39 +1770,8 @@ function getLocalAssetId(asset: TLAsset | undefined, sourceUrl?: string): string
   return undefined;
 }
 
-function getOriginalAssetUrl(asset: TLAsset | undefined): string | undefined {
+function getOriginalAssetUrl(asset: CanvasAsset | undefined): string | undefined {
   return asset?.meta && typeof asset.meta.originalUrl === "string" ? asset.meta.originalUrl : undefined;
-}
-
-function resolveCanvasAssetUrl(asset: TLAsset, context: TLAssetContext): Promise<string> | string | null {
-  if (asset.type !== "image") {
-    return "src" in asset.props && typeof asset.props.src === "string" ? asset.props.src : null;
-  }
-
-  const sourceUrl = asset.props.src;
-  if (!sourceUrl) {
-    return null;
-  }
-  if (context.shouldResolveToOriginal) {
-    return getOriginalAssetUrl(asset) ?? sourceUrl;
-  }
-
-  const localAssetId = getLocalAssetId(asset, sourceUrl);
-  if (!localAssetId) {
-    return sourceUrl;
-  }
-
-  const previewWidth = Math.max(
-    previewWidthForAssetContext(asset, context),
-    initialCanvasPreviewWidths.get(localAssetId) ?? ASSET_PREVIEW_WIDTHS[0]
-  );
-  return resolveReadableCanvasAssetPreview(localAssetId, assetPreviewUrl(localAssetId, previewWidth));
-}
-
-function previewWidthForAssetContext(asset: Extract<TLAsset, { type: "image" }>, context: TLAssetContext): AssetPreviewWidth {
-  const dpr = Number.isFinite(context.dpr) && context.dpr > 0 ? context.dpr : window.devicePixelRatio || 1;
-  const requestedWidth = Math.max(1, Math.ceil(asset.props.w * context.screenScale * dpr));
-  return ASSET_PREVIEW_WIDTHS.find((widthValue) => widthValue >= requestedWidth) ?? ASSET_PREVIEW_WIDTHS[ASSET_PREVIEW_WIDTHS.length - 1];
 }
 
 interface CanvasResolutionBadgeTarget {
@@ -1942,9 +1788,9 @@ interface ClientPoint {
 }
 
 function CanvasResolutionBadgeOverlay() {
-  const editor = useEditor();
+  const editor = useCanvasEditor();
   const pointerClientPoint = usePointerClientPoint(editor);
-  const target = useValue("canvas resolution badge target", () => getCanvasResolutionBadgeTarget(editor, pointerClientPoint), [
+  const target = useCanvasEditorValue("canvas resolution badge target", () => getCanvasResolutionBadgeTarget(editor, pointerClientPoint), [
     editor,
     pointerClientPoint?.x,
     pointerClientPoint?.y
@@ -1997,10 +1843,9 @@ function CanvasResolutionBadgeOverlay() {
 }
 
 function CanvasAssetAvailabilityOverlay() {
-  const editor = useEditor();
+  const editor = useCanvasEditor();
   const { t } = useI18n();
-  const [, setAvailabilityVersion] = useState(0);
-  const imageAssets = useValue(
+  const imageAssets = useCanvasEditorValue(
     "canvas image assets",
     () => editor.getAssets().filter((asset) => asset.type === "image" && getLocalAssetId(asset, asset.props.src ?? undefined)),
     [editor]
@@ -2012,32 +1857,12 @@ function CanvasAssetAvailabilityOverlay() {
   }
   const unavailableAssetIds = Array.from(unavailableAssetIdSet);
 
-  useEffect(() => subscribeCanvasAssetPreviews(() => setAvailabilityVersion((current) => current + 1)), []);
-  useEffect(() => {
-    retainCanvasAssetPreviews();
-    return releaseCanvasAssetPreviews;
-  }, []);
-
   if (unavailableAssetIds.length === 0) {
     return null;
   }
 
   function retryUnavailableAssets(): void {
-    const failedAssetIds = new Set(unavailableAssetIds);
-    unavailableAssetIds.forEach((assetId) => retryCanvasAssetPreviews(assetId));
-    const retryToken = new Date().toISOString();
-    const retryAssets = imageAssets.flatMap((asset) => {
-      const localAssetId = getLocalAssetId(asset, asset.props.src ?? undefined);
-      if (!localAssetId || !failedAssetIds.has(localAssetId)) return [];
-      return [{
-        ...asset,
-        meta: {
-          ...asset.meta,
-          previewRetryToken: retryToken
-        }
-      }];
-    });
-    editor.updateAssets(retryAssets);
+    editor.retryAssets(unavailableAssetIds);
   }
 
   return (
@@ -2054,12 +1879,95 @@ function CanvasAssetAvailabilityOverlay() {
   );
 }
 
-function CanvasSnapIndicator({ className, ...props }: TLSnapIndicatorProps) {
-  const snapIndicatorClassName = className ? `canvas-snap-indicator ${className}` : "canvas-snap-indicator";
-  return <DefaultSnapIndicator {...props} className={snapIndicatorClassName} />;
+function RegionSelectionOverlay({
+  draft,
+  onCancel,
+  onConfirm,
+  onMoveStart,
+  onResizeStart
+}: {
+  draft: RegionSelectionDraft;
+  onCancel(): void;
+  onConfirm(): void;
+  onMoveStart(pointerId: number, point: ClientPoint): void;
+  onResizeStart(handle: RegionResizeHandle, pointerId: number, point: ClientPoint): void;
+}) {
+  const editor = useCanvasEditor();
+  const { t } = useI18n();
+  const shape = useCanvasEditorValue(
+    "region selection source image",
+    () => editor.getShape(draft.imageShapeId),
+    [editor, draft.imageShapeId, draft.region]
+  );
+  if (shape?.type !== "image") return null;
+
+  const imageShape = shape as CanvasImageShape;
+  const corners = imageRegionPageCorners(imageShape, draft.region).map((point) => editor.pageToScreen(point));
+  const xValues = corners.map((point) => point.x);
+  const yValues = corners.map((point) => point.y);
+  const left = Math.min(...xValues);
+  const right = Math.max(...xValues);
+  const top = Math.min(...yValues);
+  const bottom = Math.max(...yValues);
+  const ownerDocument = editor.getContainer().ownerDocument;
+  const ownerWindow = ownerDocument.defaultView ?? window;
+  const toolbarTop = bottom + 58 <= ownerWindow.innerHeight ? bottom + 10 : Math.max(10, top - 48);
+  const toolbarStyle: CSSProperties = {
+    left: `${Math.max(94, Math.min((left + right) / 2, ownerWindow.innerWidth - 94))}px`,
+    top: `${toolbarTop}px`
+  };
+  const handles: readonly RegionResizeHandle[] = ["nw", "ne", "se", "sw"];
+
+  return createPortal(
+    <div className="region-selection-layer" data-theme={editor.isDarkMode() ? "dark" : "light"}>
+      <svg aria-label={t("regionPromptCanvasHint")} data-testid="region-selection" role="group">
+        <polygon
+          className="region-selection-box"
+          points={corners.map((point) => `${point.x},${point.y}`).join(" ")}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onMoveStart(event.pointerId, { x: event.clientX, y: event.clientY });
+          }}
+        />
+        {corners.map((point, index) => {
+          const handle = handles[index];
+          if (!handle) return null;
+          const hitX = point.x - (handle.endsWith("w") ? 44 : 0);
+          const hitY = point.y - (handle.startsWith("n") ? 44 : 0);
+          return (
+            <g
+              className="region-selection-handle"
+              data-handle={handle}
+              data-testid={`region-selection-resize-${handle}`}
+              key={handle}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onResizeStart(handle, event.pointerId, { x: event.clientX, y: event.clientY });
+              }}
+            >
+              <rect className="region-selection-handle__hit" height="44" width="44" x={hitX} y={hitY} />
+              <circle className="region-selection-handle__dot" cx={point.x} cy={point.y} r="6" />
+            </g>
+          );
+        })}
+      </svg>
+      {!draft.isDrawing && draft.mode === "auto" ? (
+        <div className="region-selection-toolbar" data-testid="region-selection-toolbar" style={toolbarStyle}>
+          <span>{t("regionPromptAutoMode")}</span>
+          <button type="button" onClick={onCancel}>{t("commonCancel")}</button>
+          <button className="is-primary" data-testid="region-selection-confirm" type="button" onClick={onConfirm}>
+            {t("regionPromptManualConfirm")}
+          </button>
+        </div>
+      ) : null}
+    </div>,
+    ownerDocument.body
+  );
 }
 
-function usePointerClientPoint(editor: Editor): ClientPoint | undefined {
+function usePointerClientPoint(editor: CanvasEditor): ClientPoint | undefined {
   const [point, setPoint] = useState<ClientPoint | undefined>();
   const frameRef = useRef<number | undefined>();
   const latestPointRef = useRef<ClientPoint | undefined>();
@@ -2104,7 +2012,7 @@ function usePointerClientPoint(editor: Editor): ClientPoint | undefined {
   return point;
 }
 
-function getCanvasResolutionBadgeTarget(editor: Editor, pointerClientPoint: ClientPoint | undefined): CanvasResolutionBadgeTarget | undefined {
+function getCanvasResolutionBadgeTarget(editor: CanvasEditor, pointerClientPoint: ClientPoint | undefined): CanvasResolutionBadgeTarget | undefined {
   const imageShape = getImageShapeUnderPointer(editor, pointerClientPoint);
   if (!imageShape) {
     return undefined;
@@ -2151,7 +2059,7 @@ function resolutionBadgeOffset(scale: number): number {
   return Math.max(4, RESOLUTION_BADGE_BASE_OFFSET * scale);
 }
 
-function getImageShapeUnderPointer(editor: Editor, pointerClientPoint: ClientPoint | undefined): TLImageShape | undefined {
+function getImageShapeUnderPointer(editor: CanvasEditor, pointerClientPoint: ClientPoint | undefined): CanvasImageShape | undefined {
   if (!pointerClientPoint || !isPointerOverCanvas(editor, pointerClientPoint)) {
     return undefined;
   }
@@ -2162,10 +2070,10 @@ function getImageShapeUnderPointer(editor: Editor, pointerClientPoint: ClientPoi
     filter: (shape) => shape.type === "image"
   });
 
-  return shapeAtPoint?.type === "image" ? (shapeAtPoint as TLImageShape) : undefined;
+  return shapeAtPoint?.type === "image" ? (shapeAtPoint as CanvasImageShape) : undefined;
 }
 
-function referenceItemForImageShape(editor: Editor, imageShape: TLImageShape): ReferenceSelectionItem | undefined {
+function referenceItemForImageShape(editor: CanvasEditor, imageShape: CanvasImageShape): ReferenceSelectionItem | undefined {
   const asset = imageShape.props.assetId ? editor.getAsset(imageShape.props.assetId) : undefined;
   const sourceUrl = getImageSourceUrl(imageShape, asset);
   if (!sourceUrl || !isReadableReferenceSource(sourceUrl, asset)) {
@@ -2182,27 +2090,13 @@ function referenceItemForImageShape(editor: Editor, imageShape: TLImageShape): R
   };
 }
 
-function normalizedImagePointFromCanvasPointer(editor: Editor, imageShape: TLImageShape, pointerClientPoint: ClientPoint): { x: number; y: number } {
-  const bounds = editor.getShapePageBounds(imageShape);
-  const pagePoint = editor.screenToPage(pointerClientPoint);
-  if (!bounds || bounds.w <= 0 || bounds.h <= 0) {
-    return { x: 0.5, y: 0.5 };
-  }
-
-  return {
-    x: Math.max(0, Math.min(1, (pagePoint.x - bounds.x) / bounds.w)),
-    y: Math.max(0, Math.min(1, (pagePoint.y - bounds.y) / bounds.h))
-  };
-}
-
 function regionFocusRectFromImageShape(
-  editor: Editor,
-  imageShape: TLImageShape,
+  editor: CanvasEditor,
+  imageShape: CanvasImageShape,
   region: NormalizedImageRegion,
   pointerClientPoint: ClientPoint
 ): Pick<RegionFocusFrame, "x" | "y" | "width" | "height"> {
-  const bounds = editor.getShapePageBounds(imageShape);
-  if (!bounds || bounds.w <= 0 || bounds.h <= 0) {
+  if (imageShape.props.w <= 0 || imageShape.props.h <= 0) {
     return {
       x: pointerClientPoint.x - 24,
       y: pointerClientPoint.y - 24,
@@ -2211,30 +2105,25 @@ function regionFocusRectFromImageShape(
     };
   }
 
-  const topLeft = editor.pageToScreen({
-    x: bounds.x + bounds.w * region.x,
-    y: bounds.y + bounds.h * region.y
-  });
-  const bottomRight = editor.pageToScreen({
-    x: bounds.x + bounds.w * (region.x + region.width),
-    y: bounds.y + bounds.h * (region.y + region.height)
-  });
-  const x = Math.min(topLeft.x, bottomRight.x);
-  const y = Math.min(topLeft.y, bottomRight.y);
+  const corners = imageRegionPageCorners(imageShape, region).map((point) => editor.pageToScreen(point));
+  const xValues = corners.map((point) => point.x);
+  const yValues = corners.map((point) => point.y);
+  const x = Math.min(...xValues);
+  const y = Math.min(...yValues);
   return {
     x,
     y,
-    width: Math.max(28, Math.abs(bottomRight.x - topLeft.x)),
-    height: Math.max(28, Math.abs(bottomRight.y - topLeft.y))
+    width: Math.max(28, Math.max(...xValues) - x),
+    height: Math.max(28, Math.max(...yValues) - y)
   };
 }
 
-function isPointerOverCanvas(editor: Editor, pointerClientPoint: ClientPoint): boolean {
+function isPointerOverCanvas(editor: CanvasEditor, pointerClientPoint: ClientPoint): boolean {
   const target = editor.getContainer().ownerDocument.elementFromPoint(pointerClientPoint.x, pointerClientPoint.y);
-  return Boolean(target?.closest(".tl-canvas"));
+  return Boolean(target?.closest(".excalidraw canvas"));
 }
 
-function fallbackImageSize(imageShape: TLImageShape, asset: TLAsset | undefined): ImageSize {
+function fallbackImageSize(imageShape: CanvasImageShape, asset: CanvasAsset | undefined): ImageSize {
   if (asset?.type === "image" && isUsableImageSize(asset.props)) {
     return {
       width: asset.props.w,
@@ -2299,7 +2188,7 @@ async function fetchAssetMetadata(assetId: string): Promise<ImageSize | undefine
   return request;
 }
 
-function findCanvasImageShape(editor: Editor, record: GenerationRecord): TLShapeId | undefined {
+function findCanvasImageShape(editor: CanvasEditor, record: GenerationRecord): CanvasShapeId | undefined {
   const assetIds = new Set(
     record.outputs.flatMap((output) => (output.status === "succeeded" && output.asset ? [output.asset.id] : []))
   );
@@ -2312,7 +2201,7 @@ function findCanvasImageShape(editor: Editor, record: GenerationRecord): TLShape
       continue;
     }
 
-    const imageShape = shape as TLImageShape;
+    const imageShape = shape as CanvasImageShape;
     const asset = imageShape.props.assetId ? editor.getAsset(imageShape.props.assetId) : undefined;
     const sourceUrl = getImageSourceUrl(imageShape, asset);
     const localAssetId = getLocalAssetId(asset, sourceUrl);
@@ -2325,7 +2214,7 @@ function findCanvasImageShape(editor: Editor, record: GenerationRecord): TLShape
   return undefined;
 }
 
-function findCanvasImageShapeByAssetId(editor: Editor, assetId: string, shapeId?: TLShapeId): TLShapeId | undefined {
+function findCanvasImageShapeByAssetId(editor: CanvasEditor, assetId: string, shapeId?: CanvasShapeId): CanvasShapeId | undefined {
   if (shapeId && editor.getShape(shapeId)?.type === "image") {
     return shapeId;
   }
@@ -2335,7 +2224,7 @@ function findCanvasImageShapeByAssetId(editor: Editor, assetId: string, shapeId?
       continue;
     }
 
-    const imageShape = shape as TLImageShape;
+    const imageShape = shape as CanvasImageShape;
     const asset = imageShape.props.assetId ? editor.getAsset(imageShape.props.assetId) : undefined;
     const sourceUrl = getImageSourceUrl(imageShape, asset);
     const localAssetId = getLocalAssetId(asset, sourceUrl);
@@ -2596,7 +2485,7 @@ function regionFocusPreviewStyle(preview: RegionFocusPreview, stackIndex = 0): C
   } as CSSProperties;
 }
 
-function manualRegionDraftStyle(draft: ManualRegionDraft): CSSProperties {
+function regionSelectionDraftStyle(draft: RegionSelectionDraft): CSSProperties {
   const width = 280;
   const height = 116;
   const viewportWidth = typeof window === "undefined" ? draft.x + width : window.innerWidth;
@@ -2671,8 +2560,8 @@ function parseAgentServerEvent(data: MessageEvent["data"]): AgentServerEvent | u
   }
 }
 
-function optionalShapeIdFromEvent(event: AgentServerEvent): TLShapeId | undefined {
-  return isRecord(event) && typeof event.shapeId === "string" ? (event.shapeId as TLShapeId) : undefined;
+function optionalShapeIdFromEvent(event: AgentServerEvent): CanvasShapeId | undefined {
+  return isRecord(event) && typeof event.shapeId === "string" ? (event.shapeId as CanvasShapeId) : undefined;
 }
 
 function planJobDependencies(plan: GenerationPlan, job: GenerationJob): string[] {
@@ -2772,16 +2661,20 @@ function AgentPlanJobDetails({ plan, t }: { plan: GenerationPlan; t: Translate }
 }
 
 function AgentPlanCard({
+  isSelectedOnCanvas = false,
   isAgentConfigured,
   isAgentRunning,
   onAction,
+  onLocate,
   plan,
   readOnly = false,
   t
 }: {
+  isSelectedOnCanvas?: boolean;
   isAgentConfigured: boolean;
   isAgentRunning: boolean;
   onAction: (plan: GenerationPlan, action: AgentPlanAction) => void;
+  onLocate?: (plan: GenerationPlan) => void;
   plan: unknown;
   readOnly?: boolean;
   t: Translate;
@@ -2806,6 +2699,7 @@ function AgentPlanCard({
   return (
     <article
       className="agent-plan-card"
+      data-selected-on-canvas={isSelectedOnCanvas || undefined}
       data-testid="agent-plan-card"
     >
       <span className="agent-plan-card__heading">
@@ -2823,6 +2717,12 @@ function AgentPlanCard({
       <AgentPlanReviewNodes plan={plan} t={t} />
       <AgentPlanJobDetails plan={plan} t={t} />
       {readOnly ? null : <div className="agent-plan-card__actions">
+        {onLocate ? (
+          <button className="agent-plan-card__action" type="button" onClick={() => onLocate(plan)}>
+            <MapPin className="size-3.5" aria-hidden="true" />
+            {t("agentPlanLocate", { title: plan.title })}
+          </button>
+        ) : null}
         <button
           className="agent-plan-card__action agent-plan-card__action--primary"
           disabled={!canExecute}
@@ -3538,7 +3438,8 @@ function TopNavigation({
 }
 
 function CanvasThemeSync({ onChange }: { onChange: (isDarkMode: boolean) => void }) {
-  const isDarkMode = useIsDarkMode();
+  const editor = useCanvasEditor();
+  const isDarkMode = useCanvasEditorValue("canvas theme", () => editor.isDarkMode(), [editor]);
 
   useEffect(() => {
     onChange(isDarkMode);
@@ -3855,42 +3756,11 @@ function PromptFavoritesFloatingPanel({
 }
 
 export function App() {
-  const { formatDateTime, locale, setLocale, t } = useI18n();
+  const { formatDateTime, locale, t } = useI18n();
   const desktopUpdater = useDesktopUpdater();
   const desktopSidecarStartup = useDesktopSidecarStartup();
   const desktopAuthSupported = isDesktopAuthSupported();
   const isDesktopRuntime = desktopAuthSupported || desktopUpdater.isSupported;
-  const tldrawLocale = tldrawLocaleForLocale(locale);
-  const [tldrawUserPreferences, setTldrawUserPreferences] = useState<TLUserPreferences>(() => ({
-    id: TLDRAW_USER_ID,
-    isSnapMode: CANVAS_DEFAULT_SNAP_MODE,
-    locale: tldrawLocale
-  }));
-  useEffect(() => {
-    setTldrawUserPreferences((currentPreferences) =>
-      currentPreferences.locale === tldrawLocale ? currentPreferences : { ...currentPreferences, locale: tldrawLocale }
-    );
-  }, [tldrawLocale]);
-  const syncTldrawUserPreferences = useCallback(
-    (preferences: TLUserPreferences) => {
-      setTldrawUserPreferences({
-        ...preferences,
-        id: TLDRAW_USER_ID,
-        isSnapMode: preferences.isSnapMode ?? CANVAS_DEFAULT_SNAP_MODE,
-        locale: preferences.locale ?? tldrawLocale
-      });
-
-      const nextLocale = localeForTldrawLocale(preferences.locale);
-      if (nextLocale && nextLocale !== locale) {
-        setLocale(nextLocale);
-      }
-    },
-    [locale, setLocale, tldrawLocale]
-  );
-  const tldrawUser = useTldrawUser({
-    userPreferences: tldrawUserPreferences,
-    setUserPreferences: syncTldrawUserPreferences
-  });
   const [isAiCoveMode, setIsAiCoveMode] = useState(() => isAiCoveEmbeddedRuntime());
   const [route, setRoute] = useState<AppRoute>(() => initialRouteForCurrentRuntime());
   const shouldAutoOpenCanvasRef = useRef(route !== "gallery");
@@ -3908,6 +3778,7 @@ export function App() {
   const [activeGenerationCount, setActiveGenerationCount] = useState(0);
   const [isProjectLoaded, setIsProjectLoaded] = useState(false);
   const [projectSnapshot, setProjectSnapshot] = useState<PersistedSnapshot | undefined>();
+  const [projectLoadAttempt, setProjectLoadAttempt] = useState(0);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("loading");
   const [saveError, setSaveError] = useState("");
   const [generationError, setGenerationError] = useState("");
@@ -3949,13 +3820,12 @@ export function App() {
   const [, setReferenceAvailabilityVersion] = useState(0);
   const [regionAnnotationMode, setRegionAnnotationMode] = useState<RegionAnnotationMode>("none");
   const [promptPreviewTab, setPromptPreviewTab] = useState<PromptPreviewTab>("edit");
-  const [isRegionModifierPressed, setIsRegionModifierPressed] = useState(false);
   const [regionPromptItems, setRegionPromptItems] = useState<RegionPromptItem[]>([]);
   const [arrivingRegionPromptIds, setArrivingRegionPromptIds] = useState<Set<string>>(() => new Set());
   const [regionPromptFlights, setRegionPromptFlights] = useState<RegionPromptFlight[]>([]);
   const [regionFocusFrames, setRegionFocusFrames] = useState<RegionFocusFrame[]>([]);
   const [regionFocusPreviews, setRegionFocusPreviews] = useState<RegionFocusPreview[]>([]);
-  const [manualRegionDraft, setManualRegionDraft] = useState<ManualRegionDraft | null>(null);
+  const [regionSelectionDraft, setRegionSelectionDraft] = useState<RegionSelectionDraft | null>(null);
   const [agentSizePresetId, setAgentSizePresetId] = useState(DEFAULT_SIZE_PRESET.id);
   const [agentWidth, setAgentWidth] = useState(DEFAULT_SIZE_PRESET.width);
   const [agentHeight, setAgentHeight] = useState(DEFAULT_SIZE_PRESET.height);
@@ -3987,6 +3857,7 @@ export function App() {
   const [copiedAgentMessageId, setCopiedAgentMessageId] = useState<string | null>(null);
   const [expandedThinkingMessageIds, setExpandedThinkingMessageIds] = useState<string[]>([]);
   const [agentRunStatus, setAgentRunStatus] = useState<AgentRunStatus>("idle");
+  const [selectedCanvasPlanId, setSelectedCanvasPlanId] = useState<string | null>(null);
   const [agentReferenceSelection, setAgentReferenceSelection] = useState<AgentReferenceSelection>(() => emptyAgentReferenceSelection(t));
   const [agentThinkingType, setAgentThinkingType] = useState<AgentThinkingType>("enabled");
   const [agentReasoningEffort, setAgentReasoningEffort] = useState<AgentReasoningEffort>("high");
@@ -4001,11 +3872,14 @@ export function App() {
   regionPromptItemsRef.current = regionPromptItems;
   const manualRegionInputRef = useRef<HTMLInputElement | null>(null);
   const panelCloseButtonRef = useRef<HTMLButtonElement | null>(null);
-  const editorRef = useRef<Editor | null>(null);
+  const editorRef = useRef<CanvasEditor | null>(null);
   const editorHasMountedRef = useRef(false);
   const hostSessionBlockedRef = useRef(false);
   const hostSessionRecoveryRef = useRef<HTMLDivElement | null>(null);
   const regionCanvasPointerDownRef = useRef<((event: PointerEvent) => void) | null>(null);
+  const regionCanvasPointerMoveRef = useRef<((event: PointerEvent) => void) | null>(null);
+  const regionCanvasPointerUpRef = useRef<((event: PointerEvent) => void) | null>(null);
+  const regionCanvasDragRef = useRef<RegionCanvasDrag | null>(null);
   const activeGenerationsRef = useRef<Map<string, ActiveGenerationTask>>(new Map());
   const generationPlaceholderPointerIdsRef = useRef<Set<number>>(new Set());
   const generationPlaceholderQuietTimerRef = useRef<number | undefined>();
@@ -4030,6 +3904,7 @@ export function App() {
   const agentJobPlaceholdersRef = useRef<Map<string, AgentJobPlaceholderSet>>(new Map());
   const pendingAgentSelectedReferencesRef = useRef<Map<string, AgentSelectedCanvasReference[]>>(new Map());
   const agentPlanSelectedReferencesRef = useRef<Map<string, AgentSelectedCanvasReference[]>>(new Map());
+  const agentPlanNodeIdsRef = useRef<Map<string, CanvasShapeId>>(new Map());
   const agentPlaceholderRequestRef = useRef(0);
   const agentCopyResetTimerRef = useRef<number | undefined>();
   const agentPlanCreatedRunIdsRef = useRef<Set<string>>(new Set());
@@ -4216,20 +4091,23 @@ export function App() {
   const hasMountedEditor = editorHasMountedRef.current;
   const shouldBlockCanvasForHostSession = isHostSessionBlocked && !hasMountedEditor;
   const shouldShowHostSessionRecovery = isHostSessionBlocked && hasMountedEditor;
-  const tldrawComponents = useMemo(
-    () =>
-      ({
-        InFrontOfTheCanvas: () => (
-          <>
-            <CanvasThemeSync onChange={setIsCanvasDarkMode} />
-            <CanvasResolutionBadgeOverlay />
-            <CanvasAssetAvailabilityOverlay />
-          </>
-        ),
-        SnapIndicator: CanvasSnapIndicator,
-        StylePanel: null
-      }) satisfies TLComponents,
-    []
+  const canvasOverlays = (
+    <>
+      <CanvasThemeSync onChange={setIsCanvasDarkMode} />
+      <CanvasResolutionBadgeOverlay />
+      <CanvasAssetAvailabilityOverlay />
+      {regionSelectionDraft ? (
+        <RegionSelectionOverlay
+          draft={regionSelectionDraft}
+          onCancel={() => setRegionSelectionDraft(null)}
+          onConfirm={confirmRegionSelectionDraft}
+          onMoveStart={(pointerId, point) => startRegionSelectionAdjustment("move", pointerId, point)}
+          onResizeStart={(handle, pointerId, point) =>
+            startRegionSelectionAdjustment("resize", pointerId, point, handle)
+          }
+        />
+      ) : null}
+    </>
   );
 
   useEffect(() => {
@@ -4423,8 +4301,13 @@ export function App() {
     }
   }, [desktopAuthSupported, locale, navigateToRoute, t]);
 
-  const saveProjectSnapshot = useCallback(async (editor: Editor): Promise<void> => {
+  const saveProjectSnapshot = useCallback(async (editor: CanvasEditor): Promise<void> => {
     if (hostSessionBlockedRef.current) {
+      return;
+    }
+    if (editor.hasUnavailableAssets()) {
+      setSaveStatus("error");
+      setSaveError(t("canvasAssetUnavailableHint"));
       return;
     }
 
@@ -4440,7 +4323,7 @@ export function App() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          snapshot: filterLoadingPlaceholdersFromSnapshot(editor.getSnapshot())
+          snapshot: editor.getSnapshot()
         })
       });
 
@@ -4686,23 +4569,21 @@ export function App() {
         }
 
         const project = (await response.json()) as ProjectState;
-        const snapshot = filterLoadingPlaceholdersFromSnapshot(project.snapshot);
-        if (isPersistedSnapshot(snapshot)) {
-          setProjectSnapshot(snapshot);
+        const snapshot = validateExcalidrawProjectSnapshot(project.snapshot);
+        if (!snapshot.ok) {
+          throw new ProjectSnapshotValidationError(snapshot.reason);
         }
+        setProjectSnapshot(snapshot.value);
         setGenerationHistory(project.history);
         setSaveStatus("saved");
-      } catch {
+        setIsProjectLoaded(true);
+      } catch (error) {
         if (controller.signal.aborted) {
           return;
         }
 
         setSaveStatus("error");
-        setSaveError(hostAuthError || t("projectLoadFailed"));
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsProjectLoaded(true);
-        }
+        setSaveError(hostAuthError || (error instanceof ProjectSnapshotValidationError ? error.message : t("projectLoadFailed")));
       }
     }
 
@@ -4711,7 +4592,7 @@ export function App() {
     return () => {
       controller.abort();
     };
-  }, [isHostSessionBlocked, isHostSessionChecked, locale, t]);
+  }, [isHostSessionBlocked, isHostSessionChecked, locale, projectLoadAttempt, t]);
 
   useEffect(() => {
     if (!isHostSessionChecked || isHostSessionBlocked) {
@@ -4747,7 +4628,7 @@ export function App() {
       setRegionPromptItems([]);
       setPromptPreviewTab("edit");
     }
-    setManualRegionDraft(null);
+    setRegionSelectionDraft(null);
     setRegionPromptFlights([]);
     setArrivingRegionPromptIds(new Set());
   }, [generationMode, t]);
@@ -4759,24 +4640,9 @@ export function App() {
   }, [isRegionAnnotationActive]);
 
   useEffect(() => {
-    const updateModifierState = (event: KeyboardEvent): void => {
-      setIsRegionModifierPressed(event.metaKey || event.ctrlKey);
-    };
-    const clearModifierState = (): void => setIsRegionModifierPressed(false);
-
-    window.addEventListener("keydown", updateModifierState);
-    window.addEventListener("keyup", updateModifierState);
-    window.addEventListener("blur", clearModifierState);
-
-    return () => {
-      window.removeEventListener("keydown", updateModifierState);
-      window.removeEventListener("keyup", updateModifierState);
-      window.removeEventListener("blur", clearModifierState);
-    };
-  }, []);
-
-  useEffect(() => {
     regionCanvasPointerDownRef.current = handleCanvasRegionPointerDown;
+    regionCanvasPointerMoveRef.current = handleCanvasRegionPointerMove;
+    regionCanvasPointerUpRef.current = handleCanvasRegionPointerUp;
   });
 
   useEffect(() => {
@@ -4822,7 +4688,7 @@ export function App() {
   }, [agentMessages]);
 
   useEffect(() => {
-    if (!manualRegionDraft) {
+    if (!regionSelectionDraft || regionSelectionDraft.mode !== "manual" || regionSelectionDraft.isDrawing) {
       return;
     }
 
@@ -4833,7 +4699,7 @@ export function App() {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [manualRegionDraft?.id]);
+  }, [regionSelectionDraft?.id, regionSelectionDraft?.isDrawing, regionSelectionDraft?.mode]);
 
   useEffect(() => {
     if (!currentAgentConversationId || agentMessages.length === 0) {
@@ -5272,7 +5138,7 @@ export function App() {
     );
   }, [t]);
 
-  const handleEditorMount = useCallback((editor: Editor) => {
+  const handleEditorMount = useCallback((editor: CanvasEditor) => {
     editorRef.current = editor;
     editorHasMountedRef.current = true;
     localizeDefaultPageName(editor, locale);
@@ -5290,6 +5156,17 @@ export function App() {
       setAgentReferenceSelection((currentSelection) =>
         areAgentReferenceSelectionsEqual(currentSelection, nextAgentSelection) ? currentSelection : nextAgentSelection
       );
+      const planNodes = editor.getCurrentPageShapes().filter(isAgentPlanNodeShape);
+      const currentNodeIds = new Set(planNodes.map((node) => node.id));
+      for (const [planId, shapeId] of agentPlanNodeIdsRef.current) {
+        if (!currentNodeIds.has(shapeId)) editor.setAgentPlanRemoved(planId, true);
+      }
+      agentPlanNodeIdsRef.current.clear();
+      for (const node of planNodes) {
+        if (node.props.planId) agentPlanNodeIdsRef.current.set(node.props.planId, node.id);
+      }
+      const selectedPlanNode = editor.getSelectedShapes().find(isAgentPlanNodeShape);
+      setSelectedCanvasPlanId(selectedPlanNode?.props.planId || null);
     };
     const updateReferenceSelection = (): void => {
       if (referenceSelectionFrame !== undefined) {
@@ -5327,6 +5204,12 @@ export function App() {
     const handleRegionPointerDown = (event: PointerEvent): void => {
       regionCanvasPointerDownRef.current?.(event);
     };
+    const handleRegionPointerMove = (event: PointerEvent): void => {
+      regionCanvasPointerMoveRef.current?.(event);
+    };
+    const handleRegionPointerUp = (event: PointerEvent): void => {
+      regionCanvasPointerUpRef.current?.(event);
+    };
     const resumeGenerationPlaceholderMotion = (): void => {
       window.clearTimeout(generationPlaceholderQuietTimerRef.current);
       generationPlaceholderQuietTimerRef.current = window.setTimeout(() => {
@@ -5357,12 +5240,14 @@ export function App() {
     };
 
     editor.getContainer().addEventListener("pointerdown", handleRegionPointerDown, { capture: true });
+    window.addEventListener("pointermove", handleRegionPointerMove, { capture: true });
+    window.addEventListener("pointerup", handleRegionPointerUp, { capture: true });
+    window.addEventListener("pointercancel", handleRegionPointerUp, { capture: true });
     editor.getContainer().addEventListener("pointerdown", handleGenerationPlaceholderPointerDown, { capture: true });
     window.addEventListener("pointerup", handleGenerationPlaceholderPointerDone, { passive: true });
     window.addEventListener("pointercancel", handleGenerationPlaceholderPointerDone, { passive: true });
     window.addEventListener("blur", clearGenerationPlaceholderPointers);
     editor.on("change", updateReferenceSelection);
-    deleteAgentPlanNodes(editor);
     commitReferenceSelection();
     recoverActiveGenerationPolling(editor);
 
@@ -5375,6 +5260,9 @@ export function App() {
         editorRef.current = null;
       }
       editor.getContainer().removeEventListener("pointerdown", handleRegionPointerDown, { capture: true });
+      window.removeEventListener("pointermove", handleRegionPointerMove, { capture: true });
+      window.removeEventListener("pointerup", handleRegionPointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handleRegionPointerUp, { capture: true });
       editor.getContainer().removeEventListener("pointerdown", handleGenerationPlaceholderPointerDown, { capture: true });
       window.removeEventListener("pointerup", handleGenerationPlaceholderPointerDone);
       window.removeEventListener("pointercancel", handleGenerationPlaceholderPointerDone);
@@ -5537,7 +5425,7 @@ export function App() {
     }
   }
 
-  function recoverActiveGenerationPolling(editor: Editor | null = editorRef.current): void {
+  function recoverActiveGenerationPolling(editor: CanvasEditor | null = editorRef.current): void {
     if (!editor) {
       return;
     }
@@ -5743,7 +5631,7 @@ export function App() {
   }
 
   function beginRegionFocusFrame(input: {
-    imageShape: TLImageShape;
+    imageShape: CanvasImageShape;
     itemId: string;
     pointer: ClientPoint;
     region: NormalizedImageRegion;
@@ -5982,7 +5870,7 @@ export function App() {
     region: NormalizedImageRegion,
     insertionIndex: number,
     start?: ClientPoint,
-    imageShape?: TLImageShape
+    imageShape?: CanvasImageShape
   ): Promise<void> {
     const itemId = crypto.randomUUID();
     const pendingRegion: RegionPromptItem = {
@@ -6112,8 +6000,7 @@ export function App() {
       panelTab !== "manual" ||
       generationMode !== "reference" ||
       regionAnnotationMode === "none" ||
-      event.button !== 0 ||
-      (!event.metaKey && !event.ctrlKey)
+      event.button !== 0
     ) {
       return;
     }
@@ -6129,6 +6016,11 @@ export function App() {
       return;
     }
 
+    if (regionAnnotationMode === "auto" && !canUseRegionSummary) {
+      setGenerationError(regionSummaryStatusCopy(regionSummaryState, t, summaryConfigError || agentConfigError));
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
@@ -6139,38 +6031,126 @@ export function App() {
       return;
     }
 
-    const imagePoint = normalizedImagePointFromCanvasPointer(editor, imageShape, pointer);
-    const region = defaultRegionForPoint(imagePoint.x, imagePoint.y);
+    const startPagePoint = editor.screenToPage(pointer);
+    const imagePoint = normalizedImagePointFromPagePoint(imageShape, startPagePoint);
+    const region = defaultRegionForImagePoint(imageShape, imagePoint);
     const insertionIndex = regionPromptInsertionIndex();
+    const draftId = crypto.randomUUID();
     setGenerationError("");
+    regionCanvasDragRef.current = {
+      draftId,
+      imageShapeId: imageShape.id,
+      pointerId: event.pointerId,
+      startPagePoint
+    };
+    setRegionSelectionDraft({
+      id: draftId,
+      insertionIndex,
+      reference,
+      imageShapeId: imageShape.id,
+      mode: regionAnnotationMode,
+      region,
+      x: pointer.x,
+      y: pointer.y,
+      label: "",
+      isDrawing: true
+    });
+  }
 
-    if (regionAnnotationMode === "manual") {
-      const draftId = crypto.randomUUID();
-      beginRegionFocusFrame({ imageShape, itemId: draftId, pointer, region });
-      setManualRegionDraft({
-        id: draftId,
-        insertionIndex,
-        reference,
-        region,
-        x: pointer.x,
-        y: pointer.y,
-        label: ""
-      });
-      return;
+  function handleCanvasRegionPointerMove(event: PointerEvent): void {
+    const drag = regionCanvasDragRef.current;
+    const editor = editorRef.current;
+    if (!drag || !editor || drag.pointerId !== event.pointerId) return;
+    const shape = editor.getShape(drag.imageShapeId);
+    if (shape?.type !== "image") return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    const pointer = { x: event.clientX, y: event.clientY };
+    const region = regionFromImageDrag(
+      shape as CanvasImageShape,
+      drag.startPagePoint,
+      editor.screenToPage(pointer)
+    );
+    setRegionSelectionDraft((draft) =>
+      draft?.id === drag.draftId ? { ...draft, region, x: pointer.x, y: pointer.y } : draft
+    );
+  }
+
+  function handleCanvasRegionPointerUp(event: PointerEvent): void {
+    const drag = regionCanvasDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (event.type === "pointercancel") {
+      setRegionSelectionDraft((draft) => (draft?.id === drag.draftId ? null : draft));
+    } else {
+      handleCanvasRegionPointerMove(event);
+      setRegionSelectionDraft((draft) =>
+        draft?.id === drag.draftId ? { ...draft, isDrawing: false } : draft
+      );
     }
+    regionCanvasDragRef.current = null;
+  }
 
-    if (!canUseRegionSummary) {
-      setGenerationError(regionSummaryStatusCopy(regionSummaryState, t, summaryConfigError || agentConfigError));
-      return;
-    }
+  function startRegionSelectionAdjustment(
+    kind: "move" | "resize",
+    pointerId: number,
+    startClientPoint: ClientPoint,
+    handle?: RegionResizeHandle
+  ): void {
+    const editor = editorRef.current;
+    const draft = regionSelectionDraft;
+    const shape = draft && editor?.getShape(draft.imageShapeId);
+    if (!editor || !draft || shape?.type !== "image") return;
 
-    void summarizeReferenceRegion(reference, region, insertionIndex, pointer, imageShape);
+    const imageShape = shape as CanvasImageShape;
+    const initialRegion = draft.region;
+    const startSourcePoint = normalizedImagePointFromPagePoint(
+      imageShape,
+      editor.screenToPage(startClientPoint)
+    );
+    const update = (event: PointerEvent): void => {
+      if (event.pointerId !== pointerId) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const sourcePoint = normalizedImagePointFromPagePoint(
+        imageShape,
+        editor.screenToPage({ x: event.clientX, y: event.clientY })
+      );
+      const region = kind === "move"
+        ? moveImageRegion(imageShape, initialRegion, {
+            x: sourcePoint.x - startSourcePoint.x,
+            y: sourcePoint.y - startSourcePoint.y
+          })
+        : resizeImageRegion(imageShape, initialRegion, handle ?? "se", sourcePoint);
+      setRegionSelectionDraft((current) =>
+        current?.id === draft.id
+          ? { ...current, region, x: event.clientX, y: event.clientY }
+          : current
+      );
+    };
+    const finish = (event: PointerEvent): void => {
+      if (event.pointerId !== pointerId) return;
+      if (event.type === "pointercancel") {
+        setRegionSelectionDraft((current) =>
+          current?.id === draft.id ? { ...current, region: initialRegion } : current
+        );
+      } else {
+        update(event);
+      }
+      window.removeEventListener("pointermove", update, true);
+      window.removeEventListener("pointerup", finish, true);
+      window.removeEventListener("pointercancel", finish, true);
+    };
+    window.addEventListener("pointermove", update, { capture: true });
+    window.addEventListener("pointerup", finish, { capture: true });
+    window.addEventListener("pointercancel", finish, { capture: true });
   }
 
   function selectRegionAnnotationMode(mode: RegionAnnotationMode): void {
     setRegionAnnotationMode(mode);
     setPromptPreviewTab("edit");
-    setManualRegionDraft(null);
+    regionCanvasDragRef.current = null;
+    setRegionSelectionDraft(null);
     setRegionPromptFlights([]);
     setRegionFocusFrames([]);
     setRegionFocusPreviews([]);
@@ -6182,41 +6162,60 @@ export function App() {
   }
 
   function updateManualRegionDraftLabel(label: string): void {
-    setManualRegionDraft((draft) => (draft ? { ...draft, label } : draft));
+    setRegionSelectionDraft((draft) => (draft ? { ...draft, label } : draft));
   }
 
-  function confirmManualRegionDraft(): void {
-    if (!manualRegionDraft) {
+  function confirmRegionSelectionDraft(): void {
+    const draft = regionSelectionDraft;
+    if (!draft || draft.isDrawing) return;
+    const editor = editorRef.current;
+    const shape = editor?.getShape(draft.imageShapeId);
+    const imageShape = shape?.type === "image" ? shape as CanvasImageShape : undefined;
+
+    if (draft.mode === "auto") {
+      if (!canUseRegionSummary) {
+        setGenerationError(regionSummaryStatusCopy(regionSummaryState, t, summaryConfigError || agentConfigError));
+        return;
+      }
+      setRegionSelectionDraft(null);
+      void summarizeReferenceRegion(
+        draft.reference,
+        draft.region,
+        draft.insertionIndex,
+        { x: draft.x, y: draft.y },
+        imageShape
+      );
       return;
     }
 
-    const label = manualRegionDraft.label.trim();
+    const label = draft.label.trim();
     if (!label) {
       manualRegionInputRef.current?.focus();
       return;
     }
 
     const item = createManualRegionPromptItem({
-      id: manualRegionDraft.id,
+      id: draft.id,
       label,
       locale,
-      reference: regionPromptReferenceFromSelection(manualRegionDraft.reference),
-      region: manualRegionDraft.region
+      reference: regionPromptReferenceFromSelection(draft.reference),
+      region: draft.region
     });
     const anchoredItem = {
       ...item,
-      cropAspectRatio: regionPreviewAspectRatio(manualRegionDraft.region, manualRegionDraft.reference),
-      insertionIndex: manualRegionDraft.insertionIndex
+      cropAspectRatio: regionPreviewAspectRatio(draft.region, draft.reference),
+      insertionIndex: draft.insertionIndex
     };
-    const start = { x: manualRegionDraft.x, y: manualRegionDraft.y };
-    insertRegionPromptItemIntoPrompt(anchoredItem, manualRegionDraft.insertionIndex);
+    const start = { x: draft.x, y: draft.y };
+    insertRegionPromptItemIntoPrompt(anchoredItem, draft.insertionIndex);
     setRegionPromptItems((items) => [...items, anchoredItem]);
-    setManualRegionDraft(null);
+    setRegionSelectionDraft(null);
+    if (imageShape) beginRegionFocusFrame({ imageShape, itemId: anchoredItem.id, pointer: start, region: draft.region });
     beginRegionPromptFlight(anchoredItem.id, start);
     window.requestAnimationFrame(() =>
       showRegionFocusPreviewWhenTokenReady(anchoredItem, 0, () => dismissRegionFocusPreview(anchoredItem.id, 2400, true))
     );
-    void hydrateManualRegionPreview(anchoredItem, manualRegionDraft.reference);
+    void hydrateManualRegionPreview(anchoredItem, draft.reference);
   }
 
   async function submitGeneration(): Promise<void> {
@@ -6268,7 +6267,8 @@ export function App() {
     editorRef.current?.selectNone();
     setReferenceSelection(missingReferenceSelection(t));
     setRegionPromptItems([]);
-    setManualRegionDraft(null);
+    regionCanvasDragRef.current = null;
+    setRegionSelectionDraft(null);
     setRegionPromptFlights([]);
     setRegionFocusFrames([]);
     setRegionFocusPreviews([]);
@@ -6739,7 +6739,7 @@ export function App() {
     agentOutputPlacementCountsRef.current.clear();
     deleteAgentJobLoadingPlaceholdersForRun();
     agentJobPlaceholdersRef.current.clear();
-    clearCanvasAgentPlanNodes();
+    resetAgentOutputPlacement();
     setExpandedThinkingMessageIds([]);
     setCopiedAgentMessageId(null);
     setAgentInput("");
@@ -6957,9 +6957,12 @@ export function App() {
   function upsertAgentPlanAttachment(
     plan: GenerationPlan,
     fallbackContent: string,
-    runId?: string,
-    selectedReferences?: AgentSelectedCanvasReference[]
+    runId?: string
   ): void {
+    const editor = editorRef.current;
+    if (editor && !editor.getRemovedAgentPlanIds().has(plan.id)) {
+      agentPlanNodeIdsRef.current.set(plan.id, upsertAgentPlanNode(editor, plan, runId));
+    }
     setAgentMessages((messages) => {
       let existingIndex = -1;
       for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -7001,7 +7004,7 @@ export function App() {
     return `${planId}::${jobId}`;
   }
 
-  function createAgentJobPlaceholderSet(editor: Editor, plan: GenerationPlan, job: GenerationJob, runId?: string): AgentJobPlaceholderSet | undefined {
+  function createAgentJobPlaceholderSet(editor: CanvasEditor, plan: GenerationPlan, job: GenerationJob, runId?: string): AgentJobPlaceholderSet | undefined {
     if (job.count <= 0) {
       return undefined;
     }
@@ -7044,7 +7047,7 @@ export function App() {
     createAgentJobPlaceholderSet(editor, plan, job, runId);
   }
 
-  function nextLiveAgentPlaceholderIndex(editor: Editor, agentPlaceholderSet: AgentJobPlaceholderSet): number | undefined {
+  function nextLiveAgentPlaceholderIndex(editor: CanvasEditor, agentPlaceholderSet: AgentJobPlaceholderSet): number | undefined {
     for (let index = 0; index < agentPlaceholderSet.placeholderSet.placements.length; index += 1) {
       const placement = agentPlaceholderSet.placeholderSet.placements[index];
       if (placement && isGenerationPlaceholderShape(editor.getShape(placement.id))) {
@@ -7056,24 +7059,24 @@ export function App() {
   }
 
   function replaceAgentPlaceholderAtIndex(
-    editor: Editor,
+    editor: CanvasEditor,
     agentPlaceholderSet: AgentJobPlaceholderSet,
     index: number,
     asset: GeneratedAsset,
     altText: string
-  ): TLShapeId | undefined {
+  ): CanvasShapeId | undefined {
     const placement = agentPlaceholderSet.placeholderSet.placements[index];
     if (!placement || !isGenerationPlaceholderShape(editor.getShape(placement.id))) {
       return undefined;
     }
 
-    const imageShape = createImageShape(asset, livePlacement(editor, placement), altText);
-    const assetRecordId = createTldrawAssetId(asset.id);
+    const assetRecordId = existingCanvasAssetId(editor, asset.id) ?? createCanvasAssetId();
+    const imageShape = createImageShape(asset, livePlacement(editor, placement), altText, assetRecordId);
 
     editor.run(() => {
       editor.deleteShapes([placement.id]);
       if (!editor.getAsset(assetRecordId)) {
-        editor.createAssets([createImageAsset(asset)]);
+        editor.createAssets([createImageAsset(asset, assetRecordId)]);
       }
       editor.createShapes([imageShape]);
       editor.bringToFront([imageShape.id]);
@@ -7082,7 +7085,7 @@ export function App() {
     return imageShape.id;
   }
 
-  function replaceAgentPlaceholderWithAsset(event: Extract<AgentServerEvent, { type: "asset_preview" }>): TLShapeId | undefined {
+  function replaceAgentPlaceholderWithAsset(event: Extract<AgentServerEvent, { type: "asset_preview" }>): CanvasShapeId | undefined {
     const editor = editorRef.current;
     if (!editor) {
       return undefined;
@@ -7189,7 +7192,7 @@ export function App() {
     });
   }
 
-  function addAgentOutputAssetToCanvas(event: Extract<AgentServerEvent, { type: "asset_preview" }>): TLShapeId | undefined {
+  function addAgentOutputAssetToCanvas(event: Extract<AgentServerEvent, { type: "asset_preview" }>): CanvasShapeId | undefined {
     const editor = editorRef.current;
     if (!editor) {
       return undefined;
@@ -7209,16 +7212,17 @@ export function App() {
     const placementIndex = agentOutputPlacementCountsRef.current.get(placementKey) ?? 0;
     agentOutputPlacementCountsRef.current.set(placementKey, placementIndex + 1);
 
+    const assetRecordId = existingCanvasAssetId(editor, event.asset.id) ?? createCanvasAssetId();
     const imageShape = createImageShape(
       event.asset,
       agentOutputPlacement(editor, event.planId, event.asset, placementIndex),
-      `${event.jobId}: ${event.asset.fileName}`
+      `${event.jobId}: ${event.asset.fileName}`,
+      assetRecordId
     );
-    const assetRecordId = createTldrawAssetId(event.asset.id);
 
     editor.run(() => {
       if (!editor.getAsset(assetRecordId)) {
-        editor.createAssets([createImageAsset(event.asset)]);
+        editor.createAssets([createImageAsset(event.asset, assetRecordId)]);
       }
       editor.createShapes([imageShape]);
       editor.bringToFront([imageShape.id]);
@@ -7265,14 +7269,9 @@ export function App() {
     });
   }
 
-  function clearCanvasAgentPlanNodes(planId?: string): void {
-    const editor = editorRef.current;
-    if (planId) {
-      agentOutputPlacementCountsRef.current.delete(planId);
-    }
-    if (editor) {
-      deleteAgentPlanNodes(editor);
-    }
+  function resetAgentOutputPlacement(planId?: string): void {
+    if (planId) agentOutputPlacementCountsRef.current.delete(planId);
+    else agentOutputPlacementCountsRef.current.clear();
   }
 
   function agentContextIndexesLabel(indexes: number[]): string {
@@ -7339,12 +7338,11 @@ export function App() {
           if (selectedReferences) {
             agentPlanSelectedReferencesRef.current.set(event.plan.id, selectedReferences);
           }
-          clearCanvasAgentPlanNodes(event.plan.id);
+          resetAgentOutputPlacement(event.plan.id);
           upsertAgentPlanAttachment(
             event.plan,
             t("agentPlanCreated", { title: event.plan.title }),
-            eventRunId,
-            selectedReferences ?? agentPlanSelectedReferencesRef.current.get(event.plan.id)
+            eventRunId
           );
         }
         return;
@@ -7360,13 +7358,12 @@ export function App() {
           });
           return;
         }
-        clearCanvasAgentPlanNodes();
+        resetAgentOutputPlacement();
         syncAgentJobPlaceholdersForPlan(event.plan, runIdForAgentEvent(event));
         upsertAgentPlanAttachment(
           event.plan,
           t("agentPlanUpdated", { title: event.plan.title }),
-          runIdForAgentEvent(event),
-          agentPlanSelectedReferencesRef.current.get(event.plan.id)
+          runIdForAgentEvent(event)
         );
         return;
       case "asset_preview":
@@ -7902,7 +7899,7 @@ export function App() {
         });
       }
       const socket = await ensureAgentSocket();
-      clearCanvasAgentPlanNodes();
+      resetAgentOutputPlacement();
       if (selectedReferences) {
         agentPlanSelectedReferencesRef.current.set(plan.id, selectedReferences);
       }
@@ -7929,6 +7926,18 @@ export function App() {
         content: error instanceof Error ? error.message : t("agentSendFailed")
       });
     }
+  }
+
+  function locateAgentPlanNode(plan: GenerationPlan): void {
+    const editor = editorRef.current;
+    if (!editor) {
+      addAgentMessage({ role: "error", content: t("generationCanvasNotReady") });
+      return;
+    }
+
+    const shapeId = locateAgentPlanNodeOnCanvas(editor, plan);
+    agentPlanNodeIdsRef.current.set(plan.id, shapeId);
+    setSelectedCanvasPlanId(plan.id);
   }
 
   function locateAgentPreview(preview: AgentChatAssetPreview): void {
@@ -8029,9 +8038,6 @@ export function App() {
       {...(shouldShowHostSessionRecovery ? { inert: "" } : {})}
       data-canvas-theme={route !== "home" && route !== "pool" && isCanvasDarkMode ? "dark" : "light"}
       data-region-annotation-mode={isReferenceMode ? regionAnnotationMode : undefined}
-      data-region-modifier-active={
-        isRegionAnnotationActive && panelTab === "manual" && isRegionModifierPressed ? "true" : undefined
-      }
     >
       <TopNavigation
         desktopUpdateStatus={desktopUpdater.state.status}
@@ -8079,17 +8085,27 @@ export function App() {
         ref={canvasShellRef}
         tabIndex={-1}
       >
-        {shouldBlockCanvasForHostSession ? <div role="alert">{hostSessionErrorPanel}</div> : isProjectLoaded ? (
-          <Tldraw
-            assets={canvasAssetStore}
-            components={tldrawComponents}
-            licenseKey={TLDRAW_LICENSE_KEY}
-            options={tldrawOptions}
-            snapshot={projectSnapshot}
-            shapeUtils={shapeUtils}
-            user={tldrawUser}
-            onMount={handleEditorMount}
-          />
+        {route !== "canvas" ? null : shouldBlockCanvasForHostSession ? <div role="alert">{hostSessionErrorPanel}</div> : isProjectLoaded ? (
+          <Suspense fallback={<div className="canvas-loading-state">{t("canvasLoadingTitle")}</div>}>
+            <LazyExcalidrawCanvas
+              locale={locale}
+              overlays={canvasOverlays}
+              snapshot={projectSnapshot ?? null}
+              theme={isCanvasDarkMode ? "dark" : "light"}
+              onMount={handleEditorMount}
+            />
+          </Suspense>
+        ) : saveStatus === "error" ? (
+          <div className="canvas-loading-state" role="alert">
+            <AlertTriangle className="size-5 text-amber-600" aria-hidden="true" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-neutral-800">{t("projectLoadFailed")}</p>
+              <p className="mt-1 text-xs text-neutral-500">{saveError}</p>
+              <button className="mt-3 rounded-md bg-neutral-900 px-3 py-2 text-xs font-semibold text-white" type="button" onClick={() => setProjectLoadAttempt((value) => value + 1)}>
+                {t("canvasAssetRetry")}
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="canvas-loading-state">
             <BrandMark className="brand-mark--large" />
@@ -9064,11 +9080,13 @@ export function App() {
                     ) : null}
                     {message.plan ? (
                       <AgentPlanCard
+                        isSelectedOnCanvas={isGenerationPlan(message.plan) && message.plan.id === selectedCanvasPlanId}
                         isAgentConfigured={isAgentConfigured}
                         isAgentRunning={isAgentRunning}
                         plan={message.plan}
                         t={t}
                         onAction={(plan, action) => void sendAgentPlanAction(plan, action)}
+                        onLocate={locateAgentPlanNode}
                       />
                     ) : null}
                     {previewCount > 0 && message.previews ? (
@@ -9856,39 +9874,39 @@ export function App() {
             document.body
           )
         : null}
-      {manualRegionDraft
+      {regionSelectionDraft?.mode === "manual" && !regionSelectionDraft.isDrawing
         ? createPortal(
             <form
               className="manual-region-popover"
-              style={manualRegionDraftStyle(manualRegionDraft)}
+              style={regionSelectionDraftStyle(regionSelectionDraft)}
               data-testid="manual-region-popover"
               onSubmit={(event) => {
                 event.preventDefault();
-                confirmManualRegionDraft();
+                confirmRegionSelectionDraft();
               }}
             >
               <label>
                 <span>{t("regionPromptManualPopoverLabel")}</span>
                 <input
                   ref={manualRegionInputRef}
-                  value={manualRegionDraft.label}
+                  value={regionSelectionDraft.label}
                   placeholder={t("regionPromptManualPopoverPlaceholder")}
                   onChange={(event) => updateManualRegionDraftLabel(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") {
                       event.preventDefault();
-                      setManualRegionDraft(null);
+                      setRegionSelectionDraft(null);
                       return;
                     }
                     if (event.key === "Enter") {
                       event.preventDefault();
-                      confirmManualRegionDraft();
+                      confirmRegionSelectionDraft();
                     }
                   }}
                 />
               </label>
               <div className="manual-region-popover__actions">
-                <button className="secondary-action h-8 px-2 text-xs" type="button" onClick={() => setManualRegionDraft(null)}>
+                <button className="secondary-action h-8 px-2 text-xs" type="button" onClick={() => setRegionSelectionDraft(null)}>
                   {t("commonCancel")}
                 </button>
                 <button className="primary-action h-8 px-2 text-xs" type="submit">

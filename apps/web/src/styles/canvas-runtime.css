@@ -181,13 +181,156 @@
   box-shadow: var(--shadow-soft);
 }
 
+.excalidraw-canvas-runtime {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.excalidraw-canvas-runtime > .excalidraw {
+  height: 100%;
+}
+
+.canvas-export {
+  position: absolute;
+  top: 4.75rem;
+  right: 0.75rem;
+  z-index: 42;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-panel);
+  box-shadow: var(--shadow-soft);
+  color: var(--ink);
+  padding: 0.25rem;
+  pointer-events: auto;
+}
+
+.canvas-export__label {
+  color: var(--muted-ink);
+  font-size: 0.68rem;
+  font-weight: 750;
+  padding-inline: 0.35rem 0.2rem;
+  white-space: nowrap;
+}
+
+.canvas-export > button,
+.canvas-export__error button {
+  min-height: 2.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 0 0.5rem;
+}
+
+.canvas-export > button:hover,
+.canvas-export__error button:hover {
+  border-color: var(--accent-dark);
+  color: var(--accent-dark);
+}
+
+.canvas-export > button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.canvas-export__error {
+  position: absolute;
+  top: auto;
+  right: 0;
+  bottom: calc(100% + 0.45rem);
+  display: flex;
+  width: min(20rem, calc(100vw - 1.5rem));
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning) 8%, var(--paper-panel));
+  box-shadow: var(--shadow-soft);
+  color: var(--ink);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  padding: 0.65rem;
+}
+
+.canvas-export__error button {
+  min-height: 2.5rem;
+  flex: none;
+}
+
+@media (max-width: 1023px) {
+  .canvas-export {
+    top: auto;
+    right: 0.75rem;
+    bottom: calc(8.5rem + env(safe-area-inset-bottom));
+  }
+
+  .canvas-export > button {
+    min-height: 2.75rem;
+  }
+
+  .canvas-export__error {
+    right: 0;
+    bottom: calc(100% + 0.45rem);
+  }
+}
+
+@media (max-width: 768px) {
+  .canvas-export {
+    right: 0.5rem;
+  }
+
+  .canvas-export__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .canvas-export > button {
+    min-height: 2.75rem;
+  }
+
+  .excalidraw-canvas-runtime > .excalidraw.excalidraw--mobile .App-toolbar--mobile {
+    max-width: calc(100vw - 2rem);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .excalidraw-canvas-runtime > .excalidraw.excalidraw--mobile .App-toolbar--mobile::-webkit-scrollbar {
+    display: none;
+  }
+
+  .excalidraw-canvas-runtime > .excalidraw.excalidraw--mobile .App-toolbar--mobile > .Stack,
+  .excalidraw-canvas-runtime > .excalidraw.excalidraw--mobile .App-toolbar--mobile .Stack_horizontal {
+    width: max-content;
+  }
+
+  .excalidraw-canvas-runtime > .excalidraw .ToolIcon,
+  .excalidraw-canvas-runtime > .excalidraw .dropdown-menu-button {
+    width: 2.75rem;
+    min-width: 2.75rem;
+    height: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+}
+
 .canvas-asset-availability {
   position: absolute;
-  top: 3.25rem;
-  left: 50%;
+  top: 4.75rem;
+  left: 0.75rem;
   z-index: 40;
   display: grid;
-  width: min(34rem, calc(100% - 1.5rem));
+  width: min(34rem, calc(100% - 22rem));
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: 0.65rem;
@@ -198,7 +341,14 @@
   color: var(--ink);
   padding: 0.7rem 0.8rem;
   pointer-events: auto;
-  transform: translateX(-50%);
+}
+
+@media (max-width: 1023px) {
+  .canvas-asset-availability {
+    left: 50%;
+    width: min(34rem, calc(100% - 1.5rem));
+    transform: translateX(-50%);
+  }
 }
 
 .canvas-asset-availability > svg {
@@ -352,7 +502,7 @@
     display: inline-flex;
     position: fixed;
     right: max(1rem, calc(1rem + env(safe-area-inset-right)));
-    bottom: max(6.5rem, calc(1rem + env(safe-area-inset-bottom)));
+    bottom: calc(4.75rem + env(safe-area-inset-bottom));
     z-index: 1800;
     height: 2.75rem;
     align-items: center;
@@ -367,6 +517,7 @@
     font-weight: 700;
     line-height: 1;
     padding: 0 1rem;
+    white-space: nowrap;
     transition:
       background-color 150ms ease,
       box-shadow 150ms ease,
@@ -422,4 +573,9 @@
     transform: none;
     visibility: visible;
   }
+}
+
+html[lang="zh-CN"] .app-root[data-region-annotation-mode="auto"] .excalidraw-canvas-runtime .HintViewer,
+html[lang="zh-CN"] .app-root[data-region-annotation-mode="manual"] .excalidraw-canvas-runtime .HintViewer {
+  display: none;
 }

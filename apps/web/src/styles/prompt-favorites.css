@@ -951,7 +951,7 @@
 @media (max-width: 1023px) {
   .prompt-favorites-float {
     right: auto;
-    bottom: max(1rem, calc(1rem + env(safe-area-inset-bottom)));
+    bottom: calc(4.75rem + env(safe-area-inset-bottom));
     left: max(0.75rem, calc(0.75rem + env(safe-area-inset-left)));
     width: min(64vw, 18rem);
     max-width: calc(100vw - 8.25rem);

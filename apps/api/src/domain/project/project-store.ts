@@ -1,13 +1,15 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
-import type {
-  GeneratedAsset,
-  GalleryImageItem,
-  GalleryResponse,
-  GenerationRecord as ApiGenerationRecord,
-  ImageMode,
-  ImageQuality,
-  OutputFormat,
-  ProjectState
+import {
+  validateExcalidrawProjectSnapshot,
+  type CanvasAssetReference,
+  type GeneratedAsset,
+  type GalleryImageItem,
+  type GalleryResponse,
+  type GenerationRecord as ApiGenerationRecord,
+  type ImageMode,
+  type ImageQuality,
+  type OutputFormat,
+  type ProjectState
 } from "../contracts.js";
 import { db } from "../../infrastructure/database.js";
 import { assets, generationOutputs, generationRecords, projects } from "../../infrastructure/schema.js";
@@ -45,83 +47,13 @@ function parseSnapshot(snapshotJson: string): unknown | null {
   return JSON.parse(snapshotJson) as unknown;
 }
 
-function cleanSnapshotJson(snapshotJson: string): string {
-  const snapshot = parseSnapshot(snapshotJson);
-  const cleanedSnapshot = removeUnreferencedAssetsFromSnapshot(snapshot);
-  return cleanedSnapshot === snapshot ? snapshotJson : JSON.stringify(cleanedSnapshot);
-}
-
-function removeUnreferencedAssetsFromSnapshot<TSnapshot>(snapshot: TSnapshot): TSnapshot {
-  if (!isRecord(snapshot)) {
-    return snapshot;
+export class ProjectSnapshotAssetError extends Error {
+  constructor(
+    readonly code: "project_asset_missing" | "project_asset_mismatch",
+    message: string
+  ) {
+    super(message);
   }
-
-  if (isRecord(snapshot.document)) {
-    const document = removeUnreferencedAssetsFromStoreSnapshot(snapshot.document);
-    return document === snapshot.document ? snapshot : ({ ...snapshot, document } as TSnapshot);
-  }
-
-  return removeUnreferencedAssetsFromStoreSnapshot(snapshot);
-}
-
-function removeUnreferencedAssetsFromStoreSnapshot<TSnapshot>(snapshot: TSnapshot): TSnapshot {
-  if (!isRecord(snapshot) || !isRecord(snapshot.store)) {
-    return snapshot;
-  }
-
-  const assetIds = new Set(
-    Object.entries(snapshot.store)
-      .filter(([id, record]) => isAssetSnapshotRecord(id, record))
-      .map(([id]) => id)
-  );
-  if (assetIds.size === 0) {
-    return snapshot;
-  }
-
-  const referencedAssetIds = new Set<string>();
-  for (const [id, record] of Object.entries(snapshot.store)) {
-    if (!isAssetSnapshotRecord(id, record)) {
-      collectAssetReferences(record, assetIds, referencedAssetIds);
-    }
-  }
-
-  let changed = false;
-  const store: Record<string, unknown> = {};
-  for (const [id, record] of Object.entries(snapshot.store)) {
-    if (isAssetSnapshotRecord(id, record) && !referencedAssetIds.has(id)) {
-      changed = true;
-      continue;
-    }
-
-    store[id] = record;
-  }
-
-  return changed ? ({ ...snapshot, store } as TSnapshot) : snapshot;
-}
-
-function collectAssetReferences(value: unknown, assetIds: Set<string>, referencedAssetIds: Set<string>): void {
-  if (typeof value === "string") {
-    if (assetIds.has(value)) {
-      referencedAssetIds.add(value);
-    }
-    return;
-  }
-
-  if (!isRecord(value)) {
-    return;
-  }
-
-  for (const child of Object.values(value)) {
-    collectAssetReferences(child, assetIds, referencedAssetIds);
-  }
-}
-
-function isAssetSnapshotRecord(id: string, value: unknown): boolean {
-  return isRecord(value) && (value.typeName === "asset" || id.startsWith("asset:"));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function ensureDefaultProject(hostContext?: HostContext): void {
@@ -151,7 +83,13 @@ export function saveProjectSnapshot(input: ProjectSnapshotInput, hostContext?: H
   const updatedAt = nowIso();
   const current = getDefaultProjectRow(hostContext);
   const projectId = scopedSingletonId(DEFAULT_PROJECT_ID, hostContext);
-  const snapshotJson = cleanSnapshotJson(input.snapshotJson);
+  const snapshot = parseSnapshot(input.snapshotJson);
+  const validatedSnapshot = validateExcalidrawProjectSnapshot(snapshot);
+  if (!validatedSnapshot.ok) {
+    throw new Error(validatedSnapshot.reason);
+  }
+  validateProjectAssetReferences(validatedSnapshot.value?.assets ?? {}, hostContext);
+  const snapshotJson = JSON.stringify(validatedSnapshot.value);
 
   db.update(projects)
     .set({
@@ -195,10 +133,36 @@ export function getProjectState(hostContext?: HostContext): ProjectState {
   return {
     id: project.id,
     name: project.name,
-    snapshot: removeUnreferencedAssetsFromSnapshot(parseSnapshot(project.snapshotJson)),
+    snapshot: parseSnapshot(project.snapshotJson),
     history: getGenerationHistory(hostContext),
     updatedAt: project.updatedAt
   };
+}
+
+function validateProjectAssetReferences(
+  references: Record<string, CanvasAssetReference>,
+  hostContext?: HostContext
+): void {
+  for (const reference of Object.values(references)) {
+    const asset = db
+      .select()
+      .from(assets)
+      .where(and(eq(assets.id, reference.assetId), eq(assets.userId, hostUserId(hostContext))))
+      .get();
+    if (!asset) {
+      throw new ProjectSnapshotAssetError("project_asset_missing", "A referenced project asset does not exist.");
+    }
+    if (
+      asset.fileName !== reference.fileName ||
+      asset.mimeType !== reference.mimeType ||
+      asset.width !== reference.width ||
+      asset.height !== reference.height ||
+      asset.byteSize !== reference.byteSize ||
+      asset.contentSha256 !== reference.contentSha256
+    ) {
+      throw new ProjectSnapshotAssetError("project_asset_mismatch", "A referenced project asset failed integrity validation.");
+    }
+  }
 }
 
 export function getGalleryImages(hostContext?: HostContext): GalleryResponse {
@@ -341,6 +305,8 @@ function toGeneratedAsset(asset: (typeof assets.$inferSelect) | undefined): Gene
     mimeType: asset.mimeType,
     width: asset.width,
     height: asset.height,
+    byteSize: asset.byteSize ?? undefined,
+    contentSha256: asset.contentSha256 ?? undefined,
     cloud:
       (asset.cloudProvider === "cos" || asset.cloudProvider === "s3") && (asset.cloudStatus === "uploaded" || asset.cloudStatus === "failed")
         ? {

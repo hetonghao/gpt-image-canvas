@@ -2,15 +2,16 @@
 
 Generated documentation for the SQLite schema defined in `apps/api/src/infrastructure/schema.ts`.
 
-Last reviewed: 2026-07-13.
+Last reviewed: 2026-08-15.
 
 ## `projects`
 
-Stores the saved tldraw project snapshot.
+Stores the versioned Excalidraw project snapshot. Scene elements keep an opaque `fileId` to platform asset metadata; image bytes are stored under `DATA_DIR`, not in `snapshot_json`.
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | text | Primary key. |
+| `user_id` | text | Required user scope; defaults to `standalone` for local runtime data. |
 | `name` | text | Required project name. |
 | `snapshot_json` | text | Required serialized project snapshot. |
 | `created_at` | text | Required ISO timestamp. |
@@ -23,11 +24,14 @@ Stores generated and reference asset metadata.
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | text | Primary key. |
+| `user_id` | text | Required user scope; used with content hash for deduplication. |
 | `file_name` | text | Required stored filename. |
 | `relative_path` | text | Required path relative to `DATA_DIR`. |
 | `mime_type` | text | Required asset MIME type. |
 | `width` | integer | Required image width. |
 | `height` | integer | Required image height. |
+| `byte_size` | integer | Optional original file byte count. |
+| `content_sha256` | text | Optional original file SHA-256; unique within a user when present. |
 | `cloud_provider` | text | Optional cloud provider ID. |
 | `cloud_bucket` | text | Optional cloud bucket. |
 | `cloud_region` | text | Optional cloud region. |

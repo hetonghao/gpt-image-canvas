@@ -79,6 +79,10 @@ export type ResolutionTier = "1K" | "2K" | "4K";
 
 export interface AssetMetadataResponse extends ImageSize {
   id: string;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  contentSha256: string;
 }
 
 export interface AssetFileLocationResponse {

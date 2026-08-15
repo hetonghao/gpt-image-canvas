@@ -12,6 +12,7 @@ import {
   STYLE_PRESETS,
   composePrompt,
   validateSceneImageSize,
+  validateExcalidrawProjectSnapshot,
   type GenerationCount,
   type ImageQuality,
   type ImageSize,
@@ -1098,6 +1099,14 @@ export function parseProjectPayload(input: unknown):
         "invalid_snapshot",
         `Project snapshot is too large (${formatBytes(snapshotBytes)}). Maximum is ${formatBytes(MAX_PROJECT_SNAPSHOT_BYTES)}.`
       )
+    };
+  }
+
+  const validatedSnapshot = validateExcalidrawProjectSnapshot(snapshot);
+  if (!validatedSnapshot.ok) {
+    return {
+      ok: false,
+      error: errorResponse("invalid_snapshot", validatedSnapshot.reason)
     };
   }
 

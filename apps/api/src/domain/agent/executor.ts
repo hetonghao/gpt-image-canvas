@@ -399,22 +399,23 @@ async function resolveGenerationReference(
 }
 
 async function storedAssetReference(assetId: string, hostContext?: HostContext): Promise<{ referenceImage: ReferenceImageInput; assetId: string } | undefined> {
-  for (const candidateAssetId of storedAssetIdCandidates(assetId)) {
-    const stored = await readStoredAsset(candidateAssetId, hostContext);
-    if (!stored) {
-      continue;
-    }
-
-    return {
-      referenceImage: {
-        dataUrl: `data:${stored.file.mimeType};base64,${stored.bytes.toString("base64")}`,
-        fileName: stored.file.fileName
-      },
-      assetId: stored.file.id
-    };
+  const trimmedAssetId = assetId.trim();
+  if (!trimmedAssetId) {
+    return undefined;
   }
 
-  return undefined;
+  const stored = await readStoredAsset(trimmedAssetId, hostContext);
+  if (!stored) {
+    return undefined;
+  }
+
+  return {
+    referenceImage: {
+      dataUrl: `data:${stored.file.mimeType};base64,${stored.bytes.toString("base64")}`,
+      fileName: stored.file.fileName
+    },
+    assetId: stored.file.id
+  };
 }
 
 function selectedReferenceFor(
@@ -459,22 +460,8 @@ function addSelectedReferenceMapEntries(
 }
 
 function selectedReferenceLookupKeys(value: string | undefined): string[] {
-  if (!value) {
-    return [];
-  }
-
-  return [...storedAssetIdCandidates(value), value.trim()].filter((key, index, keys) => key && keys.indexOf(key) === index);
-}
-
-function storedAssetIdCandidates(assetId: string): string[] {
-  const trimmed = assetId.trim();
-  const candidates = [trimmed];
-  const tldrawAssetMatch = /^asset:(.+)$/u.exec(trimmed);
-  if (tldrawAssetMatch?.[1]) {
-    candidates.push(tldrawAssetMatch[1]);
-  }
-
-  return candidates.filter((candidate, index) => candidate && candidates.indexOf(candidate) === index);
+  const trimmed = value?.trim();
+  return trimmed ? [trimmed] : [];
 }
 
 function dependenciesSucceeded(plan: GenerationPlan, jobId: string): boolean {
