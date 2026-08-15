@@ -4002,6 +4002,7 @@ export function App() {
   const manualRegionInputRef = useRef<HTMLInputElement | null>(null);
   const panelCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
+  const hostSessionBlockedRef = useRef(false);
   const hostSessionRecoveryRef = useRef<HTMLDivElement | null>(null);
   const regionCanvasPointerDownRef = useRef<((event: PointerEvent) => void) | null>(null);
   const activeGenerationsRef = useRef<Map<string, ActiveGenerationTask>>(new Map());
@@ -4210,6 +4211,7 @@ export function App() {
   const shouldShowValidation = generationSubmitAction === "generate" && Boolean(validationMessage);
   const canGenerate = generationSubmitAction === "configure-image-model" || !validationMessage;
   const isHostSessionBlocked = Boolean(hostSessionError);
+  hostSessionBlockedRef.current = isHostSessionBlocked;
   const hasMountedEditor = Boolean(editorRef.current);
   const shouldBlockCanvasForHostSession = isHostSessionBlocked && !hasMountedEditor;
   const shouldShowHostSessionRecovery = isHostSessionBlocked && hasMountedEditor;
@@ -4421,7 +4423,7 @@ export function App() {
   }, [desktopAuthSupported, locale, navigateToRoute, t]);
 
   const saveProjectSnapshot = useCallback(async (editor: Editor): Promise<void> => {
-    if (isHostSessionBlocked) {
+    if (hostSessionBlockedRef.current) {
       return;
     }
 
@@ -4454,7 +4456,7 @@ export function App() {
         setSaveError(t("autosaveFailed"));
       }
     }
-  }, [isHostSessionBlocked, t]);
+  }, [locale, t]);
 
   const panelStatus = useMemo<PanelStatus | null>(() => {
     if (isGenerating) {
@@ -5300,7 +5302,7 @@ export function App() {
 
     const removeListener = editor.store.listen(
       () => {
-        if (isHostSessionBlocked) {
+        if (hostSessionBlockedRef.current) {
           return;
         }
 
@@ -5380,7 +5382,7 @@ export function App() {
       removeReferenceStoreListener();
       removeListener();
     };
-  }, [isHostSessionBlocked, locale, saveProjectSnapshot, t]);
+  }, [locale, saveProjectSnapshot, t]);
 
   function selectScenePreset(nextPresetId: string): void {
     if (nextPresetId === CUSTOM_SIZE_PRESET_ID) {

@@ -29,3 +29,17 @@ test("keeps the mounted canvas alive while a host-session recheck is blocked", (
     "The recovery overlay should block interaction with the stale session"
   );
 });
+
+test("keeps the mounted editor callback stable during host-session recovery", () => {
+  assert.match(
+    canvasSource,
+    /const hostSessionBlockedRef = useRef\(false\);/u,
+    "Mounted editor callbacks must read host-session state from a ref"
+  );
+  assert.match(canvasSource, /hostSessionBlockedRef\.current = isHostSessionBlocked;/u);
+  assert.doesNotMatch(
+    canvasSource,
+    /\}, \[isHostSessionBlocked, locale, saveProjectSnapshot, t\]\);/u,
+    "A host-session recheck must not replace the Tldraw onMount callback"
+  );
+});
