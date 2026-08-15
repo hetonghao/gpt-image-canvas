@@ -19,6 +19,7 @@
     "smoke:web:provider-config-dialog": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/provider-config/provider-config-dialog.smoke.ts && pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/provider-config/host-model-cache.smoke.ts && pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/codex-login-dialog.smoke.ts",
     "smoke:web:search-field": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/shared/ui/search-field.smoke.ts",
     "smoke:web:browser-contracts": "node scripts/web-ui-contracts.smoke.mjs",
+    "smoke:web:host-session-recovery": "node scripts/host-session-recovery.smoke.mjs",
     "smoke:web:provider-status-popover": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/provider-status-popover.smoke.ts",
     "smoke:web:desktop-navigation": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/canvas/desktop-navigation.smoke.ts",
     "smoke:web:home-desktop": "pnpm --filter @gpt-image-canvas/api exec tsx ../../apps/web/src/features/home/home-desktop.smoke.ts",

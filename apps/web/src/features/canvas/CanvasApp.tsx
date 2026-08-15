@@ -4002,6 +4002,7 @@ export function App() {
   const manualRegionInputRef = useRef<HTMLInputElement | null>(null);
   const panelCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
+  const hostSessionRecoveryRef = useRef<HTMLDivElement | null>(null);
   const regionCanvasPointerDownRef = useRef<((event: PointerEvent) => void) | null>(null);
   const activeGenerationsRef = useRef<Map<string, ActiveGenerationTask>>(new Map());
   const generationPlaceholderPointerIdsRef = useRef<Set<number>>(new Set());
@@ -4209,6 +4210,9 @@ export function App() {
   const shouldShowValidation = generationSubmitAction === "generate" && Boolean(validationMessage);
   const canGenerate = generationSubmitAction === "configure-image-model" || !validationMessage;
   const isHostSessionBlocked = Boolean(hostSessionError);
+  const hasMountedEditor = Boolean(editorRef.current);
+  const shouldBlockCanvasForHostSession = isHostSessionBlocked && !hasMountedEditor;
+  const shouldShowHostSessionRecovery = isHostSessionBlocked && hasMountedEditor;
   const tldrawComponents = useMemo(
     () =>
       ({
@@ -4224,6 +4228,12 @@ export function App() {
       }) satisfies TLComponents,
     []
   );
+
+  useEffect(() => {
+    if (shouldShowHostSessionRecovery) {
+      hostSessionRecoveryRef.current?.focus();
+    }
+  }, [shouldShowHostSessionRecovery]);
 
   const navigateToRoute = useCallback((nextRoute: AppRoute, options: { replace?: boolean } = {}): void => {
     if (!options.replace) {
@@ -7948,6 +7958,39 @@ export function App() {
     }
   }
 
+  const hostSessionErrorPanel = (
+    <div className="canvas-loading-state canvas-host-session-state">
+      <AlertTriangle className="size-5 text-amber-600" aria-hidden="true" />
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-neutral-800">
+          {t("hostSessionRequiredOpenPrefix")} <span className="canvas-host-session-state__brand">AI Cove</span>{" "}
+          {t("hostSessionRequiredOpenMiddle")} <span className="canvas-host-session-state__brand">AI Cove Design</span>
+          {t("hostSessionRequiredRetryPrefix")}
+          <span className="canvas-host-session-state__action">
+            {t("hostSessionRequiredRetryAction")} <span className="canvas-host-session-state__brand">AI Cove</span>
+          </span>
+          {t("hostSessionRequiredEnd")}
+        </p>
+        <p className="mt-1 text-xs text-neutral-500">{hostSessionError}</p>
+        {desktopAuthError ? (
+          <p className="mt-2 text-xs font-medium text-red-600" role="alert">
+            {desktopAuthError}
+          </p>
+        ) : null}
+        {desktopAuthSupported ? (
+          <button
+            className="mt-3 rounded-md bg-neutral-900 px-3 py-2 text-xs font-semibold text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isDesktopAuthStarting}
+            type="button"
+            onClick={() => void startDesktopAuth()}
+          >
+            {isDesktopAuthStarting ? t("desktopAuthOpening") : t("desktopAuthLogin")}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+
   if (desktopSidecarStartup.status === "starting") {
     return (
       <div className="app-root">
@@ -7979,6 +8022,7 @@ export function App() {
   return (
     <div
       className="app-root"
+      {...(shouldShowHostSessionRecovery ? { inert: "" } : {})}
       data-canvas-theme={route !== "home" && route !== "pool" && isCanvasDarkMode ? "dark" : "light"}
       data-region-annotation-mode={isReferenceMode ? regionAnnotationMode : undefined}
       data-region-modifier-active={
@@ -8031,38 +8075,7 @@ export function App() {
         ref={canvasShellRef}
         tabIndex={-1}
       >
-        {isHostSessionBlocked ? (
-          <div className="canvas-loading-state canvas-host-session-state" role="alert">
-            <AlertTriangle className="size-5 text-amber-600" aria-hidden="true" />
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-neutral-800">
-                {t("hostSessionRequiredOpenPrefix")} <span className="canvas-host-session-state__brand">AI Cove</span>{" "}
-                {t("hostSessionRequiredOpenMiddle")} <span className="canvas-host-session-state__brand">AI Cove Design</span>
-                {t("hostSessionRequiredRetryPrefix")}
-                <span className="canvas-host-session-state__action">
-                  {t("hostSessionRequiredRetryAction")} <span className="canvas-host-session-state__brand">AI Cove</span>
-                </span>
-                {t("hostSessionRequiredEnd")}
-              </p>
-              <p className="mt-1 text-xs text-neutral-500">{hostSessionError}</p>
-              {desktopAuthError ? (
-                <p className="mt-2 text-xs font-medium text-red-600" role="alert">
-                  {desktopAuthError}
-                </p>
-              ) : null}
-              {desktopAuthSupported ? (
-                <button
-                  className="mt-3 rounded-md bg-neutral-900 px-3 py-2 text-xs font-semibold text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={isDesktopAuthStarting}
-                  type="button"
-                  onClick={() => void startDesktopAuth()}
-                >
-                  {isDesktopAuthStarting ? t("desktopAuthOpening") : t("desktopAuthLogin")}
-                </button>
-              ) : null}
-            </div>
-          </div>
-        ) : isProjectLoaded ? (
+        {shouldBlockCanvasForHostSession ? <div role="alert">{hostSessionErrorPanel}</div> : isProjectLoaded ? (
           <Tldraw
             assets={canvasAssetStore}
             components={tldrawComponents}
@@ -9901,6 +9914,21 @@ export function App() {
           />
         </Suspense>
       ) : null}
+      {shouldShowHostSessionRecovery
+        ? createPortal(
+            <div
+              ref={hostSessionRecoveryRef}
+              aria-live="assertive"
+              className="canvas-host-session-overlay"
+              data-testid="canvas-host-session-overlay"
+              role="alert"
+              tabIndex={-1}
+            >
+              {hostSessionErrorPanel}
+            </div>,
+            document.body
+          )
+        : null}
       {route === "pool" ? (
         <Suspense
           fallback={
