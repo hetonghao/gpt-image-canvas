@@ -5,6 +5,7 @@ import {
   MIGRATION_TOOL_VERSION,
   type FailureCode,
   type BusinessReferenceReconciliation,
+  type DataSummary,
   type MigrationCounts,
   type MigrationReport,
   type ProjectResult,
@@ -18,6 +19,11 @@ export function buildMigrationReport(input: {
   readonly outputDir: string;
   readonly reportDir: string;
   readonly sourceBackupId?: string;
+  readonly sourceBackupDigest?: string;
+  readonly toolCommit?: string;
+  readonly candidateImageDigest?: string;
+  readonly inputSummary: DataSummary | null;
+  readonly outputSummary: DataSummary | null;
   readonly counts: MigrationCounts;
   readonly databaseIntegrity: MigrationReport["databaseIntegrity"];
   readonly assetValidation: MigrationReport["assetValidation"];
@@ -30,11 +36,21 @@ export function buildMigrationReport(input: {
   readonly warningCodes: readonly WarningCode[];
   readonly warningsApproved: boolean;
 }): MigrationReport {
-  const status = input.failureCodes.length === 0 && (input.warningCodes.length === 0 || input.warningsApproved) ? "ready" : "blocked";
+  const bindingFailure = releaseBindingFailure(input);
+  const bindingReady = bindingFailure === undefined;
+  const bindingFailures: readonly FailureCode[] = bindingFailure === undefined ? [] : [bindingFailure];
+  const failureCodes = unique([...input.failureCodes, ...bindingFailures]);
+  const status = failureCodes.length === 0 && (input.warningCodes.length === 0 || input.warningsApproved) ? "ready" : "blocked";
   return {
     status,
     toolVersion: MIGRATION_TOOL_VERSION,
     sourceBackupIdHash: input.sourceBackupId ? hash(input.sourceBackupId) : null,
+    sourceBackupDigest: input.sourceBackupDigest ?? null,
+    toolCommit: input.toolCommit ?? null,
+    candidateImageDigest: input.candidateImageDigest ?? null,
+    inputSummary: input.inputSummary,
+    outputSummary: input.outputSummary,
+    reportBindingValidation: bindingReady ? "ok" : "failed",
     inputLabel: basename(input.inputDir),
     outputLabel: basename(input.outputDir),
     counts: input.counts,
@@ -45,7 +61,7 @@ export function buildMigrationReport(input: {
     businessReferenceReconciliation: input.businessReferenceReconciliation,
     tableReconciliation: input.tableReconciliation,
     projectResults: input.projectResults.map(toReportProject),
-    failureCodes: unique(input.failureCodes),
+    failureCodes,
     warningCodes: unique(input.warningCodes),
     warningsApproved: input.warningsApproved,
     reportFiles: {
@@ -70,6 +86,7 @@ function humanSummary(report: MigrationReport): string {
     `项目：输入 ${report.counts.inputProjects}，成功 ${report.counts.convertedProjects}，失败 ${report.counts.failedProjects}`,
     `元素：输入 ${report.counts.inputShapes}，输出 ${report.counts.outputElements}`,
     `资产引用：${report.counts.assetReferences}，已校验资产：${report.counts.validatedAssets}`,
+    `发布绑定：${report.reportBindingValidation}；输入/输出摘要：${report.inputSummary && report.outputSummary ? "已绑定" : "缺失"}`,
     `数据库完整性：${report.databaseIntegrity}；资产校验：${report.assetValidation}；重开校验：${report.reopenValidation}`,
     `业务引用对账：${report.businessReferenceValidation}；输入引用 ${report.businessReferenceReconciliation.sourceReferenceCount}，输出引用 ${report.businessReferenceReconciliation.outputReferenceCount}`,
     `警告审核：${report.warningsApproved ? "已批准" : "未批准"}`
@@ -78,6 +95,50 @@ function humanSummary(report: MigrationReport): string {
   if (report.warningCodes.length > 0) lines.push(`待人工确认警告：${report.warningCodes.join(", ")}`);
   lines.push("报告不包含项目正文、图片字节、凭证、Cookie 或 token。");
   return `${lines.join("\n")}\n`;
+}
+
+function releaseBindingFailure(input: {
+  readonly sourceBackupId?: string;
+  readonly sourceBackupDigest?: string;
+  readonly toolCommit?: string;
+  readonly candidateImageDigest?: string;
+  readonly inputSummary: DataSummary | null;
+  readonly outputSummary: DataSummary | null;
+}): FailureCode | undefined {
+  const complete = Boolean(
+    input.sourceBackupId?.trim() &&
+    isSha256(input.sourceBackupDigest) &&
+    isCommit(input.toolCommit) &&
+    isImageDigest(input.candidateImageDigest) &&
+    input.inputSummary &&
+    input.outputSummary
+  );
+  if (!complete) return "report_binding_missing";
+  if (!sourceBackupDigestMatches(input.sourceBackupDigest, input.inputSummary)) return "source_backup_digest_mismatch";
+  return undefined;
+}
+
+export function sourceBackupDigestMatches(sourceBackupDigest: string | undefined, inputSummary: DataSummary | null): boolean {
+  const normalizedDigest = normalizedSha256(sourceBackupDigest);
+  return inputSummary !== null && normalizedDigest !== undefined && normalizedDigest === inputSummary.directoryDigest;
+}
+
+function isSha256(value: string | undefined): boolean {
+  return normalizedSha256(value) !== undefined;
+}
+
+function normalizedSha256(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase().replace(/^sha256:/u, "");
+  return /^[0-9a-f]{64}$/u.test(normalized) ? normalized : undefined;
+}
+
+function isCommit(value: string | undefined): boolean {
+  return value !== undefined && /^[0-9a-f]{40}$/iu.test(value);
+}
+
+function isImageDigest(value: string | undefined): boolean {
+  return value !== undefined && /^sha256:[0-9a-f]{64}$/iu.test(value);
 }
 
 function toReportProject(project: ProjectResult): ReportProjectResult {

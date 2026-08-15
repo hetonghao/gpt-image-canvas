@@ -44,7 +44,18 @@ function nowIso(): string {
 }
 
 function parseSnapshot(snapshotJson: string): unknown | null {
-  return JSON.parse(snapshotJson) as unknown;
+  try {
+    return JSON.parse(snapshotJson);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new ProjectSnapshotFormatError("Persisted project snapshot is not valid JSON.");
+    }
+    throw error;
+  }
+}
+
+export class ProjectSnapshotFormatError extends Error {
+  readonly code = "project_snapshot_invalid";
 }
 
 export class ProjectSnapshotAssetError extends Error {
@@ -130,10 +141,15 @@ export function getProjectState(hostContext?: HostContext): ProjectState {
     );
   }
 
+  const validatedSnapshot = validateExcalidrawProjectSnapshot(parseSnapshot(project.snapshotJson));
+  if (!validatedSnapshot.ok) {
+    throw new ProjectSnapshotFormatError("Persisted project snapshot is not a valid AI Cove Excalidraw scene.");
+  }
+
   return {
     id: project.id,
     name: project.name,
-    snapshot: parseSnapshot(project.snapshotJson),
+    snapshot: validatedSnapshot.value,
     history: getGenerationHistory(hostContext),
     updatedAt: project.updatedAt
   };

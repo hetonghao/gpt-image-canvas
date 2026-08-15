@@ -14,6 +14,17 @@ import {
   type MigrationFixtureKind
 } from "../migration/fixtures.js";
 import { runOfflineMigration } from "../migration/offline-migration.js";
+import { summarizeDataDir } from "../migration/summary.js";
+
+const TEST_BINDING = {
+  sourceBackupId: "fixture-backup-issue-69",
+  toolCommit: "b".repeat(40),
+  candidateImageDigest: `sha256:${"c".repeat(64)}`
+} as const;
+
+function bindingFor(inputDir: string) {
+  return { ...TEST_BINDING, sourceBackupDigest: summarizeDataDir(inputDir).directoryDigest };
+}
 
 test("offline migration creates a fresh Excalidraw database and preserves duplicate asset references", async () => {
   const root = mkdtempSync(join(tmpdir(), "gpt-image-canvas-migration-success-"));
@@ -21,7 +32,8 @@ test("offline migration creates a fresh Excalidraw database and preserves duplic
     const fixture = seedMigrationFixture(root, "success");
     const outputDir = join(root, "output");
     const reportDir = join(root, "report");
-    const result = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir, reportDir });
+    const binding = bindingFor(fixture.inputDir);
+    const result = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir, reportDir, ...binding });
 
     assert.equal(result.status, "ready");
     assert.equal(result.counts.inputProjects, 1);
@@ -31,6 +43,13 @@ test("offline migration creates a fresh Excalidraw database and preserves duplic
     assert.equal(result.businessReferenceValidation, "ok");
     assert.equal(result.businessReferenceReconciliation.sourceReferenceCount, 9);
     assert.equal(result.businessReferenceReconciliation.sourceDigest, result.businessReferenceReconciliation.outputDigest);
+    assert.equal(result.reportBindingValidation, "ok");
+    assert.equal(result.sourceBackupDigest, binding.sourceBackupDigest);
+    assert.equal(result.toolCommit, binding.toolCommit);
+    assert.equal(result.candidateImageDigest, binding.candidateImageDigest);
+    if (!result.inputSummary || !result.outputSummary) throw new Error("expected report data summaries");
+    assert.equal(result.inputSummary.projectCount, 1);
+    assert.equal(result.outputSummary.projectCount, 1);
     assert.notEqual(outputDir, fixture.inputDir);
     assert.equal(readSourceSnapshot(fixture.inputDir, fixture.projectId), fixture.sourceSnapshotJson);
 
@@ -65,7 +84,7 @@ test("legacy assets schema derives integrity metadata in the fresh output", asyn
     }
 
     const outputDir = join(root, "output");
-    const result = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir, reportDir: join(root, "report") });
+    const result = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir, reportDir: join(root, "report"), ...bindingFor(fixture.inputDir) });
     assert.equal(result.status, "ready");
     const outputDatabase = new Database(join(outputDir, "gpt-image-canvas.sqlite"), { readonly: true });
     try {
@@ -90,7 +109,8 @@ for (const kind of ["unknown-shape", "missing-asset", "corrupt-asset", "multi-pa
       const result = await runOfflineMigration({
         inputDir: fixture.inputDir,
         outputDir: join(root, "output"),
-        reportDir: join(root, "report")
+        reportDir: join(root, "report"),
+        ...bindingFor(fixture.inputDir)
       });
 
       assert.equal(result.status, "blocked");
@@ -108,11 +128,11 @@ test("migration requires explicit approval for visible degradations", async () =
   const root = mkdtempSync(join(tmpdir(), "gpt-image-canvas-migration-warning-"));
   try {
     const fixture = seedMigrationFixture(root, "degraded-shape");
-    const blocked = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir: join(root, "output-blocked"), reportDir: join(root, "report-blocked") });
+    const blocked = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir: join(root, "output-blocked"), reportDir: join(root, "report-blocked"), ...bindingFor(fixture.inputDir) });
     assert.equal(blocked.status, "blocked");
     assert.ok(blocked.failureCodes.includes("warning_unapproved"));
     assert.ok(blocked.warningCodes.includes("visual_degraded"));
-    const approved = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir: join(root, "output-approved"), reportDir: join(root, "report-approved"), approveWarnings: true });
+    const approved = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir: join(root, "output-approved"), reportDir: join(root, "report-approved"), approveWarnings: true, ...bindingFor(fixture.inputDir) });
     assert.equal(approved.status, "ready");
     assert.equal(approved.warningsApproved, true);
     assert.ok(approved.warningCodes.includes("visual_degraded"));
@@ -126,7 +146,7 @@ test("migration blocks dangling generation and Agent asset references", async ()
   try {
     const fixture = seedMigrationFixture(root, "dangling-reference");
     const before = readSourceSnapshot(fixture.inputDir, fixture.projectId);
-    const result = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir: join(root, "output"), reportDir: join(root, "report") });
+    const result = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir: join(root, "output"), reportDir: join(root, "report"), ...bindingFor(fixture.inputDir) });
     assert.equal(result.status, "blocked");
     assert.ok(result.failureCodes.includes("business_reference_reconciliation_failed"));
     assert.equal(result.businessReferenceValidation, "failed");
@@ -144,10 +164,10 @@ test("offline migration protects an existing output directory on rerun", async (
   try {
     const fixture = seedMigrationFixture(root, "success");
     const outputDir = join(root, "output");
-    const first = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir, reportDir: join(root, "report-1") });
+    const first = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir, reportDir: join(root, "report-1"), ...bindingFor(fixture.inputDir) });
     assert.equal(first.status, "ready");
     const outputBefore = readFileSync(join(outputDir, "gpt-image-canvas.sqlite"));
-    const second = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir, reportDir: join(root, "report-2") });
+    const second = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir, reportDir: join(root, "report-2"), ...bindingFor(fixture.inputDir) });
     assert.equal(second.status, "blocked");
     assert.ok(second.failureCodes.includes("output_protected"));
     assert.deepEqual(readFileSync(join(outputDir, "gpt-image-canvas.sqlite")), outputBefore);
@@ -161,7 +181,7 @@ test("migration reports redact user content and token-like values", async () => 
   try {
     const fixture = seedMigrationFixture(root, "success");
     const reportDir = join(root, "report");
-    await runOfflineMigration({ inputDir: fixture.inputDir, outputDir: join(root, "output"), reportDir });
+    await runOfflineMigration({ inputDir: fixture.inputDir, outputDir: join(root, "output"), reportDir, ...bindingFor(fixture.inputDir) });
     const report = readFileSync(join(reportDir, "migration-report.json"), "utf8");
     const summary = readFileSync(join(reportDir, "migration-summary.txt"), "utf8");
     assert.equal(report.includes(PRIVATE_PROMPT), false);

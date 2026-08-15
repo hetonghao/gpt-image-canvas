@@ -10,6 +10,9 @@ function parseArguments(args: readonly string[]): MigrationOptions {
   let outputDir: string | undefined;
   let reportDir: string | undefined;
   let sourceBackupId: string | undefined;
+  let sourceBackupDigest: string | undefined;
+  let toolCommit: string | undefined;
+  let candidateImageDigest: string | undefined;
   let approveWarnings = false;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -26,6 +29,15 @@ function parseArguments(args: readonly string[]): MigrationOptions {
       case "--source-backup-id":
         sourceBackupId = requiredValue(args, ++index, argument);
         break;
+      case "--source-backup-digest":
+        sourceBackupDigest = requiredValue(args, ++index, argument);
+        break;
+      case "--tool-commit":
+        toolCommit = requiredValue(args, ++index, argument);
+        break;
+      case "--candidate-image-digest":
+        candidateImageDigest = requiredValue(args, ++index, argument);
+        break;
       case "--approve-warnings":
         approveWarnings = true;
         break;
@@ -34,11 +46,17 @@ function parseArguments(args: readonly string[]): MigrationOptions {
     }
   }
   if (!inputDir || !outputDir) throw new CliUsageError("--input and --output are required");
+  if (!sourceBackupId || !sourceBackupDigest || !toolCommit || !candidateImageDigest) {
+    throw new CliUsageError("--source-backup-id, --source-backup-digest, --tool-commit, and --candidate-image-digest are required");
+  }
   return {
     inputDir,
     outputDir,
     ...(reportDir === undefined ? {} : { reportDir }),
-    ...(sourceBackupId === undefined ? {} : { sourceBackupId }),
+    sourceBackupId,
+    sourceBackupDigest,
+    toolCommit,
+    candidateImageDigest,
     ...(approveWarnings ? { approveWarnings: true } : {})
   };
 }

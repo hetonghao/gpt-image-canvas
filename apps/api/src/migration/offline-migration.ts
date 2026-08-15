@@ -11,7 +11,8 @@ import {
   sameProjects,
   writeOutputData
 } from "./migration-support.js";
-import { buildMigrationReport, writeMigrationReport } from "./report.js";
+import { buildMigrationReport, sourceBackupDigestMatches, writeMigrationReport } from "./report.js";
+import { summarizeDataDir } from "./summary.js";
 import {
   copyInputData,
   DATABASE_FILE_NAME,
@@ -28,6 +29,7 @@ import type {
   BusinessReferenceReconciliation,
   CheckState,
   ConversionOutcome,
+  DataSummary,
   FailureCode,
   MigrationCounts,
   MigrationOptions,
@@ -47,6 +49,8 @@ type MigrationPaths = {
 type ReportInput = {
   readonly paths: MigrationPaths;
   readonly options: MigrationOptions;
+  readonly inputSummary: DataSummary | null;
+  readonly outputSummary: DataSummary | null;
   readonly counts: MigrationCounts;
   readonly databaseIntegrity: CheckState;
   readonly assetValidation: CheckState;
@@ -63,9 +67,12 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
   const paths = resolvePaths(options);
   const pathFailure = validatePaths(paths);
   if (pathFailure) return finishReport(blockedReportInput(paths, options, pathFailure));
+  if (!hasBindingFacts(options)) return finishReport(blockedReportInput(paths, options, "report_binding_missing"));
   if (existsSync(paths.outputDir)) return finishReport(blockedReportInput(paths, options, "output_protected"));
 
   let source: Database.Database | undefined;
+  let inputSummary: DataSummary | null = null;
+  let outputSummary: DataSummary | null = null;
   let phase: "input" | "copy" | "write" | "validate" = "input";
   try {
     source = openReadonlyDatabase(paths.inputDir);
@@ -75,6 +82,11 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
         databaseIntegrity: "failed"
       });
     }
+    const initialInputSummary = summarizeDataDir(paths.inputDir);
+    inputSummary = initialInputSummary;
+    if (!sourceBackupDigestMatches(options.sourceBackupDigest, initialInputSummary)) {
+      return finishReport(blockedReportInput(paths, options, "source_backup_digest_mismatch", inputSummary));
+    }
     const sourceTables = tableFingerprints(source);
     const sourceProjects = readProjects(source);
     const sourceAssets = readAssets(source);
@@ -82,10 +94,13 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
     const counts = migrationCounts(projectResults, sourceTables);
     const warningCodes = migrationWarnings(projectResults, sourceAssets);
     const projectFailures = projectResults.flatMap((project) => project.status === "blocked" ? project.failures : []);
-    if (!sameProjects(sourceProjects, readProjects(source))) {
+    const sourceAfterSummary = summarizeDataDir(paths.inputDir);
+    if (!sameProjects(sourceProjects, readProjects(source)) || sourceAfterSummary.directoryDigest !== initialInputSummary.directoryDigest) {
       return finishReport({
         paths,
         options,
+        inputSummary,
+        outputSummary,
         counts,
         databaseIntegrity: "failed",
         assetValidation: "skipped",
@@ -102,6 +117,8 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
       return finishReport({
         paths,
         options,
+        inputSummary,
+        outputSummary,
         counts,
         databaseIntegrity: "ok",
         assetValidation: assetCheckState(projectFailures),
@@ -121,6 +138,7 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
     copyInputData(paths.inputDir, paths.outputDir);
     phase = "write";
     writeOutputData(paths.outputDir, projectResults);
+    outputSummary = summarizeDataDir(paths.outputDir);
     phase = "validate";
     const validation = await validateOutput({ inputDir: paths.inputDir, outputDir: paths.outputDir, sourceTables, projects: projectResults });
     const failureCodes = [...validation.failures];
@@ -128,6 +146,8 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
     return finishReport({
       paths,
       options,
+      inputSummary,
+      outputSummary,
       counts,
       databaseIntegrity: validation.databaseIntegrity,
       assetValidation: validation.assetValidation,
@@ -142,7 +162,7 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
   } catch (error) {
     if (error instanceof Error) {
       const code: FailureCode = phase === "copy" ? "copy_failed" : phase === "write" ? "database_reconciliation_failed" : phase === "validate" ? "reopen_mismatch" : "input_invalid";
-      return finishReport(blockedReportInput(paths, options, code));
+      return finishReport(blockedReportInput(paths, options, code, inputSummary, outputSummary));
     }
     throw error;
   } finally {
@@ -166,10 +186,18 @@ function validatePaths(paths: MigrationPaths): FailureCode | undefined {
   return undefined;
 }
 
-function blockedReportInput(paths: MigrationPaths, options: MigrationOptions, failureCode: FailureCode): ReportInput {
+function blockedReportInput(
+  paths: MigrationPaths,
+  options: MigrationOptions,
+  failureCode: FailureCode,
+  inputSummary: DataSummary | null = null,
+  outputSummary: DataSummary | null = null
+): ReportInput {
   return {
     paths,
     options,
+    inputSummary,
+    outputSummary,
     counts: emptyCounts(),
     databaseIntegrity: "skipped",
     assetValidation: "skipped",
@@ -183,12 +211,21 @@ function blockedReportInput(paths: MigrationPaths, options: MigrationOptions, fa
   };
 }
 
+function hasBindingFacts(options: MigrationOptions): boolean {
+  return Boolean(options.sourceBackupId?.trim() && options.sourceBackupDigest && options.toolCommit && options.candidateImageDigest);
+}
+
 function finishReport(input: ReportInput): MigrationReport {
   const report = buildMigrationReport({
     inputDir: input.paths.inputDir,
     outputDir: input.paths.outputDir,
     reportDir: input.paths.reportDir,
     sourceBackupId: input.options.sourceBackupId,
+    sourceBackupDigest: input.options.sourceBackupDigest,
+    toolCommit: input.options.toolCommit,
+    candidateImageDigest: input.options.candidateImageDigest,
+    inputSummary: input.inputSummary,
+    outputSummary: input.outputSummary,
     counts: input.counts,
     databaseIntegrity: input.databaseIntegrity,
     assetValidation: input.assetValidation,

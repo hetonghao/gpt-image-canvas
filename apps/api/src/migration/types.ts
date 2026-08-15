@@ -13,7 +13,9 @@ export type FailureCode =
   | "invalid_snapshot"
   | "output_protected"
   | "reopen_mismatch"
+  | "report_binding_missing"
   | "snapshot_too_large"
+  | "source_backup_digest_mismatch"
   | "source_integrity_failed"
   | "unknown_shape"
   | "unsupported_page_model"
@@ -28,6 +30,9 @@ export type MigrationOptions = {
   readonly outputDir: string;
   readonly reportDir?: string;
   readonly sourceBackupId?: string;
+  readonly sourceBackupDigest?: string;
+  readonly toolCommit?: string;
+  readonly candidateImageDigest?: string;
   readonly approveWarnings?: boolean;
 };
 
@@ -108,6 +113,16 @@ export type BusinessReferenceReconciliation = {
   readonly outputDigest: string;
 };
 
+export type DataSummary = {
+  readonly directoryDigest: string;
+  readonly databaseDigest: string;
+  readonly assetDigest: string;
+  readonly fileCount: number;
+  readonly byteCount: number;
+  readonly projectCount: number;
+  readonly assetCount: number;
+};
+
 export type MigrationCounts = {
   readonly inputProjects: number;
   readonly convertedProjects: number;
@@ -124,6 +139,12 @@ export type MigrationReport = {
   readonly status: "ready" | "blocked";
   readonly toolVersion: string;
   readonly sourceBackupIdHash: string | null;
+  readonly sourceBackupDigest: string | null;
+  readonly toolCommit: string | null;
+  readonly candidateImageDigest: string | null;
+  readonly inputSummary: DataSummary | null;
+  readonly outputSummary: DataSummary | null;
+  readonly reportBindingValidation: CheckState;
   readonly inputLabel: string;
   readonly outputLabel: string;
   readonly counts: MigrationCounts;

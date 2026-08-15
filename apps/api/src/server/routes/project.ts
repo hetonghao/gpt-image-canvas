@@ -1,12 +1,26 @@
 import type { Hono } from "hono";
-import { getProjectState, ProjectSnapshotAssetError, saveProjectSnapshot } from "../../domain/project/project-store.js";
+import {
+  getProjectState,
+  ProjectSnapshotAssetError,
+  ProjectSnapshotFormatError,
+  saveProjectSnapshot
+} from "../../domain/project/project-store.js";
 import { errorResponse } from "../http/errors.js";
 import { readJson } from "../http/json.js";
 import { logProjectSaveRejected, parseProjectPayload } from "../http/validation.js";
 import { requireHostContext } from "../host-context.js";
 
 export function registerProjectRoutes(app: Hono): void {
-  app.get("/api/project", (c) => c.json(getProjectState(requireHostContext(c))));
+  app.get("/api/project", (c) => {
+    try {
+      return c.json(getProjectState(requireHostContext(c)));
+    } catch (error) {
+      if (error instanceof ProjectSnapshotFormatError) {
+        return c.json(errorResponse(error.code, error.message), 409);
+      }
+      throw error;
+    }
+  });
 
   app.put("/api/project", async (c) => {
     const payload = await readJson(c.req.raw);

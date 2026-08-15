@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { verifyAsset } from "./assets.js";
-import { isRecord, numberValue, recordValue, stringValue } from "./json.js";
 import { reconcileBusinessReferences } from "./references.js";
 import {
   DATABASE_FILE_NAME,
@@ -12,6 +11,7 @@ import {
   tableFingerprints,
   tablesMatch
 } from "./sqlite.js";
+import { reopenTargetProject } from "./target-reopen.js";
 import type { BusinessReferenceReconciliation, CheckState, FailureCode, ProjectResult, TableFingerprint, TableReconciliation } from "./types.js";
 
 export type OutputValidation = {
@@ -44,7 +44,7 @@ export async function validateOutput(input: {
     const sourceProjects = readProjects(sourceDatabase);
     const sourceAssets = readAssets(sourceDatabase);
     const assetsAreValid = await validateAssets(input.outputDir, input.projects, outputAssets);
-    const projectsAreValid = validateProjects(input.projects, outputProjects, outputAssets);
+    const projectsAreValid = await validateProjects({ outputDir: input.outputDir, expectedProjects: input.projects, outputProjects, outputAssets });
     const businessReferences = reconcileBusinessReferences({
       sourceDatabase,
       outputDatabase: database,
@@ -126,74 +126,27 @@ async function validateAssets(
   return true;
 }
 
-function validateProjects(
-  expectedProjects: readonly ProjectResult[],
-  outputProjects: ReturnType<typeof readProjects>,
-  outputAssets: ReturnType<typeof readAssets>
-): boolean {
-  if (expectedProjects.some((project) => project.status === "blocked")) return false;
-  const outputByKey = new Map(outputProjects.map((project) => [projectKey(project.id, project.userId), project]));
-  const assetsById = new Map(outputAssets.map((asset) => [asset.id, asset]));
-  return expectedProjects.every((project) => {
+async function validateProjects(input: {
+  readonly outputDir: string;
+  readonly expectedProjects: readonly ProjectResult[];
+  readonly outputProjects: ReturnType<typeof readProjects>;
+  readonly outputAssets: ReturnType<typeof readAssets>;
+}): Promise<boolean> {
+  if (input.expectedProjects.some((project) => project.status === "blocked")) return false;
+  const outputByKey = new Map(input.outputProjects.map((project) => [projectKey(project.id, project.userId), project]));
+  for (const project of input.expectedProjects) {
     if (project.status === "blocked") return false;
     const output = outputByKey.get(projectKey(project.id, project.userId));
-    return output !== undefined && output.snapshotJson === project.snapshotJson && isTargetSnapshot(output.snapshotJson, assetsById);
-  });
-}
-
-function isTargetSnapshot(snapshotJson: string, assetsById: ReadonlyMap<string, ReturnType<typeof readAssets>[number]>): boolean {
-  try {
-    const parsed: unknown = JSON.parse(snapshotJson);
-    if (!isRecord(parsed) || parsed.format !== "ai-cove-excalidraw" || parsed.version !== 1) return false;
-    const scene = recordValue(parsed.scene);
-    const elements = scene?.elements;
-    const appState = scene?.appState;
-    const references = recordValue(parsed.assets);
-    if (!scene || !Array.isArray(elements) || !recordValue(appState) || !references) return false;
-    for (const [fileId, value] of Object.entries(references)) {
-      if (!validAssetReference(fileId, value, assetsById)) return false;
-    }
-    for (const value of elements) {
-      if (!isRecord(value)) return false;
-      if (value.type === "image") {
-        const fileId = stringValue(value.fileId);
-        if (!fileId || !validAssetReference(fileId, references[fileId], assetsById)) return false;
-      }
-    }
-    return true;
-  } catch (error) {
-    if (error instanceof SyntaxError) return false;
-    throw error;
+    if (!output || output.snapshotJson !== project.snapshotJson) return false;
+    const reopened = await reopenTargetProject({
+      outputDir: input.outputDir,
+      userId: output.userId,
+      snapshotJson: output.snapshotJson,
+      assets: input.outputAssets
+    });
+    if (!reopened) return false;
   }
-}
-
-function validAssetReference(
-  fileId: string,
-  value: unknown,
-  assetsById: ReadonlyMap<string, ReturnType<typeof readAssets>[number]>
-): boolean {
-  if (!fileId || !isRecord(value)) return false;
-  const assetId = stringValue(value.assetId);
-  const asset = assetId ? assetsById.get(assetId) : undefined;
-  if (!asset) return false;
-  const byteSize = nullableNumber(value.byteSize);
-  const contentSha256 = nullableString(value.contentSha256);
-  return (
-    stringValue(value.fileName) === asset.fileName &&
-    stringValue(value.mimeType) === asset.mimeType &&
-    numberValue(value.width) === asset.width &&
-    numberValue(value.height) === asset.height &&
-    byteSize === asset.byteSize &&
-    contentSha256 === asset.contentSha256
-  );
-}
-
-function nullableNumber(value: unknown): number | null | undefined {
-  return value === null ? null : numberValue(value);
-}
-
-function nullableString(value: unknown): string | null | undefined {
-  return value === null ? null : stringValue(value);
+  return true;
 }
 
 function projectKey(id: string, userId: string): string {

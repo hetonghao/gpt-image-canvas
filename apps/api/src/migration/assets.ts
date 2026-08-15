@@ -22,14 +22,25 @@ export async function verifyAsset(inputDir: string, projectUserId: string, asset
   if (asset.userId !== projectUserId) {
     return { kind: "blocked", code: "asset_missing" };
   }
-  const assetRoot = resolve(inputDir, "assets");
-  const path = resolve(inputDir, asset.relativePath);
-  if (isAbsolute(asset.relativePath) || !isWithin(assetRoot, path) || !existsSync(path)) {
+  const path = assetPath(inputDir, asset);
+  if (!path || !existsSync(path)) {
     return { kind: "blocked", code: "asset_missing" };
   }
 
   try {
     const bytes = readFileSync(path);
+    return verifyAssetBytes(projectUserId, asset, bytes);
+  } catch (error) {
+    if (error instanceof Error) {
+      return { kind: "blocked", code: "asset_materialization_failed" };
+    }
+    throw error;
+  }
+}
+
+export async function verifyAssetBytes(projectUserId: string, asset: AssetRow, bytes: Uint8Array): Promise<AssetVerificationOutcome> {
+  if (asset.userId !== projectUserId) return { kind: "blocked", code: "asset_missing" };
+  try {
     const digest = createHash("sha256").update(bytes).digest("hex");
     const metadata = await sharp(bytes).metadata();
     const mimeType = normalizeMime(asset.mimeType);
@@ -44,26 +55,18 @@ export async function verifyAsset(inputDir: string, projectUserId: string, asset
       metadata.height !== asset.height ||
       (asset.byteSize !== null && asset.byteSize !== bytes.byteLength) ||
       (asset.contentSha256 !== null && asset.contentSha256 !== digest)
-    ) {
-      return { kind: "blocked", code: "asset_materialization_failed" };
-    }
-    return {
-      kind: "verified",
-      value: {
-        ...asset,
-        mimeType,
-        actualByteSize: bytes.byteLength,
-        actualContentSha256: digest,
-        actualWidth: metadata.width,
-        actualHeight: metadata.height
-      }
-    };
+    ) return { kind: "blocked", code: "asset_materialization_failed" };
+    return { kind: "verified", value: { ...asset, mimeType, actualByteSize: bytes.byteLength, actualContentSha256: digest, actualWidth: metadata.width, actualHeight: metadata.height } };
   } catch (error) {
-    if (error instanceof Error) {
-      return { kind: "blocked", code: "asset_materialization_failed" };
-    }
+    if (error instanceof Error) return { kind: "blocked", code: "asset_materialization_failed" };
     throw error;
   }
+}
+
+export function assetPath(inputDir: string, asset: AssetRow): string | undefined {
+  const assetRoot = resolve(inputDir, "assets");
+  const path = resolve(inputDir, asset.relativePath);
+  return isAbsolute(asset.relativePath) || !isWithin(assetRoot, path) ? undefined : path;
 }
 
 export function assetIdCandidates(shapeProps: JsonRecord, assetRecord: JsonRecord | undefined): readonly string[] {
