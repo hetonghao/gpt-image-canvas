@@ -4002,6 +4002,7 @@ export function App() {
   const manualRegionInputRef = useRef<HTMLInputElement | null>(null);
   const panelCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
+  const editorHasMountedRef = useRef(false);
   const hostSessionBlockedRef = useRef(false);
   const hostSessionRecoveryRef = useRef<HTMLDivElement | null>(null);
   const regionCanvasPointerDownRef = useRef<((event: PointerEvent) => void) | null>(null);
@@ -4212,7 +4213,7 @@ export function App() {
   const canGenerate = generationSubmitAction === "configure-image-model" || !validationMessage;
   const isHostSessionBlocked = Boolean(hostSessionError);
   hostSessionBlockedRef.current = isHostSessionBlocked;
-  const hasMountedEditor = Boolean(editorRef.current);
+  const hasMountedEditor = editorHasMountedRef.current;
   const shouldBlockCanvasForHostSession = isHostSessionBlocked && !hasMountedEditor;
   const shouldShowHostSessionRecovery = isHostSessionBlocked && hasMountedEditor;
   const tldrawComponents = useMemo(
@@ -5273,6 +5274,7 @@ export function App() {
 
   const handleEditorMount = useCallback((editor: Editor) => {
     editorRef.current = editor;
+    editorHasMountedRef.current = true;
     localizeDefaultPageName(editor, locale);
     if (!editor.user.getIsSnapMode()) {
       editor.user.updateUserPreferences({ isSnapMode: true });
