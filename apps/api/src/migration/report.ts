@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   MIGRATION_TOOL_VERSION,
@@ -7,6 +7,7 @@ import {
   type BusinessReferenceReconciliation,
   type DataSummary,
   type MigrationCounts,
+  type MigrationOptions,
   type MigrationReport,
   type ProjectResult,
   type ReportProjectResult,
@@ -71,11 +72,22 @@ export function buildMigrationReport(input: {
   };
 }
 
-export function writeMigrationReport(report: MigrationReport): void {
+export function writeMigrationReport(report: MigrationReport): boolean {
   const reportDir = dirname(report.reportFiles.machine);
+  if (existsSync(reportDir)) return false;
   mkdirSync(reportDir, { recursive: true });
-  writeFileSync(report.reportFiles.machine, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  writeFileSync(report.reportFiles.human, humanSummary(report), "utf8");
+  try {
+    writeFileSync(report.reportFiles.machine, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+    writeFileSync(report.reportFiles.human, humanSummary(report), { encoding: "utf8", flag: "wx" });
+    return true;
+  } catch (error) {
+    if (isAlreadyExists(error)) return false;
+    throw error;
+  }
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "EEXIST";
 }
 
 function humanSummary(report: MigrationReport): string {
@@ -121,6 +133,10 @@ function releaseBindingFailure(input: {
 export function sourceBackupDigestMatches(sourceBackupDigest: string | undefined, inputSummary: DataSummary | null): boolean {
   const normalizedDigest = normalizedSha256(sourceBackupDigest);
   return inputSummary !== null && normalizedDigest !== undefined && normalizedDigest === inputSummary.directoryDigest;
+}
+
+export function hasBindingFacts(options: MigrationOptions): boolean {
+  return Boolean(options.sourceBackupId?.trim() && options.sourceBackupDigest && options.toolCommit && options.candidateImageDigest);
 }
 
 function isSha256(value: string | undefined): boolean {

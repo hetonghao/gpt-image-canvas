@@ -14,6 +14,7 @@ export type FailureCode =
   | "output_protected"
   | "reopen_mismatch"
   | "report_binding_missing"
+  | "report_protected"
   | "snapshot_too_large"
   | "source_backup_digest_mismatch"
   | "source_integrity_failed"

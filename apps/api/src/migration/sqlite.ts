@@ -64,6 +64,17 @@ export function tablesMatch(reconciliation: readonly TableReconciliation[]): boo
   return reconciliation.every((table) => table.rowCount === table.outputRowCount && table.primaryKeyDigest === table.outputPrimaryKeyDigest);
 }
 
+export function canonicalizeAssetFingerprint(
+  tables: readonly TableFingerprint[],
+  assets: readonly AssetRow[],
+  aliases: ReadonlyMap<string, string>
+): readonly TableFingerprint[] {
+  if (aliases.size === 0) return tables;
+  const ids = [...new Set(assets.map((asset) => aliases.get(asset.id) ?? asset.id))].sort();
+  const digest = primaryKeyDigest(ids.map((id) => ({ id })), ["id"]);
+  return tables.map((table) => table.name === "assets" ? { ...table, rowCount: ids.length, primaryKeyDigest: digest } : table);
+}
+
 export function copyInputData(inputDir: string, outputDir: string): void {
   mkdirSync(dirname(outputDir), { recursive: true });
   mkdirSync(outputDir);

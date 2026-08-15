@@ -40,17 +40,19 @@ export function reconcileBusinessReferences(input: {
   readonly outputProjects: readonly ProjectRow[];
   readonly sourceAssets: readonly AssetRow[];
   readonly outputAssets: readonly AssetRow[];
+  readonly assetAliases?: ReadonlyMap<string, string>;
 }): BusinessReferenceValidation {
   const source = scanDatabase(input.sourceDatabase, input.sourceProjects, input.sourceAssets);
   const output = scanDatabase(input.outputDatabase, input.outputProjects, input.outputAssets);
+  const sourceReferences = input.assetAliases ? source.references.map((reference) => ({ ...reference, assetId: input.assetAliases?.get(reference.assetId) ?? reference.assetId })) : source.references;
   const summary: BusinessReferenceReconciliation = {
-    sourceReferenceCount: source.references.length,
+    sourceReferenceCount: sourceReferences.length,
     outputReferenceCount: output.references.length,
     sourceIssueCount: source.issues.length,
     outputIssueCount: output.issues.length,
     sourceIssueCodes: unique(source.issues),
     outputIssueCodes: unique(output.issues),
-    sourceDigest: digest(source.references),
+    sourceDigest: digest(sourceReferences),
     outputDigest: digest(output.references)
   };
   return {

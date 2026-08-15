@@ -5,6 +5,7 @@ import { reconcileBusinessReferences } from "./references.js";
 import {
   DATABASE_FILE_NAME,
   databaseIntegrity,
+  canonicalizeAssetFingerprint,
   readAssets,
   readProjects,
   reconcileTables,
@@ -29,6 +30,7 @@ export async function validateOutput(input: {
   readonly outputDir: string;
   readonly sourceTables: readonly TableFingerprint[];
   readonly projects: readonly ProjectResult[];
+  readonly assetAliases?: ReadonlyMap<string, string>;
 }): Promise<OutputValidation> {
   let sourceDatabase: Database.Database | undefined;
   let database: Database.Database | undefined;
@@ -37,12 +39,14 @@ export async function validateOutput(input: {
     database = new Database(join(input.outputDir, DATABASE_FILE_NAME), { readonly: true, fileMustExist: true });
     const integrity = databaseIntegrity(database);
     const outputTables = tableFingerprints(database);
-    const reconciliation = reconcileTables(input.sourceTables, outputTables);
-    const tablesAreEqual = sameTableNames(input.sourceTables, outputTables) && tablesMatch(reconciliation);
+    const sourceAssets = readAssets(sourceDatabase);
+    const aliases = input.assetAliases ?? new Map<string, string>();
+    const expectedTables = canonicalizeAssetFingerprint(input.sourceTables, sourceAssets, aliases);
+    const reconciliation = reconcileTables(expectedTables, outputTables);
+    const tablesAreEqual = sameTableNames(expectedTables, outputTables) && tablesMatch(reconciliation);
     const outputProjects = readProjects(database);
     const outputAssets = readAssets(database);
     const sourceProjects = readProjects(sourceDatabase);
-    const sourceAssets = readAssets(sourceDatabase);
     const assetsAreValid = await validateAssets(input.outputDir, input.projects, outputAssets);
     const projectsAreValid = await validateProjects({ outputDir: input.outputDir, expectedProjects: input.projects, outputProjects, outputAssets });
     const businessReferences = reconcileBusinessReferences({
@@ -51,7 +55,8 @@ export async function validateOutput(input: {
       sourceProjects,
       outputProjects,
       sourceAssets,
-      outputAssets
+      outputAssets,
+      assetAliases: aliases
     });
     const failures: FailureCode[] = [];
     if (!integrity || !tablesAreEqual) failures.push("database_reconciliation_failed");
@@ -110,6 +115,15 @@ async function validateAssets(
 ): Promise<boolean> {
   const assetsById = new Map(outputAssets.map((asset) => [asset.id, asset]));
   const checks = new Map<string, ReturnType<typeof verifyAsset>>();
+  for (const asset of outputAssets) {
+    if (asset.byteSize === null || asset.contentSha256 === null) return false;
+    let check = checks.get(asset.id);
+    if (!check) {
+      check = verifyAsset(outputDir, asset.userId, asset);
+      checks.set(asset.id, check);
+    }
+    if ((await check).kind === "blocked") return false;
+  }
   for (const project of projects) {
     if (project.status === "blocked") return false;
     for (const expected of project.verifiedAssets) {

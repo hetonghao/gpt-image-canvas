@@ -14,20 +14,18 @@ import type {
   WarningCode
 } from "./types.js";
 
-export function writeOutputData(outputDir: string, projects: readonly ProjectResult[]): void {
+export function writeOutputData(outputDir: string, projects: readonly ProjectResult[], assets: readonly VerifiedAsset[]): void {
   const database = new Database(join(outputDir, "gpt-image-canvas.sqlite"));
   try {
     database.pragma("foreign_keys = ON");
     ensureAssetIntegrityColumns(database);
     const updateProject = database.prepare("UPDATE projects SET snapshot_json = ? WHERE id = ? AND user_id = ?");
     const updateAsset = database.prepare("UPDATE assets SET mime_type = ?, byte_size = ?, content_sha256 = ? WHERE id = ? AND user_id = ?");
-    const verifiedAssets = new Map<string, VerifiedAsset>();
-    for (const project of projects) project.verifiedAssets.forEach((asset) => verifiedAssets.set(asset.id, asset));
     const write = database.transaction(() => {
       for (const project of projects) {
         if (project.status === "blocked" || updateProject.run(project.snapshotJson, project.id, project.userId).changes !== 1) throw new Error("output project row mismatch");
       }
-      for (const asset of verifiedAssets.values()) {
+      for (const asset of assets) {
         if (updateAsset.run(asset.mimeType, asset.actualByteSize, asset.actualContentSha256, asset.id, asset.userId).changes !== 1) throw new Error("output asset row mismatch");
       }
     });
@@ -52,11 +50,11 @@ export function migrationCounts(projects: readonly ProjectResult[], tables: read
   };
 }
 
-export function migrationWarnings(projects: readonly ProjectResult[], assets: readonly AssetRow[]): readonly WarningCode[] {
+export function migrationWarnings(projects: readonly ProjectResult[], assets: readonly AssetRow[], aliases: ReadonlyMap<string, string> = new Map()): readonly WarningCode[] {
   const warnings = new Set<WarningCode>(projects.flatMap((project) => project.warnings));
   if (projects.every((project) => project.status === "converted")) {
     const usedAssetIds = new Set(projects.flatMap((project) => project.verifiedAssets.map((asset) => asset.id)));
-    if (assets.some((asset) => !usedAssetIds.has(asset.id))) warnings.add("orphan_asset_record");
+    if (assets.some((asset) => !usedAssetIds.has(aliases.get(asset.id) ?? asset.id))) warnings.add("orphan_asset_record");
   }
   return [...warnings];
 }

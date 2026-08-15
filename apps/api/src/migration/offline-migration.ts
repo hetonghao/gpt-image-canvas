@@ -1,23 +1,24 @@
-import { existsSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import Database from "better-sqlite3";
+import { canonicalizeProjects, rewriteOutputAssetReferences } from "./asset-canonicalization.js";
 import { convertProject } from "./converter.js";
 import {
   assetCheckState,
   emptyBusinessReferenceReconciliation,
-  emptyCounts,
   migrationCounts,
   migrationWarnings,
   sameProjects,
   writeOutputData
 } from "./migration-support.js";
-import { buildMigrationReport, sourceBackupDigestMatches, writeMigrationReport } from "./report.js";
+import { buildMigrationReport, hasBindingFacts, sourceBackupDigestMatches, writeMigrationReport } from "./report.js";
+import { resolveMigrationPaths, validateMigrationPaths, type MigrationPaths } from "./offline-paths.js";
+import { blockedReportInput, type MigrationReportInput } from "./offline-report-input.js";
 import { summarizeDataDir } from "./summary.js";
 import {
   copyInputData,
   DATABASE_FILE_NAME,
   databaseIntegrity,
-  isOutputInsideInput,
   openReadonlyDatabase,
   readAssets,
   readProjects,
@@ -26,46 +27,18 @@ import {
 import { validateOutput } from "./validation.js";
 import type {
   AssetRow,
-  BusinessReferenceReconciliation,
-  CheckState,
   ConversionOutcome,
   DataSummary,
   FailureCode,
-  MigrationCounts,
   MigrationOptions,
   MigrationReport,
   ProjectResult,
-  ProjectRow,
-  TableReconciliation,
-  WarningCode
+  ProjectRow
 } from "./types.js";
 
-type MigrationPaths = {
-  readonly inputDir: string;
-  readonly outputDir: string;
-  readonly reportDir: string;
-};
-
-type ReportInput = {
-  readonly paths: MigrationPaths;
-  readonly options: MigrationOptions;
-  readonly inputSummary: DataSummary | null;
-  readonly outputSummary: DataSummary | null;
-  readonly counts: MigrationCounts;
-  readonly databaseIntegrity: CheckState;
-  readonly assetValidation: CheckState;
-  readonly reopenValidation: CheckState;
-  readonly businessReferenceValidation: CheckState;
-  readonly businessReferenceReconciliation: BusinessReferenceReconciliation;
-  readonly tableReconciliation: readonly TableReconciliation[];
-  readonly projectResults: readonly ProjectResult[];
-  readonly failureCodes: readonly FailureCode[];
-  readonly warningCodes: readonly WarningCode[];
-};
-
 export async function runOfflineMigration(options: MigrationOptions): Promise<MigrationReport> {
-  const paths = resolvePaths(options);
-  const pathFailure = validatePaths(paths);
+  const paths = resolveMigrationPaths(options);
+  const pathFailure = validateMigrationPaths(paths);
   if (pathFailure) return finishReport(blockedReportInput(paths, options, pathFailure));
   if (!hasBindingFacts(options)) return finishReport(blockedReportInput(paths, options, "report_binding_missing"));
   if (existsSync(paths.outputDir)) return finishReport(blockedReportInput(paths, options, "output_protected"));
@@ -91,9 +64,9 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
     const sourceProjects = readProjects(source);
     const sourceAssets = readAssets(source);
     const projectResults = await convertProjects(paths.inputDir, sourceProjects, sourceAssets);
-    const counts = migrationCounts(projectResults, sourceTables);
-    const warningCodes = migrationWarnings(projectResults, sourceAssets);
     const projectFailures = projectResults.flatMap((project) => project.status === "blocked" ? project.failures : []);
+    const preCanonicalCounts = migrationCounts(projectResults, sourceTables);
+    const preCanonicalWarnings = migrationWarnings(projectResults, sourceAssets);
     const sourceAfterSummary = summarizeDataDir(paths.inputDir);
     if (!sameProjects(sourceProjects, readProjects(source)) || sourceAfterSummary.directoryDigest !== initialInputSummary.directoryDigest) {
       return finishReport({
@@ -101,7 +74,7 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
         options,
         inputSummary,
         outputSummary,
-        counts,
+        counts: preCanonicalCounts,
         databaseIntegrity: "failed",
         assetValidation: "skipped",
         reopenValidation: "skipped",
@@ -110,7 +83,7 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
         tableReconciliation: [],
         projectResults,
         failureCodes: [...projectFailures, "source_integrity_failed"],
-        warningCodes
+        warningCodes: preCanonicalWarnings
       });
     }
     if (projectFailures.length > 0) {
@@ -119,7 +92,7 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
         options,
         inputSummary,
         outputSummary,
-        counts,
+        counts: preCanonicalCounts,
         databaseIntegrity: "ok",
         assetValidation: assetCheckState(projectFailures),
         reopenValidation: "skipped",
@@ -128,19 +101,48 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
         tableReconciliation: [],
         projectResults,
         failureCodes: projectFailures,
-        warningCodes
+        warningCodes: preCanonicalWarnings
       });
     }
     source.close();
     source = undefined;
 
+    const canonicalization = await canonicalizeProjects(paths.inputDir, projectResults, sourceAssets);
+    if (canonicalization.kind === "blocked") {
+      return finishReport({
+        paths,
+        options,
+        inputSummary,
+        outputSummary,
+        counts: migrationCounts(projectResults, sourceTables),
+        databaseIntegrity: "ok",
+        assetValidation: "failed",
+        reopenValidation: "skipped",
+        businessReferenceValidation: "skipped",
+        businessReferenceReconciliation: emptyBusinessReferenceReconciliation(),
+        tableReconciliation: [],
+        projectResults,
+        failureCodes: [canonicalization.code],
+        warningCodes: []
+      });
+    }
+    const migratedProjects = canonicalization.value.projects;
+    const counts = migrationCounts(migratedProjects, sourceTables);
+    const warningCodes = migrationWarnings(migratedProjects, sourceAssets, canonicalization.value.aliases);
+
     phase = "copy";
     copyInputData(paths.inputDir, paths.outputDir);
     phase = "write";
-    writeOutputData(paths.outputDir, projectResults);
+    writeOutputData(paths.outputDir, migratedProjects, canonicalization.value.assets);
+    const outputDatabase = new Database(join(paths.outputDir, DATABASE_FILE_NAME));
+    try {
+      rewriteOutputAssetReferences(outputDatabase, canonicalization.value.aliases);
+    } finally {
+      outputDatabase.close();
+    }
     outputSummary = summarizeDataDir(paths.outputDir);
     phase = "validate";
-    const validation = await validateOutput({ inputDir: paths.inputDir, outputDir: paths.outputDir, sourceTables, projects: projectResults });
+    const validation = await validateOutput({ inputDir: paths.inputDir, outputDir: paths.outputDir, sourceTables, projects: migratedProjects, assetAliases: canonicalization.value.aliases });
     const failureCodes = [...validation.failures];
     if (warningCodes.length > 0 && options.approveWarnings !== true) failureCodes.push("warning_unapproved");
     return finishReport({
@@ -155,7 +157,7 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
       businessReferenceValidation: validation.businessReferenceValidation,
       businessReferenceReconciliation: validation.businessReferenceReconciliation,
       tableReconciliation: validation.tableReconciliation,
-      projectResults,
+      projectResults: migratedProjects,
       failureCodes,
       warningCodes
     });
@@ -170,53 +172,8 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
   }
 }
 
-function resolvePaths(options: MigrationOptions): MigrationPaths {
-  const outputDir = resolve(options.outputDir);
-  return {
-    inputDir: resolve(options.inputDir),
-    outputDir,
-    reportDir: resolve(options.reportDir ?? join(dirname(outputDir), `${basename(outputDir)}-report`))
-  };
-}
-
-function validatePaths(paths: MigrationPaths): FailureCode | undefined {
-  if (!paths.inputDir || !paths.outputDir || !existsSync(paths.inputDir) || !statSync(paths.inputDir).isDirectory()) return "input_invalid";
-  if (!existsSync(join(paths.inputDir, DATABASE_FILE_NAME))) return "input_invalid";
-  if (isOutputInsideInput(paths.inputDir, paths.outputDir) || isOutputInsideInput(paths.inputDir, paths.reportDir) || paths.outputDir === paths.reportDir) return "input_invalid";
-  return undefined;
-}
-
-function blockedReportInput(
-  paths: MigrationPaths,
-  options: MigrationOptions,
-  failureCode: FailureCode,
-  inputSummary: DataSummary | null = null,
-  outputSummary: DataSummary | null = null
-): ReportInput {
-  return {
-    paths,
-    options,
-    inputSummary,
-    outputSummary,
-    counts: emptyCounts(),
-    databaseIntegrity: "skipped",
-    assetValidation: "skipped",
-    reopenValidation: "skipped",
-    businessReferenceValidation: "skipped",
-    businessReferenceReconciliation: emptyBusinessReferenceReconciliation(),
-    tableReconciliation: [],
-    projectResults: [],
-    failureCodes: [failureCode],
-    warningCodes: []
-  };
-}
-
-function hasBindingFacts(options: MigrationOptions): boolean {
-  return Boolean(options.sourceBackupId?.trim() && options.sourceBackupDigest && options.toolCommit && options.candidateImageDigest);
-}
-
-function finishReport(input: ReportInput): MigrationReport {
-  const report = buildMigrationReport({
+function finishReport(input: MigrationReportInput): MigrationReport {
+  const build = (failureCodes: readonly FailureCode[]): MigrationReport => buildMigrationReport({
     inputDir: input.paths.inputDir,
     outputDir: input.paths.outputDir,
     reportDir: input.paths.reportDir,
@@ -234,12 +191,13 @@ function finishReport(input: ReportInput): MigrationReport {
     businessReferenceReconciliation: input.businessReferenceReconciliation,
     tableReconciliation: input.tableReconciliation,
     projectResults: input.projectResults,
-    failureCodes: input.failureCodes,
+    failureCodes,
     warningCodes: input.warningCodes,
     warningsApproved: input.options.approveWarnings === true
   });
-  writeMigrationReport(report);
-  return report;
+  const report = build(input.failureCodes);
+  if (writeMigrationReport(report) || report.failureCodes.includes("report_protected")) return report;
+  return build([...input.failureCodes, "report_protected"]);
 }
 
 async function convertProjects(inputDir: string, projects: readonly ProjectRow[], assets: readonly AssetRow[]): Promise<readonly ProjectResult[]> {

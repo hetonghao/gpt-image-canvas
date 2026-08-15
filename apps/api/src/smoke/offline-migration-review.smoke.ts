@@ -1,10 +1,11 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import test from "node:test";
 import Database from "better-sqlite3";
+import { assetIdFromRow, seedDuplicateAssetFixture } from "../migration/duplicate-assets-fixture.js";
 import { seedMigrationFixture } from "../migration/fixtures.js";
 import { runOfflineMigration } from "../migration/offline-migration.js";
 import { openReadonlyDatabase, readAssets, readProjects, tableFingerprints } from "../migration/sqlite.js";
@@ -21,6 +22,102 @@ const TEST_BINDING = {
 function bindingFor(inputDir: string) {
   return { ...TEST_BINDING, sourceBackupDigest: summarizeDataDir(inputDir).directoryDigest };
 }
+
+test("migration keeps same-user duplicate bytes openable under the candidate asset index", async () => {
+  const root = mkdtempSync(join(tmpdir(), "gpt-image-canvas-migration-duplicate-content-"));
+  try {
+    const fixture = seedDuplicateAssetFixture(root);
+    const outputDir = join(root, "output");
+    const result = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir, reportDir: join(root, "report"), ...bindingFor(fixture.inputDir) });
+
+    assert.equal(result.status, "ready");
+    assert.equal(result.businessReferenceValidation, "ok");
+    assert.equal(result.businessReferenceReconciliation.sourceDigest, result.businessReferenceReconciliation.outputDigest);
+    const database = new Database(join(outputDir, "gpt-image-canvas.sqlite"));
+    try {
+      database.exec("CREATE UNIQUE INDEX IF NOT EXISTS assets_user_content_sha256_idx ON assets(user_id, content_sha256)");
+      const assetRows = database.prepare("SELECT id, content_sha256 FROM assets WHERE user_id = ? ORDER BY id").all("user-1");
+      assert.equal(assetRows.length, 1);
+      assert.deepEqual(assetRows.map(assetIdFromRow), ["asset-success"]);
+      assert.deepEqual(readFileSync(join(outputDir, "assets/asset-success.png")), readFileSync(join(fixture.inputDir, "assets/asset-success.png")));
+      const projectRow = database.prepare("SELECT snapshot_json FROM projects WHERE id = ?").get(fixture.projectId);
+      assert.ok(isRecord(projectRow));
+      const snapshot = JSON.parse(readString(projectRow.snapshot_json));
+      const assets = isRecord(snapshot) && isRecord(snapshot.assets) ? Object.values(snapshot.assets) : [];
+      assert.deepEqual(assets.flatMap((asset) => isRecord(asset) && typeof asset.assetId === "string" ? [asset.assetId] : []).sort(), ["asset-success", "asset-success"]);
+      const generation = database.prepare("SELECT reference_asset_id FROM generation_records WHERE id = ?").get("generation-1");
+      assert.ok(isRecord(generation));
+      assert.equal(generation.reference_asset_id, "asset-success");
+      const output = database.prepare("SELECT asset_id FROM generation_outputs WHERE id = ?").get("output-1");
+      assert.ok(isRecord(output));
+      assert.equal(output.asset_id, "asset-success");
+      const generationReference = database.prepare("SELECT asset_id FROM generation_reference_assets WHERE generation_id = ?").get("generation-1");
+      assert.ok(isRecord(generationReference));
+      assert.equal(generationReference.asset_id, "asset-success");
+      const conversation = database.prepare("SELECT messages_json, context_json FROM agent_conversations WHERE id = ?").get("conversation-1");
+      assert.ok(isRecord(conversation));
+      assert.equal(readString(conversation.messages_json).includes("asset-success-duplicate"), false);
+      assert.equal(readString(conversation.messages_json).includes("/api/assets/asset-success"), true);
+      assert.equal(readString(conversation.context_json).includes("asset-success-duplicate"), false);
+      const link = database.prepare("SELECT asset_id, asset_url, asset_ids_json FROM asset_links WHERE id = ?").get("link-1");
+      assert.ok(isRecord(link));
+      assert.equal(link.asset_id, "asset-success");
+      assert.equal(link.asset_url, "/api/assets/asset-success");
+      assert.equal(link.asset_ids_json, JSON.stringify(["asset-success"]));
+    } finally {
+      database.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("migration preserves an existing report destination on blocked admission", async () => {
+  const root = mkdtempSync(join(tmpdir(), "gpt-image-canvas-migration-report-protection-"));
+  try {
+    const fixture = seedMigrationFixture(root, "success");
+    const reportDir = join(root, "report");
+    mkdirSync(reportDir);
+    writeFileSync(join(reportDir, "migration-report.json"), "existing-machine-evidence\n");
+    writeFileSync(join(reportDir, "migration-summary.txt"), "existing-human-evidence\n");
+
+    const result = await runOfflineMigration({
+      inputDir: fixture.inputDir,
+      outputDir: join(root, "output"),
+      reportDir,
+      ...bindingFor(fixture.inputDir)
+    });
+
+    assert.equal(result.status, "blocked");
+    assert.ok(result.failureCodes.includes("report_protected"));
+    assert.equal(readFileSync(join(reportDir, "migration-report.json"), "utf8"), "existing-machine-evidence\n");
+    assert.equal(readFileSync(join(reportDir, "migration-summary.txt"), "utf8"), "existing-human-evidence\n");
+    assert.equal(existsSync(join(root, "output")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("migration preserves report evidence when a rerun reuses its destination", async () => {
+  const root = mkdtempSync(join(tmpdir(), "gpt-image-canvas-migration-report-rerun-"));
+  try {
+    const fixture = seedMigrationFixture(root, "success");
+    const outputDir = join(root, "output");
+    const reportDir = join(root, "report");
+    const first = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir, reportDir, ...bindingFor(fixture.inputDir) });
+    assert.equal(first.status, "ready");
+    const machineBefore = readFileSync(join(reportDir, "migration-report.json"));
+    const humanBefore = readFileSync(join(reportDir, "migration-summary.txt"));
+    const second = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir, reportDir, ...bindingFor(fixture.inputDir) });
+
+    assert.equal(second.status, "blocked");
+    assert.ok(second.failureCodes.includes("report_protected"));
+    assert.deepEqual(readFileSync(join(reportDir, "migration-report.json")), machineBefore);
+    assert.deepEqual(readFileSync(join(reportDir, "migration-summary.txt")), humanBefore);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("migration blocks ready status when release binding facts are missing", async () => {
   const root = mkdtempSync(join(tmpdir(), "gpt-image-canvas-migration-missing-binding-"));

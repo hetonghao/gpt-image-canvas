@@ -93,7 +93,8 @@ export function scanAssetValue(value: unknown, owner: string, userId: string, ke
       issues.push("invalid_reference");
       return;
     }
-    parsed.forEach((item) => scanAssetValue(item, owner, userId, key, assets, references, issues));
+    const itemKey = key.replace(/_json$/u, "");
+    parsed.forEach((item) => scanAssetValue(item, owner, userId, itemKey, assets, references, issues));
     return;
   }
   if (Array.isArray(value)) {
