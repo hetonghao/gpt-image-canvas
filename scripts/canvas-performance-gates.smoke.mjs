@@ -55,7 +55,7 @@ async function verifyRouteRequests(browserInstance, baseUrl) {
     await page.goto(`${baseUrl}${route.path}`, { waitUntil: "domcontentloaded" });
     await page.getByTestId(route.ready).waitFor({ state: "visible", timeout: 15_000 });
     if (route.id === "canvas") await waitForCanvasSurface(page, 15_000);
-    await page.waitForTimeout(250);
+    await page.waitForLoadState("networkidle");
     const paths = assets();
     result[route.id] = paths;
     if (route.id !== "canvas") {
