@@ -29,6 +29,11 @@ const desktopUpdateInstallPermission = JSON.parse(
 );
 assert.equal(tauriConfig.productName, "AI Cove Design", "desktop app display name should use AI Cove Design");
 assert.equal(tauriConfig.app?.windows?.[0]?.title, "AI Cove Design", "desktop window title should use AI Cove Design");
+assert.deepEqual(
+  tauriConfig.plugins?.updater?.endpoints,
+  ["https://ai-cove.com/downloads/design/latest.json"],
+  "desktop updater should use the dedicated Design manifest"
+);
 assert.ok(
   tauriConfig.bundle?.targets?.includes("nsis"),
   "Windows desktop release requires the Tauri NSIS bundle target"
@@ -158,7 +163,7 @@ assert.deepEqual(
 assert.deepEqual(
   buildLatestManifest({
     version: "0.2.0",
-    downloadBaseUrl: "https://ai-cove.com/downloads/",
+    downloadBaseUrl: "https://ai-cove.com/downloads/design/",
     notes: "AI Cove Design desktop update",
     publishedAt: "2026-06-08T00:00:00.000Z",
     platforms: [
@@ -176,7 +181,7 @@ assert.deepEqual(
     platforms: {
       "darwin-aarch64": {
         signature: "mac-signature",
-        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-macos-aarch64.app.tar.gz?v=0.2.0"
+        url: "https://ai-cove.com/downloads/design/ai-cove-design-desktop-macos-aarch64.app.tar.gz?v=0.2.0"
       }
     }
   }
@@ -191,13 +196,13 @@ assert.deepEqual(
       platforms: {
         "windows-x86_64": {
           signature: "windows-signature",
-          url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows.exe?v=0.1.9"
+          url: "https://ai-cove.com/downloads/design/ai-cove-design-desktop-windows.exe?v=0.1.9"
         }
       }
     },
     buildLatestManifest({
       version: "0.2.0",
-      downloadBaseUrl: "https://ai-cove.com/downloads",
+      downloadBaseUrl: "https://ai-cove.com/downloads/design",
       notes: "AI Cove Design 0.2.0",
       publishedAt: "2026-06-08T00:00:00.000Z",
       platforms: [
@@ -216,11 +221,11 @@ assert.deepEqual(
     platforms: {
       "windows-x86_64": {
         signature: "windows-signature",
-        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-windows.exe?v=0.1.9"
+        url: "https://ai-cove.com/downloads/design/ai-cove-design-desktop-windows.exe?v=0.1.9"
       },
       "darwin-aarch64": {
         signature: "mac-signature",
-        url: "https://ai-cove.com/downloads/ai-cove-design-desktop-macos-aarch64.app.tar.gz?v=0.2.0"
+        url: "https://ai-cove.com/downloads/design/ai-cove-design-desktop-macos-aarch64.app.tar.gz?v=0.2.0"
       }
     }
   }

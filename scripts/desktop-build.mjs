@@ -187,7 +187,7 @@ export async function main(rawArgs = process.argv.slice(2)) {
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   const version = packageJson.version;
   const releaseDir = path.join(root, "desktop-release");
-  const downloadBaseUrl = process.env.AI_COVE_DESIGN_DOWNLOAD_BASE_URL ?? "https://ai-cove.com/downloads";
+  const downloadBaseUrl = process.env.AI_COVE_DESIGN_DOWNLOAD_BASE_URL ?? "https://ai-cove.com/downloads/design";
   const existingManifestPath = process.env.AI_COVE_DESIGN_EXISTING_LATEST_JSON ?? path.join(releaseDir, "latest.json");
   const existingManifest = await readJsonIfExists(existingManifestPath);
 

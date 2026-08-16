@@ -69,24 +69,18 @@ Windows builds write:
 - `desktop-release/ai-cove-design-desktop-windows.exe.sig`
 - `desktop-release/latest.json`
 
-The public Web download button expects installers under:
+The public Web download button uses the stable COS installer aliases:
 
-- `/downloads/ai-cove-design-desktop-macos.dmg`
-- `/downloads/ai-cove-design-desktop-windows.exe`
+- `/downloads/design/ai-cove-design-desktop-macos.dmg`
+- `/downloads/design/ai-cove-design-desktop-windows.exe`
 
-After `desktop:build`, sync generated artifacts into the New API public downloads directory:
+`desktop:publish-downloads` remains a local compatibility helper for copying a validated release to an explicit static directory. It is not the production release path:
 
 ```sh
 pnpm desktop:publish-downloads
 ```
 
 `desktop:publish-downloads` validates `desktop-release/latest.json` before copying. The manifest must include a non-empty version and each listed updater platform must have a non-empty signature, updater URL, existing updater archive, matching `.sig` file, and the expected platform installer.
-
-By default this copies `desktop-release/*` release artifacts into:
-
-```text
-../new-api/web/default/public/downloads/
-```
 
 Override the target with `AI_COVE_DESIGN_DOWNLOADS_DIR` when publishing to another static root.
 
@@ -114,48 +108,24 @@ Required repository secrets:
 
 ## Production Upload
 
-Upload installers, updater archives, signatures, and `latest.json` to:
+Use the official CI artifact and the platform-owned COS publisher:
+
+```sh
+AI_COVE_DESIGN_RELEASE_DIR=/path/to/ai-cove-design-desktop-release \
+AI_COVE_DESIGN_COSCLI_CONFIG=/path/to/coscli-config.yaml \
+  ../deploy/release-all.sh design-desktop-publish
+```
+
+The public layout is:
 
 ```text
-https://ai-cove.com/downloads/
+https://ai-cove.com/downloads/design/latest.json
+https://ai-cove.com/downloads/design/ai-cove-design-desktop-macos.dmg
+https://ai-cove.com/downloads/design/ai-cove-design-desktop-windows.exe
+https://ai-cove.com/downloads/design/versions/<version>/...
 ```
 
-If macOS and Windows are built separately, keep the current production manifest before building the next platform:
-
-```sh
-AI_COVE_DESIGN_EXISTING_LATEST_JSON=/path/to/current/latest.json \
-TAURI_SIGNING_PRIVATE_KEY="$(cat /Users/hetonghao/.codex/tmp/ai-cove-design-updater.key)" \
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
-pnpm desktop:build
-```
-
-If `AI_COVE_DESIGN_EXISTING_LATEST_JSON` is not set, the script reads `desktop-release/latest.json` before cleaning the release directory. The output manifest keeps existing platform entries and replaces only the current platform entry.
-
-When publishing through New API static assets, run `pnpm desktop:publish-downloads` before the New API Web build/release step so `/downloads/latest.json` and installer links are present in the built public assets.
-
-Verify the static assets from the New API Web directory, not from `gpt-image-canvas/`:
-
-```sh
-cd ../new-api/web/default
-pnpm build
-find dist/downloads -maxdepth 1 -type f -print | sort
-```
-
-For the platform release path, `deploy/release-all.sh release` now syncs `gpt-image-canvas/desktop-release/` into `new-api/web/default/public/downloads/` before building the New API Docker image. For a desktop release where missing downloads should stop the release, run:
-
-```sh
-AI_COVE_REQUIRE_DESKTOP_DOWNLOADS=1 ./deploy/release-all.sh release
-```
-
-The strict guard requires `latest.json`, the macOS `.dmg`, the Windows `.exe`, both updater archives, and both signatures.
-
-When desktop release artifacts are present, `release-all` also runs:
-
-```sh
-pnpm desktop:validate-release <desktop-release-dir>
-```
-
-That validation requires both `darwin-aarch64` and `windows-x86_64` updater platform entries before artifacts are copied into New API public downloads.
+The publisher validates both platforms and signatures, uploads immutable version objects first, uploads root stable aliases next, and uploads root `latest.json` last. The updater endpoint in `src-tauri/tauri.conf.json` is `https://ai-cove.com/downloads/design/latest.json`; production desktop assets are not copied into New API.
 
 ## Verification
 
@@ -166,7 +136,6 @@ pnpm desktop:build:test
 pnpm typecheck
 cargo test --manifest-path src-tauri/Cargo.toml
 pnpm desktop:validate-release
-pnpm desktop:publish-downloads
 ```
 
 Then verify the generated app can start the packaged sidecar and that `/api/health` returns `{"status":"ok"}`.
