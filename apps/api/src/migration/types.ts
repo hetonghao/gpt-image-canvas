@@ -1,7 +1,6 @@
 export const MIGRATION_TOOL_VERSION = "ai-cove-excalidraw-migration/1" as const;
 
 export type FailureCode =
-  | "already_excalidraw"
   | "asset_materialization_failed"
   | "asset_missing"
   | "binding_or_parent_loss"
@@ -60,6 +59,7 @@ export type VerifiedAsset = AssetRow & {
   readonly actualContentSha256: string;
   readonly actualWidth: number;
   readonly actualHeight: number;
+  readonly sourceBytes?: Uint8Array;
 };
 
 export type AssetVerificationOutcome =

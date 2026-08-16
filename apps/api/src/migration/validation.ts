@@ -13,7 +13,7 @@ import {
   tablesMatch
 } from "./sqlite.js";
 import { reopenTargetProject } from "./target-reopen.js";
-import type { BusinessReferenceReconciliation, CheckState, FailureCode, ProjectResult, TableFingerprint, TableReconciliation } from "./types.js";
+import type { AssetRow, BusinessReferenceReconciliation, CheckState, FailureCode, ProjectResult, TableFingerprint, TableReconciliation, VerifiedAsset } from "./types.js";
 
 export type OutputValidation = {
   readonly databaseIntegrity: CheckState;
@@ -30,6 +30,8 @@ export async function validateOutput(input: {
   readonly outputDir: string;
   readonly sourceTables: readonly TableFingerprint[];
   readonly projects: readonly ProjectResult[];
+  readonly expectedAssets?: readonly VerifiedAsset[];
+  readonly sourceReferenceAssets?: readonly VerifiedAsset[];
   readonly assetAliases?: ReadonlyMap<string, string>;
 }): Promise<OutputValidation> {
   let sourceDatabase: Database.Database | undefined;
@@ -41,7 +43,8 @@ export async function validateOutput(input: {
     const outputTables = tableFingerprints(database);
     const sourceAssets = readAssets(sourceDatabase);
     const aliases = input.assetAliases ?? new Map<string, string>();
-    const expectedTables = canonicalizeAssetFingerprint(input.sourceTables, sourceAssets, aliases);
+    const expectedAssets = input.expectedAssets ?? sourceAssets;
+    const expectedTables = canonicalizeAssetFingerprint(input.sourceTables, expectedAssets);
     const reconciliation = reconcileTables(expectedTables, outputTables);
     const tablesAreEqual = sameTableNames(expectedTables, outputTables) && tablesMatch(reconciliation);
     const outputProjects = readProjects(database);
@@ -54,7 +57,7 @@ export async function validateOutput(input: {
       outputDatabase: database,
       sourceProjects,
       outputProjects,
-      sourceAssets,
+      sourceAssets: mergedAssets(sourceAssets, input.sourceReferenceAssets ?? expectedAssets),
       outputAssets,
       assetAliases: aliases
     });
@@ -89,6 +92,10 @@ export async function validateOutput(input: {
     sourceDatabase?.close();
     database?.close();
   }
+}
+
+function mergedAssets(source: readonly AssetRow[], expected: readonly AssetRow[]): readonly AssetRow[] {
+  return [...new Map([...source, ...expected].map((asset) => [asset.id, asset])).values()];
 }
 
 function emptyBusinessReferenceReconciliation(): BusinessReferenceReconciliation {

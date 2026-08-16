@@ -66,11 +66,9 @@ export function tablesMatch(reconciliation: readonly TableReconciliation[]): boo
 
 export function canonicalizeAssetFingerprint(
   tables: readonly TableFingerprint[],
-  assets: readonly AssetRow[],
-  aliases: ReadonlyMap<string, string>
+  assets: readonly AssetRow[]
 ): readonly TableFingerprint[] {
-  if (aliases.size === 0) return tables;
-  const ids = [...new Set(assets.map((asset) => aliases.get(asset.id) ?? asset.id))].sort();
+  const ids = [...new Set(assets.map((asset) => asset.id))].sort();
   const digest = primaryKeyDigest(ids.map((id) => ({ id })), ["id"]);
   return tables.map((table) => table.name === "assets" ? { ...table, rowCount: ids.length, primaryKeyDigest: digest } : table);
 }

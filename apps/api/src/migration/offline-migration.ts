@@ -142,7 +142,15 @@ export async function runOfflineMigration(options: MigrationOptions): Promise<Mi
     }
     outputSummary = summarizeDataDir(paths.outputDir);
     phase = "validate";
-    const validation = await validateOutput({ inputDir: paths.inputDir, outputDir: paths.outputDir, sourceTables, projects: migratedProjects, assetAliases: canonicalization.value.aliases });
+    const validation = await validateOutput({
+      inputDir: paths.inputDir,
+      outputDir: paths.outputDir,
+      sourceTables,
+      projects: migratedProjects,
+      expectedAssets: canonicalization.value.assets,
+      sourceReferenceAssets: projectResults.flatMap((project) => project.verifiedAssets),
+      assetAliases: canonicalization.value.aliases
+    });
     const failureCodes = [...validation.failures];
     if (warningCodes.length > 0 && options.approveWarnings !== true) failureCodes.push("warning_unapproved");
     return finishReport({

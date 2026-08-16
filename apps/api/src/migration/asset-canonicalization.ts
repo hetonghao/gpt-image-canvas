@@ -56,7 +56,7 @@ export function rewriteOutputAssetReferences(database: Database.Database, aliase
     rewriteAgentConversations(database, aliases);
     rewriteGenericAssetColumns(database, aliases);
     for (const duplicateId of aliases.keys()) {
-      if (database.prepare("DELETE FROM assets WHERE id = ?").run(duplicateId).changes !== 1) throw new Error("canonical asset row mismatch");
+      database.prepare("DELETE FROM assets WHERE id = ?").run(duplicateId);
     }
     database.exec("CREATE UNIQUE INDEX IF NOT EXISTS assets_user_content_sha256_idx ON assets(user_id, content_sha256)");
   });

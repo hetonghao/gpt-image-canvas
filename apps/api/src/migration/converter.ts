@@ -1,8 +1,9 @@
 import { Buffer } from "node:buffer";
-import { assetIdCandidates, verifyAsset } from "./assets.js";
+import { assetIdCandidates, verifyAsset, verifyEmbeddedAsset } from "./assets.js";
 import { assetReference, boxElement, businessData, hashString, imageElement, lineElement, pointsFromProps, textElement, textFromProps } from "./elements.js";
 import { isRecord, numberValue, recordValue, stringValue } from "./json.js";
 import type { SourceShape } from "./source-types.js";
+import { preserveTargetProject } from "./target-project.js";
 import type {
   AssetRow,
   BlockedProject,
@@ -39,7 +40,8 @@ export async function convertProject(
     return converted(project, 0, [], {}, [], []);
   }
   if (!isRecord(parsed)) return blocked(project, 0, "invalid_snapshot");
-  if (parsed.format === "ai-cove-excalidraw") return blocked(project, 0, "already_excalidraw");
+  const preserved = await preserveTargetProject({ inputDir, project, parsed, assets });
+  if (preserved) return preserved;
 
   const store = extractStore(parsed);
   if (store.kind === "blocked") return blocked(project, 0, store.code);
@@ -116,19 +118,20 @@ async function convertShape(
   switch (shape.type) {
     case "image": {
       const assetRecord = sourceAssets.get(`asset:${stringValue(shape.props.assetId)?.replace(/^asset:/u, "") ?? ""}`) ?? sourceAssets.get(stringValue(shape.props.assetId) ?? "");
-      const assetId = assetIdCandidates(shape.props, assetRecord).find((candidate) => assets.has(candidate));
-      const asset = assetId ? assets.get(assetId) : undefined;
-      if (!asset || !assetId) return { kind: "blocked", code: "asset_missing" };
-      let verification = assetVerification.get(asset.id);
+      const candidates = assetIdCandidates(shape.props, assetRecord);
+      const assetId = candidates.find((candidate) => assets.has(candidate)) ?? candidates[0];
+      if (!assetId) return { kind: "blocked", code: "asset_missing" };
+      let verification = assetVerification.get(assetId);
       if (!verification) {
-        verification = verifyAsset(inputDir, project.userId, asset);
-        assetVerification.set(asset.id, verification);
+        const asset = assets.get(assetId);
+        verification = asset ? verifyAsset(inputDir, project.userId, asset) : verifyEmbeddedAsset(project.userId, assetId, assetRecord);
+        assetVerification.set(assetId, verification);
       }
       const result = await verification;
       if (result.kind === "blocked") return result;
-      verifiedAssets.set(asset.id, result.value);
-      const fileId = fileIds.get(asset.id) ?? `file-${hashString(`${project.id}:${asset.id}`).slice(0, 32)}`;
-      fileIds.set(asset.id, fileId);
+      verifiedAssets.set(assetId, result.value);
+      const fileId = fileIds.get(assetId) ?? `file-${hashString(`${project.id}:${assetId}`).slice(0, 32)}`;
+      fileIds.set(assetId, fileId);
       assetRefs[fileId] = assetReference(result.value);
       return { kind: "converted", elements: [imageElement(shape, fileId, business)], warnings: [] };
     }

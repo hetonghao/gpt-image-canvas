@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Buffer } from "node:buffer";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, resolve, relative } from "node:path";
 import sharp from "sharp";
@@ -61,6 +62,37 @@ export async function verifyAssetBytes(projectUserId: string, asset: AssetRow, b
     if (error instanceof Error) return { kind: "blocked", code: "asset_materialization_failed" };
     throw error;
   }
+}
+
+export async function verifyEmbeddedAsset(projectUserId: string, assetId: string, assetRecord: JsonRecord | undefined): Promise<AssetVerificationOutcome> {
+  const props = assetRecord && isRecord(assetRecord.props) ? assetRecord.props : undefined;
+  const source = stringValue(props?.src);
+  if (!props || !source || !source.startsWith("data:image/")) return { kind: "blocked", code: "asset_missing" };
+  const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/u.exec(source);
+  const mimeType = match?.[1];
+  const payload = match?.[2];
+  if (!mimeType || !payload) return { kind: "blocked", code: "asset_materialization_failed" };
+  const width = numberValue(props.w);
+  const height = numberValue(props.h);
+  if (!width || !height) return { kind: "blocked", code: "asset_materialization_failed" };
+  const bytes = Buffer.from(payload, "base64");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.slice("image/".length);
+  const sourceName = stringValue(props.name);
+  const fileName = sourceName && /^[^/\\]+$/u.test(sourceName) ? sourceName : `migrated-${digest}.${extension}`;
+  const asset: AssetRow = {
+    id: assetId,
+    userId: projectUserId,
+    fileName,
+    relativePath: `assets/migrated-${digest}.${extension}`,
+    mimeType,
+    width,
+    height,
+    byteSize: numberValue(props.fileSize) ?? bytes.byteLength,
+    contentSha256: digest
+  };
+  const verification = await verifyAssetBytes(projectUserId, asset, bytes);
+  return verification.kind === "verified" ? { kind: "verified", value: { ...verification.value, sourceBytes: bytes } } : verification;
 }
 
 export function assetPath(inputDir: string, asset: AssetRow): string | undefined {

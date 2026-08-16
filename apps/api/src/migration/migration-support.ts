@@ -1,5 +1,7 @@
-import { join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
+import { assetPath } from "./assets.js";
 import { ensureAssetIntegrityColumns } from "./sqlite.js";
 import type {
   AssetRow,
@@ -21,12 +23,26 @@ export function writeOutputData(outputDir: string, projects: readonly ProjectRes
     ensureAssetIntegrityColumns(database);
     const updateProject = database.prepare("UPDATE projects SET snapshot_json = ? WHERE id = ? AND user_id = ?");
     const updateAsset = database.prepare("UPDATE assets SET mime_type = ?, byte_size = ?, content_sha256 = ? WHERE id = ? AND user_id = ?");
+    const insertAsset = database.prepare(
+      `INSERT INTO assets (id, user_id, file_name, relative_path, mime_type, width, height, byte_size, content_sha256, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const asset of assets) {
+      if (!asset.sourceBytes) continue;
+      const path = assetPath(outputDir, asset);
+      if (!path) throw new Error("materialized asset path is invalid");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, asset.sourceBytes, { flag: "wx" });
+    }
     const write = database.transaction(() => {
       for (const project of projects) {
         if (project.status === "blocked" || updateProject.run(project.snapshotJson, project.id, project.userId).changes !== 1) throw new Error("output project row mismatch");
       }
       for (const asset of assets) {
-        if (updateAsset.run(asset.mimeType, asset.actualByteSize, asset.actualContentSha256, asset.id, asset.userId).changes !== 1) throw new Error("output asset row mismatch");
+        const result = asset.sourceBytes
+          ? insertAsset.run(asset.id, asset.userId, asset.fileName, asset.relativePath, asset.mimeType, asset.actualWidth, asset.actualHeight, asset.actualByteSize, asset.actualContentSha256, "1970-01-01T00:00:00.000Z")
+          : updateAsset.run(asset.mimeType, asset.actualByteSize, asset.actualContentSha256, asset.id, asset.userId);
+        if (result.changes !== 1) throw new Error("output asset row mismatch");
       }
     });
     write();
