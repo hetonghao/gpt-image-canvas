@@ -191,111 +191,38 @@
   height: 100%;
 }
 
-.canvas-export {
+.generation-placeholder-overlay {
   position: absolute;
-  top: 4.75rem;
-  right: 0.75rem;
-  z-index: 42;
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--paper-panel);
-  box-shadow: var(--shadow-soft);
-  color: var(--ink);
-  padding: 0.25rem;
-  pointer-events: auto;
+  inset: 0;
+  z-index: 35;
+  overflow: hidden;
+  pointer-events: none;
 }
 
-.canvas-export__label {
-  color: var(--muted-ink);
-  font-size: 0.68rem;
-  font-weight: 750;
-  padding-inline: 0.35rem 0.2rem;
-  white-space: nowrap;
-}
-
-.canvas-export > button,
-.canvas-export__error button {
-  min-height: 2.5rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ink);
-  cursor: pointer;
-  font-size: 0.68rem;
-  font-weight: 800;
-  padding: 0 0.5rem;
-}
-
-.canvas-export > button:hover,
-.canvas-export__error button:hover {
-  border-color: var(--accent-dark);
-  color: var(--accent-dark);
-}
-
-.canvas-export > button:disabled {
-  cursor: wait;
-  opacity: 0.58;
-}
-
-.canvas-export__error {
+.generation-placeholder-overlay__item {
   position: absolute;
-  top: auto;
-  right: 0;
-  bottom: calc(100% + 0.45rem);
-  display: flex;
-  width: min(20rem, calc(100vw - 1.5rem));
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.65rem;
-  border: 1px solid color-mix(in srgb, var(--warning) 30%, var(--line));
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--warning) 8%, var(--paper-panel));
-  box-shadow: var(--shadow-soft);
-  color: var(--ink);
-  font-size: 0.72rem;
-  line-height: 1.45;
-  padding: 0.65rem;
+  overflow: hidden;
+  pointer-events: none;
 }
 
-.canvas-export__error button {
+.excalidraw-canvas-runtime > .excalidraw .sidebar-trigger__label-element:has(.default-sidebar-trigger) {
+  display: none;
+}
+
+.excalidraw.excalidraw-modal-container .HelpDialog__header {
+  display: none;
+}
+
+.dropdown-menu [data-testid="image-export-button"] {
   min-height: 2.5rem;
-  flex: none;
-}
-
-@media (max-width: 1023px) {
-  .canvas-export {
-    top: auto;
-    right: 0.75rem;
-    bottom: calc(8.5rem + env(safe-area-inset-bottom));
-  }
-
-  .canvas-export > button {
-    min-height: 2.75rem;
-  }
-
-  .canvas-export__error {
-    right: 0;
-    bottom: calc(100% + 0.45rem);
-  }
 }
 
 @media (max-width: 768px) {
-  .canvas-export {
-    right: 0.5rem;
+  .dropdown-menu [data-testid="image-export-button"] {
+    min-height: 2.75rem;
   }
 
-  .canvas-export__label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-  }
-
-  .canvas-export > button {
+  .excalidraw-canvas-runtime > .excalidraw [data-testid="dropdown-menu"] button {
     min-height: 2.75rem;
   }
 
@@ -322,6 +249,60 @@
     min-height: 2.75rem;
   }
 
+}
+
+@media (max-width: 480px) {
+  .excalidraw-canvas-runtime > .excalidraw.excalidraw--mobile .main-menu-trigger {
+    position: fixed;
+    top: calc(var(--app-nav-height) + 1rem);
+    left: 1rem;
+    z-index: 50;
+  }
+
+  .excalidraw-canvas-runtime > .excalidraw.excalidraw--mobile .App-toolbar--mobile {
+    max-width: calc(100vw - 5.75rem);
+    margin-inline-start: 3.75rem;
+  }
+
+  .excalidraw-canvas-runtime > .excalidraw [data-testid="dropdown-menu"]:has([data-testid="image-export-button"]) {
+    position: fixed;
+    top: calc(var(--app-nav-height) + 4.5rem) !important;
+    left: 1rem;
+    bottom: auto !important;
+    width: min(20rem, calc(100vw - 2rem));
+    margin-top: 0;
+  }
+
+  .excalidraw.excalidraw-modal-container.excalidraw--mobile .HelpDialog {
+    top: var(--app-nav-height);
+    height: calc(100% - var(--app-nav-height));
+  }
+
+  .excalidraw.excalidraw-modal-container.excalidraw--mobile .HelpDialog__shortcut {
+    column-gap: 0.25rem;
+    padding-inline: 0.5rem;
+  }
+
+  .excalidraw.excalidraw-modal-container.excalidraw--mobile .HelpDialog__key-container {
+    column-gap: 0.125rem;
+  }
+
+  .excalidraw.excalidraw-modal-container.excalidraw--mobile .HelpDialog__key {
+    padding: 0.4rem;
+  }
+}
+
+@media (min-width: 481px) and (max-width: 768px) {
+  .excalidraw-canvas-runtime > .excalidraw [data-testid="dropdown-menu"]:has([data-testid="image-export-button"]) {
+    top: 100% !important;
+    bottom: auto !important;
+    margin-top: 0.5rem;
+  }
+}
+
+.excalidraw-canvas-runtime:has([data-testid="dropdown-menu"] [data-testid="image-export-button"]) .canvas-asset-availability {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .canvas-asset-availability {
@@ -578,4 +559,20 @@
 html[lang="zh-CN"] .app-root[data-region-annotation-mode="auto"] .excalidraw-canvas-runtime .HintViewer,
 html[lang="zh-CN"] .app-root[data-region-annotation-mode="manual"] .excalidraw-canvas-runtime .HintViewer {
   display: none;
+}
+
+html[lang="zh-CN"] .excalidraw-canvas-runtime[data-image-selected="true"] .HintViewer > span {
+  display: none;
+}
+
+html[lang="zh-CN"] .excalidraw-canvas-runtime[data-image-selected="true"] .HintViewer::after {
+  content: "双击图片或按 Enter 裁剪图片";
+}
+
+.excalidraw-canvas-runtime[data-image-cropping="true"] .HintViewer > span {
+  display: none;
+}
+
+.excalidraw-canvas-runtime[data-image-cropping="true"] .HintViewer::after {
+  content: var(--canvas-image-cropping-hint);
 }

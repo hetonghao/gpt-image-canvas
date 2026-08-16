@@ -1,9 +1,11 @@
 import { Excalidraw } from "@excalidraw/excalidraw";
-import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import type { AppState, ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import "@excalidraw/excalidraw/index.css";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,6 +21,7 @@ import {
   hydrateProjectSnapshot,
   type HydratedScene
 } from "./excalidraw-snapshot";
+import { GenerationPlaceholderOverlay } from "./GenerationPlaceholderShape";
 
 export interface ExcalidrawCanvasProps {
   locale: "zh-CN" | "en";
@@ -44,9 +47,18 @@ export function ExcalidrawCanvas({
   const [fatalError, setFatalError] = useState<CanvasFatalError | null>(null);
   const [hydrated, setHydrated] = useState<HydratedScene | null>(null);
   const [editor, setEditor] = useState<CanvasEditor | null>(null);
+  const [imageSelected, setImageSelected] = useState(false);
+  const [imageCropping, setImageCropping] = useState(false);
+  const { t } = useI18n();
+  const canvasRootRef = useRef<HTMLDivElement | null>(null);
   const cleanupRef = useRef<void | (() => void)>();
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const runtimeRef = useRef<CanvasEditorRuntime | null>(null);
+
+  const croppingHint = t("canvasImageCroppingHint");
+  useLayoutEffect(() => {
+    canvasRootRef.current?.style.setProperty("--canvas-image-cropping-hint", `"${croppingHint}"`);
+  }, [croppingHint, hydrated]);
 
   useEffect(() => {
     setElapsedStage("initial");
@@ -131,23 +143,49 @@ export function ExcalidrawCanvas({
   }
 
   return (
-    <div className="excalidraw-canvas-runtime" data-testid="excalidraw-canvas" data-theme={theme}>
+    <div
+      className="excalidraw-canvas-runtime"
+      data-image-cropping={imageCropping ? "true" : undefined}
+      data-image-selected={imageSelected ? "true" : undefined}
+      data-testid="excalidraw-canvas"
+      data-theme={theme}
+      ref={canvasRootRef}
+    >
       <Excalidraw
         excalidrawAPI={setExcalidrawApi}
         initialData={initialData}
         langCode={locale}
         theme={theme}
-        UIOptions={{ canvasActions: { loadScene: false, saveToActiveFile: false } }}
-        onChange={(elements, appState, files) => runtimeRef.current?.acceptChange(elements, appState, files)}
-      />
+        UIOptions={{
+          canvasActions: {
+            export: false,
+            loadScene: false,
+            saveToActiveFile: false,
+            toggleTheme: true
+          }
+        }}
+        onChange={(elements, appState, files) => {
+          setImageCropping(Boolean(appState.croppingElementId));
+          setImageSelected(hasSingleSelectedImage(elements, appState));
+          runtimeRef.current?.acceptChange(elements, appState, files);
+        }}
+      >
+        <CanvasExportControls />
+      </Excalidraw>
       {editor ? (
         <CanvasEditorProvider editor={editor}>
           {overlays}
-          <CanvasExportControls editor={editor} />
+          <GenerationPlaceholderOverlay />
         </CanvasEditorProvider>
       ) : null}
     </div>
   );
+}
+
+function hasSingleSelectedImage(elements: readonly ExcalidrawElement[], appState: AppState): boolean {
+  if (appState.croppingElementId) return false;
+  const selected = elements.filter((element) => appState.selectedElementIds[element.id]);
+  return selected.length === 1 && selected[0]?.type === "image";
 }
 
 function CanvasStartupState({

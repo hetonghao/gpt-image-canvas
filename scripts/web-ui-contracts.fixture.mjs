@@ -158,7 +158,8 @@ export function createBrowserFixture() {
     providerSaveFailure: false,
     providerSaveRequests: [],
     generationRequest: undefined,
-    generationRecord: undefined
+    generationRecord: undefined,
+    generationMode: "failed"
   };
 
   async function handle(route) {
@@ -280,7 +281,8 @@ export function createBrowserFixture() {
     }
     if (url.pathname === "/api/images/generate" && method === "POST") {
       state.generationRequest = request.postDataJSON();
-      state.generationRecord = { id: state.generationRequest.clientRequestId, mode: "generate", prompt: state.generationRequest.prompt, effectivePrompt: state.generationRequest.prompt, presetId: state.generationRequest.presetId, size: state.generationRequest.size, resolutionTier: "4K", model: "gpt-image-2", providerSourceId: "local-openai", modelFallback: true, quality: state.generationRequest.quality, outputFormat: state.generationRequest.outputFormat, count: state.generationRequest.count, status: "failed", error: "受控上游失败", retryCount: 1, createdAt: "2026-07-14T00:00:00.000Z", outputs: [{ id: "fixture-output", status: "failed", error: "受控上游失败" }] };
+      const isLoading = state.generationMode === "loading";
+      state.generationRecord = { id: state.generationRequest.clientRequestId, mode: "generate", prompt: state.generationRequest.prompt, effectivePrompt: state.generationRequest.prompt, presetId: state.generationRequest.presetId, size: state.generationRequest.size, resolutionTier: "4K", model: "gpt-image-2", providerSourceId: "local-openai", modelFallback: true, quality: state.generationRequest.quality, outputFormat: state.generationRequest.outputFormat, count: state.generationRequest.count, status: isLoading ? "running" : "failed", error: isLoading ? "" : "受控上游失败", retryCount: isLoading ? 0 : 1, createdAt: "2026-07-14T00:00:00.000Z", outputs: [{ id: "fixture-output", status: isLoading ? "pending" : "failed", error: isLoading ? "" : "受控上游失败" }] };
       return json(route, { record: state.generationRecord });
     }
     if (state.generationRecord && url.pathname === `/api/generations/${encodeURIComponent(state.generationRecord.id)}` && method === "GET") return json(route, { record: state.generationRecord });

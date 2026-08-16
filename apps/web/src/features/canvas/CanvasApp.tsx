@@ -5483,8 +5483,9 @@ export function App() {
     const controller = new AbortController();
     const generationId = crypto.randomUUID();
     const placeholderSet = createGenerationPlaceholders(editor, input, generationId, {
-      selectPlaceholders: requestMode !== "reference"
+      selectPlaceholders: false
     });
+    if (isMobileDrawer) closeAiPanel();
     const temporaryRecord = createTemporaryGenerationRecord({
       requestId: generationId,
       submitInput: input,

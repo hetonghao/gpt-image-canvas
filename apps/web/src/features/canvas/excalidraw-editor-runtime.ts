@@ -100,8 +100,9 @@ export class CanvasEditorRuntime implements CanvasEditor {
   }
 
   async exportScene(format: CanvasExportFormat): Promise<void> {
-    if (this.hasUnavailableAssets()) throw new CanvasAssetUnavailableError();
-    await exportCanvasScene(format, this.api.getSceneElements(), this.api.getAppState(), this.assets.files);
+    const elements = this.api.getSceneElements();
+    if (this.assets.hasUnavailableAssets(elements)) throw new CanvasAssetUnavailableError();
+    await exportCanvasScene(format, elements, this.api.getAppState(), this.assets.files);
   }
 
   focusAtCursor(): void { this.getContainer().focus({ preventScroll: true }); }
@@ -113,7 +114,6 @@ export class CanvasEditorRuntime implements CanvasEditor {
   }
 
   getCurrentPage(): { id: string; name: string } { return { id: "excalidraw-scene", name: "画布" }; }
-
   getCurrentPageShapes(): CanvasShape[] {
     return this.elements
       .filter((element) => !element.isDeleted && element.type !== "selection")

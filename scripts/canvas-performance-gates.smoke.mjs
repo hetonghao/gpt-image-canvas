@@ -130,7 +130,6 @@ async function navigateToWarmCanvas(page, baseUrl, viewport) {
 }
 
 async function waitForCanvasSurface(page, timeout) {
-  await page.getByTestId("canvas-export-controls").waitFor({ state: "attached", timeout });
   const surface = page.getByTestId("excalidraw-canvas");
   await surface.waitFor({ state: "visible", timeout });
   const box = await surface.boundingBox();

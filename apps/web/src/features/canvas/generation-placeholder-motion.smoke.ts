@@ -6,15 +6,15 @@ import { fileURLToPath } from "node:url";
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const stylesRoot = path.resolve(currentDir, "../../styles");
 
-const [placeholderSource, canvasAppSource, canvasStyles] = await Promise.all([
-  readFile(path.join(currentDir, "GenerationPlaceholderShape.tsx"), "utf8"),
+const [particleSource, canvasAppSource, canvasStyles] = await Promise.all([
+  readFile(path.join(currentDir, "generation-placeholder-particles.tsx"), "utf8"),
   readFile(path.join(currentDir, "CanvasApp.tsx"), "utf8"),
   readFile(path.join(stylesRoot, "canvas.css"), "utf8")
 ]);
 
-assert.ok(placeholderSource.includes("ResizeObserver"), "particle canvas sizing should use ResizeObserver instead of per-frame layout reads");
+assert.ok(particleSource.includes("ResizeObserver"), "particle canvas sizing should use ResizeObserver instead of per-frame layout reads");
 assert.doesNotMatch(
-  placeholderSource,
+  particleSource,
   /const renderFrame[\s\S]*?getBoundingClientRect/u,
   "particle canvas render frames should not call getBoundingClientRect"
 );

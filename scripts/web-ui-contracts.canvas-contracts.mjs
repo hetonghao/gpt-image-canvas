@@ -18,6 +18,17 @@ function viewportTargetSize(viewport) {
   return viewport.width <= 768 ? 44 : 40;
 }
 
+async function openCanvasMenu(page) {
+  const menu = page.locator('[data-testid="main-menu-trigger"]:visible').first();
+  await menu.waitFor();
+  const imageExport = page.getByTestId("image-export-button");
+  if (!(await imageExport.isVisible())) {
+    await menu.click();
+    await imageExport.waitFor();
+  }
+  return menu;
+}
+
 function boxesOverlap(left, right) {
   return left.x < right.x + right.width
     && left.x + left.width > right.x
@@ -37,6 +48,21 @@ async function assertNoOverlap(left, right, message) {
     requireBox(right, `${message}: second surface is visible`)
   ]);
   assert.equal(boxesOverlap(leftBox, rightBox), false, message);
+}
+
+async function assertPaintedAbove(front, back, message) {
+  const [frontBox, backBox] = await Promise.all([
+    requireBox(front, `${message}: front surface is visible`),
+    requireBox(back, `${message}: back surface is visible`)
+  ]);
+  if (!boxesOverlap(frontBox, backBox)) return;
+  const x = (Math.max(frontBox.x, backBox.x) + Math.min(frontBox.x + frontBox.width, backBox.x + backBox.width)) / 2;
+  const y = (Math.max(frontBox.y, backBox.y) + Math.min(frontBox.y + frontBox.height, backBox.y + backBox.height)) / 2;
+  assert.equal(
+    await front.evaluate((element, point) => element.contains(document.elementFromPoint(point.x, point.y)), { x, y }),
+    true,
+    message
+  );
 }
 
 async function canvasImageCenter(page, viewport) {
@@ -70,38 +96,99 @@ export async function runCanvasContracts({ baseUrl, fixture, page, viewport }) {
   const targetSize = viewportTargetSize(viewport);
   await page.goto(`${baseUrl}/?ui_mode=embedded`);
   await page.getByTestId("excalidraw-canvas").waitFor();
+  const menuTrigger = page.locator('[data-testid="main-menu-trigger"]:visible').first();
+  await menuTrigger.waitFor();
+  assert.equal(
+    await page.locator('[data-testid="main-menu-trigger"]:visible').count(),
+    1,
+    "Canvas exposes one top-left menu trigger"
+  );
+  const [canvasBox, menuTriggerBox] = await Promise.all([
+    requireBox(page.getByTestId("canvas-shell"), "Canvas shell is visible for menu positioning"),
+    requireBox(menuTrigger, "Canvas menu trigger is visible for positioning")
+  ]);
+  assert.ok(
+    menuTriggerBox.x - canvasBox.x <= 24 && menuTriggerBox.y - canvasBox.y <= 24,
+    "Canvas menu trigger stays in the top-left corner"
+  );
+  if (viewport.width <= 480) {
+    await assertNoOverlap(
+      menuTrigger,
+      page.locator(".App-toolbar--mobile"),
+      "Canvas mobile menu trigger stays clear of the drawing toolbar"
+    );
+  }
   const canvasAssetAlert = page.getByTestId("canvas-asset-unavailable");
   await canvasAssetAlert.waitFor();
   assert.match(await canvasAssetAlert.innerText(), /画布图片不可用/u, "Canvas uses the shared unavailable asset state");
   const canvasRetry = canvasAssetAlert.getByRole("button", { name: "重新检查" });
   assert.ok((await canvasRetry.boundingBox())?.height >= targetSize, "Canvas retry keeps the viewport target size");
-  const exportControls = page.getByTestId("canvas-export-controls");
-  await exportControls.waitFor();
-  const blockedExport = page.getByTestId("canvas-export-png");
-  assert.ok((await blockedExport.boundingBox())?.height >= targetSize, "Canvas export keeps the viewport target size");
-  await blockedExport.click();
-  const exportError = exportControls.getByRole("alert");
-  assert.match(
-    await exportError.innerText(),
-    /图片尚未完整恢复/u,
-    "Canvas export blocks incomplete assets with a typed recovery state"
+  assert.equal(await page.locator(".default-sidebar-trigger:visible").count(), 0, "Canvas hides the unused Excalidraw library button");
+  assert.equal(await page.getByTestId("canvas-export-controls").count(), 0, "Canvas does not mount custom export controls");
+  const canvasMenu = await openCanvasMenu(page);
+  await canvasAssetAlert.waitFor({ state: "hidden" });
+  assert.equal(await page.getByTestId("search-menu-button").count(), 1, "Canvas keeps the original search menu item");
+  assert.equal(await page.getByTestId("help-menu-item").count(), 1, "Canvas keeps the original help menu item");
+  assert.equal(await page.getByTestId("clear-canvas-button").count(), 1, "Canvas keeps the original clear menu item");
+  assert.equal(await page.getByTestId("toggle-dark-mode").isVisible(), true, "Canvas keeps the original theme menu item");
+  assert.equal(await page.getByTestId("image-export-button").count(), 1, "Canvas keeps the original image export menu item");
+  await page.getByTestId("help-menu-item").click();
+  const helpDialog = page.locator(".HelpDialog:visible");
+  await helpDialog.waitFor();
+  assert.equal(await helpDialog.locator(".HelpDialog__header").isVisible(), false, "Canvas hides the external Help links");
+  const [topNavigationBox, helpTitleBox] = await Promise.all([
+    requireBox(page.locator(".top-navigation"), "Host navigation exposes geometry"),
+    requireBox(helpDialog.locator(".Dialog__title"), "Help dialog title exposes geometry")
+  ]);
+  assert.ok(
+    helpTitleBox.y >= topNavigationBox.y + topNavigationBox.height,
+    "Help dialog title stays below the host navigation"
   );
-  const excalidrawToolbar = page.locator(".excalidraw .App-toolbar").first();
-  await assertNoOverlap(canvasAssetAlert, excalidrawToolbar, "Canvas asset warning clears the Excalidraw toolbar");
-  await assertNoOverlap(exportControls, excalidrawToolbar, "Canvas export controls clear the Excalidraw toolbar");
-  await assertNoOverlap(exportError, canvasAssetAlert, "Canvas export error and asset warning remain legible");
+  if (viewport.width <= 375) {
+    const colorShortcutLabel = helpDialog
+      .locator(".HelpDialog__shortcut")
+      .filter({ hasText: "从画布上取色" })
+      .locator(":scope > div")
+      .first();
+    const colorShortcutBox = await requireBox(colorShortcutLabel, "Help shortcut label exposes geometry");
+    const colorShortcutLineHeight = await colorShortcutLabel.evaluate((element) => Number.parseFloat(getComputedStyle(element).lineHeight));
+    assert.ok(
+      colorShortcutBox.height <= colorShortcutLineHeight * 1.2,
+      "Help shortcut labels avoid single-character CJK orphans"
+    );
+  }
+  const helpClose = helpDialog.locator(".Dialog__close:visible");
+  if (await helpClose.count()) await helpClose.evaluate((button) => button.click());
+  else await helpDialog.locator(".Modal__background").evaluate((background) => background.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await helpDialog.waitFor({ state: "hidden" });
+  await openCanvasMenu(page);
+  for (const testId of ["canvas-export-submenu-trigger", "canvas-export-excalidraw", "canvas-export-png", "canvas-export-svg"]) {
+    assert.equal(await page.getByTestId(testId).count(), 0, `Canvas removes the obsolete custom export control: ${testId}`);
+  }
+  if (viewport.width <= 480) {
+    const mobileMenuBox = await requireBox(
+      page.locator('[data-testid="dropdown-menu"]:has([data-testid="image-export-button"])'),
+      "Canvas mobile dropdown is visible"
+    );
+    assert.ok(
+      mobileMenuBox.x - canvasBox.x <= 24 && mobileMenuBox.y - canvasBox.y <= 96,
+      "Canvas mobile dropdown opens from the top-left menu"
+    );
+  }
+  assert.equal(
+    await page.locator('[data-testid="main-menu-trigger"]:visible').count(),
+    1,
+    "Canvas keeps one top-left menu after export controls mount"
+  );
+  const imageExportButton = page.getByTestId("image-export-button");
+  assert.ok((await imageExportButton.boundingBox())?.height >= targetSize, "Canvas image export keeps the viewport target size");
+  assert.equal(await canvasAssetAlert.isHidden(), true, "Canvas asset warning yields to the open canvas menu");
   if (viewport.width <= 768) {
     const favoriteTrigger = page.getByTestId("prompt-favorites-trigger");
     const primaryAction = page.getByTestId("open-ai-panel");
     assert.equal((await primaryAction.innerText()).trim(), "生成到画布", "Recovered canvas keeps the complete primary action label");
     assert.equal(await primaryAction.evaluate((element) => element.scrollWidth <= element.clientWidth), true, "Recovered canvas primary action does not clip");
-    for (const [left, right, message] of [
-      [exportControls, favoriteTrigger, "Canvas export controls clear prompt favorites"],
-      [exportError, favoriteTrigger, "Canvas export error clears prompt favorites"],
-      [exportControls, primaryAction, "Canvas export controls clear the primary action"],
-      [exportError, primaryAction, "Canvas export error clears the primary action"],
-      [favoriteTrigger, primaryAction, "Prompt favorites clear the primary action"]
-    ]) await assertNoOverlap(left, right, message);
+    await assertNoOverlap(favoriteTrigger, primaryAction, "Prompt favorites clear the primary action");
 
     const shellBox = await requireBox(page.getByTestId("canvas-shell"), "Canvas shell exposes mobile control geometry");
     const excalidrawTargets = page.locator(".excalidraw label.ToolIcon, .excalidraw button");
@@ -110,27 +197,29 @@ export async function runCanvasContracts({ baseUrl, fixture, page, viewport }) {
       const box = await target.boundingBox();
       if (!box) continue;
       if (box.y < shellBox.y + 220) {
-        assert.ok(box.width >= 44 && box.height >= 44, "Excalidraw top and right controls keep 44px pointer targets");
+        const descriptor = await target.evaluate((element) => `${element.tagName}.${element.className} ${element.getAttribute("data-testid") ?? ""}`);
+        assert.ok(box.width >= 44 && box.height >= 44, `Excalidraw top and right controls keep 44px pointer targets: ${descriptor} ${box.width}x${box.height}`);
       }
       if (box.y > shellBox.y + shellBox.height - 100) {
-        for (const overlay of [exportControls, exportError, favoriteTrigger, primaryAction]) {
+        for (const overlay of [favoriteTrigger, primaryAction]) {
           const overlayBox = await requireBox(overlay, "Canvas mobile overlay exposes geometry");
           assert.equal(boxesOverlap(box, overlayBox), false, "Canvas overlays reserve the Excalidraw bottom controls");
         }
       }
     }
   }
+  await canvasMenu.click();
+  await canvasAssetAlert.waitFor();
   const canvasFailedRetry = waitForAsset(page, "canvas-asset");
-  await exportControls.getByRole("button", { name: "重试资源" }).click();
+  await canvasRetry.click();
   assert.equal((await canvasFailedRetry).status(), 404, "Canvas retry observes the failed preview response");
   assert.equal(await page.getByTestId("excalidraw-canvas").isVisible(), true, "A single missing asset stays isolated inside the mounted canvas");
 
-  await blockedExport.click();
   fixture.state.canvasAuthFailure = true;
   const authenticationFailure = page.waitForResponse(
     (response) => new URL(response.url()).pathname === "/api/assets/canvas-asset/metadata"
   );
-  await exportControls.getByRole("button", { name: "重试资源" }).click();
+  await canvasRetry.click();
   assert.equal((await authenticationFailure).status(), 401, "Mounted asset retry observes the authentication failure");
   const blockingError = page.getByTestId("canvas-startup-state");
   await blockingError.waitFor();
@@ -150,12 +239,12 @@ export async function runCanvasContracts({ baseUrl, fixture, page, viewport }) {
   assert.equal((await canvasRecoveredRetry).ok(), true, "Blocking canvas retry rehydrates the recovered asset");
   await page.getByTestId("excalidraw-canvas").waitFor();
   await canvasAssetAlert.waitFor({ state: "hidden" });
-  for (const [format, fileName] of [["excalidraw", "ai-cove-canvas.excalidraw"], ["png", "ai-cove-canvas.png"], ["svg", "ai-cove-canvas.svg"]]) {
-    const downloadPromise = page.waitForEvent("download");
-    await page.getByTestId(`canvas-export-${format}`).click();
-    const download = await downloadPromise;
-    assert.equal(download.suggestedFilename(), fileName, `Canvas ${format} export uses the expected file name`);
-  }
+  await openCanvasMenu(page);
+  await page.getByTestId("image-export-button").click();
+  const imageExportDialog = page.locator(".ImageExportModal:visible");
+  await imageExportDialog.waitFor();
+  assert.match(await imageExportDialog.innerText(), /导出图片/u, "Canvas opens the localized native image export dialog");
+  await page.keyboard.press("Escape");
 
   const providerTrigger = page.getByTestId("global-provider-settings");
   await providerTrigger.click();
@@ -270,6 +359,25 @@ export async function runCanvasContracts({ baseUrl, fixture, page, viewport }) {
 
   const imageCenter = await canvasImageCenter(page, viewport);
   await page.mouse.click(imageCenter.x, imageCenter.y);
+  const imageSelectionHint = page.locator(".HintViewer:visible");
+  if (await imageSelectionHint.count()) {
+    assert.equal(
+      await imageSelectionHint.evaluate((element) => getComputedStyle(element, "::after").content),
+      '"双击图片或按 Enter 裁剪图片"',
+      "Selecting an image keeps the Excalidraw toolbar hint in zh-CN"
+    );
+    assert.equal(await imageSelectionHint.locator("span").isVisible(), false, "Selecting an image hides the untranslated crop hint");
+  }
+  await page.mouse.dblclick(imageCenter.x, imageCenter.y);
+  const imageCroppingHint = page.locator(".HintViewer:visible");
+  await imageCroppingHint.waitFor();
+  assert.equal(
+    await imageCroppingHint.evaluate((element) => getComputedStyle(element, "::after").content),
+    '"点击图片外部或按 Enter 或 Esc 完成裁剪"',
+    "Cropping an image keeps the Excalidraw toolbar hint in zh-CN"
+  );
+  assert.equal(await imageCroppingHint.locator("span").isVisible(), false, "Cropping an image hides the untranslated crop hint");
+  await page.keyboard.press("Escape");
   await page.evaluate(() => {
     window.__referenceOriginalDecode = HTMLImageElement.prototype.decode;
     HTMLImageElement.prototype.decode = function decodeFixtureImage() {
@@ -451,4 +559,88 @@ export async function runCanvasContracts({ baseUrl, fixture, page, viewport }) {
   const readOnlySourceView = page.getByTestId("provider-image-panel");
   await readOnlySourceView.waitFor();
   assert.match(await readOnlySourceView.innerText(), /环境 OpenAI/u, "Read-only action opens the active environment source view");
+
+  fixture.state.hostMode = "ai-cove-new-api";
+  fixture.state.providerMode = "local";
+  fixture.state.canvasReady = true;
+  fixture.state.generationMode = "loading";
+  await page.goto(`${baseUrl}/?ui_mode=embedded`);
+  await page.getByTestId("excalidraw-canvas").waitFor();
+  await visiblePanelControl(page, "prompt-input");
+  await page.getByTestId("prompt-input").fill("观察生成中的占位动效");
+  await page.getByTestId("generate-button").click();
+  const generationPlaceholder = page.getByTestId("generation-placeholder").first();
+  await generationPlaceholder.waitFor();
+  if (viewport.width <= 1023) {
+    await page.waitForFunction(() => document.querySelector('[data-testid="open-ai-panel"]')?.getAttribute("aria-expanded") === "false");
+    assert.equal(await page.getByTestId("open-ai-panel").getAttribute("aria-expanded"), "false", "Mobile generation returns to the canvas animation");
+  } else {
+    await assertPaintedAbove(
+      page.locator(".ai-panel"),
+      generationPlaceholder,
+      "The operation panel stays above the generation placeholder"
+    );
+  }
+  const placeholderBeforeDrag = await requireBox(generationPlaceholder, "Generation placeholder is draggable");
+  await page.mouse.move(
+    placeholderBeforeDrag.x + placeholderBeforeDrag.width / 2,
+    placeholderBeforeDrag.y + placeholderBeforeDrag.height / 2
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    placeholderBeforeDrag.x + placeholderBeforeDrag.width / 2 + 72,
+    placeholderBeforeDrag.y + placeholderBeforeDrag.height / 2 + 36,
+    { steps: 6 }
+  );
+  await page.mouse.up();
+  await page.waitForFunction(
+    ({ x, y }) => {
+      const box = document.querySelector('[data-testid="generation-placeholder"]')?.getBoundingClientRect();
+      return Boolean(box && box.x > x + 40 && box.y > y + 16);
+    },
+    { x: placeholderBeforeDrag.x, y: placeholderBeforeDrag.y }
+  );
+  const placeholderAfterDrag = await requireBox(generationPlaceholder, "Generation placeholder follows the drag gesture");
+  assert.ok(
+    placeholderAfterDrag.x > placeholderBeforeDrag.x + 40 && placeholderAfterDrag.y > placeholderBeforeDrag.y + 16,
+    "Loading generation placeholders remain draggable"
+  );
+  const sidebarsBeforePlaceholderClick = await page.getByTestId("sidebar").count();
+  await generationPlaceholder.click({ force: true });
+  await page.waitForFunction(
+    (expectedCount) => document.querySelectorAll('[data-testid="sidebar"]').length === expectedCount,
+    sidebarsBeforePlaceholderClick
+  );
+  assert.equal(
+    await page.getByTestId("sidebar").count(),
+    sidebarsBeforePlaceholderClick,
+    "Clicking a loading placeholder does not open the Excalidraw operation sidebar"
+  );
+  const placeholderArt = generationPlaceholder.locator(".generation-placeholder-shape__art");
+  const [placeholderBeforeZoom, artBeforeZoom] = await Promise.all([
+    requireBox(generationPlaceholder, "Generation placeholder exposes zoom geometry"),
+    requireBox(placeholderArt, "Generation animation exposes zoom geometry")
+  ]);
+  await page.locator(".excalidraw").focus();
+  await page.keyboard.press("Meta+-");
+  await page.keyboard.press("Meta+-");
+  await page.keyboard.press("Meta+-");
+  await page.waitForFunction(
+    (width) => (document.querySelector('[data-testid="generation-placeholder"]')?.getBoundingClientRect().width ?? width) < width * 0.85,
+    placeholderBeforeZoom.width
+  );
+  const [placeholderAfterZoom, artAfterZoom] = await Promise.all([
+    requireBox(generationPlaceholder, "Generation placeholder responds to canvas zoom"),
+    requireBox(placeholderArt, "Generation animation responds to canvas zoom")
+  ]);
+  const placeholderScale = placeholderAfterZoom.width / placeholderBeforeZoom.width;
+  const artScale = artAfterZoom.width / artBeforeZoom.width;
+  assert.ok(Math.abs(placeholderScale - artScale) < 0.04, "Generation animation scales with its canvas placeholder");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await generationPlaceholder.waitFor();
+  assert.equal(
+    await generationPlaceholder.getByText("魔法生成中").isVisible(),
+    true,
+    "Reduced motion keeps a visible static generation placeholder"
+  );
 }
