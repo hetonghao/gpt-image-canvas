@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { assetIdCandidates, verifyAsset, verifyEmbeddedAsset } from "./assets.js";
 import { assetReference, boxElement, businessData, hashString, imageElement, lineElement, pointsFromProps, textElement, textFromProps } from "./elements.js";
 import { isRecord, numberValue, recordValue, stringValue } from "./json.js";
+import { pageLayout } from "./page-layout.js";
 import type { SourceShape } from "./source-types.js";
 import { preserveTargetProject } from "./target-project.js";
 import type {
@@ -49,7 +50,6 @@ export async function convertProject(
   if (rawRecords.some((record) => !isRecord(record))) return blocked(project, 0, "invalid_snapshot");
   const records = rawRecords.filter((record): record is JsonRecord => isRecord(record));
   const pages = records.filter((record) => recordType(record) === "page");
-  if (pages.length > 1) return blocked(project, countShapes(records), "unsupported_page_model");
 
   const sourceShapes: SourceShape[] = [];
   const sourceAssets = new Map<string, JsonRecord>();
@@ -77,17 +77,25 @@ export async function convertProject(
   }
   if (failures.size > 0) return blocked(project, sourceShapes.length, ...failures);
 
+  const pageNames = new Map(pages.flatMap((page) => {
+    const id = stringValue(page.id);
+    return id ? [[id, stringValue(page.name) ?? id] as const] : [];
+  }));
+  const pageOffsets = pageLayout(pages, sourceShapes);
   const verifiedAssets = new Map<string, VerifiedAsset>();
   const fileIds = new Map<string, string>();
   const assetRefs: Record<string, JsonRecord> = {};
   const elements: TargetElement[] = [];
   const assetVerification = new Map<string, Promise<Awaited<ReturnType<typeof verifyAsset>>>>();
   for (const shape of sourceShapes.sort(compareShapes)) {
-    const converted = await convertShape(inputDir, project, shape, sourceAssets, assets, verifiedAssets, fileIds, assetRefs, assetVerification);
+    const offset = pageOffsets.get(shape.pageId ?? "") ?? { x: 0, y: 0 };
+    const positioned = { ...shape, x: shape.x + offset.x, y: shape.y + offset.y, pageName: pageNames.get(shape.pageId ?? "") };
+    const converted = await convertShape(inputDir, project, positioned, sourceAssets, assets, verifiedAssets, fileIds, assetRefs, assetVerification);
     if (converted.kind === "blocked") return blocked(project, sourceShapes.length, converted.code);
     elements.push(...converted.elements);
     converted.warnings.forEach((warning) => warnings.add(warning));
   }
+  if (pages.length > 1) warnings.add("visual_degraded");
   if (sourceShapes.length === 0 && Object.keys(store.value).length > 0 && hasSessionState(parsed)) warnings.add("session_state_reset");
   const snapshot = {
     format: "ai-cove-excalidraw",
@@ -201,7 +209,7 @@ function parseShape(value: JsonRecord): SourceShape | undefined {
   const y = numberValue(value.y);
   const props = recordValue(value.props);
   if (!id || !type || x === undefined || y === undefined || !props) return undefined;
-  return { id, type, x, y, rotation: numberValue(value.rotation) ?? 0, index: stringValue(value.index) ?? id, props };
+  return { id, type, x, y, rotation: numberValue(value.rotation) ?? 0, index: stringValue(value.index) ?? id, pageId: stringValue(value.parentId), props };
 }
 
 function countShapes(records: readonly unknown[]): number {

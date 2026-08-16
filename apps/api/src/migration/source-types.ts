@@ -7,5 +7,7 @@ export type SourceShape = {
   readonly y: number;
   readonly rotation: number;
   readonly index: string;
+  readonly pageId?: string;
+  readonly pageName?: string;
   readonly props: JsonRecord;
 };

@@ -100,7 +100,7 @@ test("legacy assets schema derives integrity metadata in the fresh output", asyn
   }
 });
 
-for (const kind of ["unknown-shape", "missing-asset", "corrupt-asset", "multi-page"] as const) {
+for (const kind of ["unknown-shape", "missing-asset", "corrupt-asset"] as const) {
   test(`offline migration blocks ${kind} without changing the source`, async () => {
     const root = mkdtempSync(join(tmpdir(), `gpt-image-canvas-migration-${kind}-`));
     try {
@@ -123,6 +123,49 @@ for (const kind of ["unknown-shape", "missing-asset", "corrupt-asset", "multi-pa
     }
   });
 }
+
+test("offline migration preserves all shapes from every legacy page", async () => {
+  const root = mkdtempSync(join(tmpdir(), "gpt-image-canvas-migration-multi-page-"));
+  try {
+    const fixture = seedMigrationFixture(root, "multi-page");
+    const result = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir: join(root, "output"), reportDir: join(root, "report"), approveWarnings: true, ...bindingFor(fixture.inputDir) });
+    assert.equal(result.status, "ready");
+    const sqlite = new Database(join(root, "output", "gpt-image-canvas.sqlite"), { readonly: true });
+    try {
+      const row = sqlite.prepare("SELECT snapshot_json FROM projects WHERE id = ?").get(fixture.projectId);
+      assert.ok(isRecord(row));
+      const snapshot = JSON.parse(readString(row.snapshot_json));
+      assert.equal(snapshot.scene.elements.length, 4);
+    } finally {
+      sqlite.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("offline migration decodes compressed legacy draw segments", async () => {
+  const root = mkdtempSync(join(tmpdir(), "gpt-image-canvas-migration-draw-segments-"));
+  try {
+    const fixture = seedMigrationFixture(root, "draw-segments");
+    const result = await runOfflineMigration({ inputDir: fixture.inputDir, outputDir: join(root, "output"), reportDir: join(root, "report"), ...bindingFor(fixture.inputDir) });
+    assert.equal(result.status, "ready");
+    const sqlite = new Database(join(root, "output", "gpt-image-canvas.sqlite"), { readonly: true });
+    try {
+      const row = sqlite.prepare("SELECT snapshot_json FROM projects WHERE id = ?").get(fixture.projectId);
+      assert.ok(isRecord(row));
+      const snapshot = JSON.parse(readString(row.snapshot_json));
+      const freedraw = snapshot.scene.elements.find((element: unknown) => isRecord(element) && element.type === "freedraw");
+      assert.ok(isRecord(freedraw));
+      assert.ok(Array.isArray(freedraw.points));
+      assert.ok(freedraw.points.length > 2);
+    } finally {
+      sqlite.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("migration requires explicit approval for visible degradations", async () => {
   const root = mkdtempSync(join(tmpdir(), "gpt-image-canvas-migration-warning-"));

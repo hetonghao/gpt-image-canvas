@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
+import { addDrawSegmentsShape } from "./fixture-shapes.js";
 
 export const tinyPngBytes = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
@@ -10,7 +11,7 @@ export const tinyPngBytes = Buffer.from(
 export const PRIVATE_PROMPT = "PRIVATE_USER_PROMPT_SHOULD_NOT_LEAK";
 export const PRIVATE_TOKEN = "TOKEN_SHOULD_NOT_LEAK";
 
-export type MigrationFixtureKind = "success" | "unknown-shape" | "missing-asset" | "corrupt-asset" | "multi-page" | "degraded-shape" | "legacy-schema" | "dangling-reference";
+export type MigrationFixtureKind = "success" | "unknown-shape" | "missing-asset" | "corrupt-asset" | "multi-page" | "draw-segments" | "degraded-shape" | "legacy-schema" | "dangling-reference";
 
 export type MigrationFixture = {
   readonly inputDir: string;
@@ -79,7 +80,7 @@ export function seedMigrationFixture(rootDir: string, kind: MigrationFixtureKind
     const projectId = `fixture-${kind}`;
     const assetId = `asset-${kind}`;
     const assetPath = join(assetsDir, `${assetId}.png`);
-    if (kind === "success" || kind === "unknown-shape" || kind === "multi-page" || kind === "degraded-shape" || kind === "legacy-schema" || kind === "dangling-reference") {
+    if (kind === "success" || kind === "unknown-shape" || kind === "multi-page" || kind === "draw-segments" || kind === "degraded-shape" || kind === "legacy-schema" || kind === "dangling-reference") {
       writeFileSync(assetPath, tinyPngBytes);
     } else if (kind === "corrupt-asset") {
       writeFileSync(assetPath, Buffer.from("not-an-image"));
@@ -214,6 +215,20 @@ function makeTldrawSnapshot(kind: MigrationFixtureKind, assetId: string): Record
   }
   if (kind === "multi-page") {
     store["page:page-2"] = { id: "page:page-2", typeName: "page", name: "Page 2", index: "a2" };
+    store["shape:text-page-2"] = {
+      id: "shape:text-page-2",
+      typeName: "shape",
+      type: "text",
+      x: 20,
+      y: 40,
+      rotation: 0,
+      index: "a1",
+      parentId: "page:page-2",
+      props: { text: "Page 2", w: 120, h: 40, autoSize: false }
+    };
+  }
+  if (kind === "draw-segments") {
+    addDrawSegmentsShape(store);
   }
   if (kind === "degraded-shape") {
     store["shape:degraded"] = {
