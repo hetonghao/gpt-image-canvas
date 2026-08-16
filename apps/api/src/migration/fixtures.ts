@@ -11,7 +11,7 @@ export const tinyPngBytes = Buffer.from(
 export const PRIVATE_PROMPT = "PRIVATE_USER_PROMPT_SHOULD_NOT_LEAK";
 export const PRIVATE_TOKEN = "TOKEN_SHOULD_NOT_LEAK";
 
-export type MigrationFixtureKind = "success" | "unknown-shape" | "missing-asset" | "corrupt-asset" | "multi-page" | "draw-segments" | "degraded-shape" | "legacy-schema" | "dangling-reference";
+export type MigrationFixtureKind = "success" | "unknown-shape" | "missing-asset" | "corrupt-asset" | "multi-page" | "draw-segments" | "degraded-shape" | "legacy-schema" | "mislabelled-jpeg" | "dangling-reference";
 
 export type MigrationFixture = {
   readonly inputDir: string;
@@ -80,7 +80,9 @@ export function seedMigrationFixture(rootDir: string, kind: MigrationFixtureKind
     const projectId = `fixture-${kind}`;
     const assetId = `asset-${kind}`;
     const assetPath = join(assetsDir, `${assetId}.png`);
-    if (kind === "success" || kind === "unknown-shape" || kind === "multi-page" || kind === "draw-segments" || kind === "degraded-shape" || kind === "legacy-schema" || kind === "dangling-reference") {
+    if (kind === "mislabelled-jpeg") {
+      writeFileSync(assetPath, Buffer.from("/9j/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAABwn/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdAAYqm//Z", "base64"));
+    } else if (kind === "success" || kind === "unknown-shape" || kind === "multi-page" || kind === "draw-segments" || kind === "degraded-shape" || kind === "legacy-schema" || kind === "dangling-reference") {
       writeFileSync(assetPath, tinyPngBytes);
     } else if (kind === "corrupt-asset") {
       writeFileSync(assetPath, Buffer.from("not-an-image"));

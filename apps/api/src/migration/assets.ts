@@ -49,7 +49,6 @@ export async function verifyAssetBytes(projectUserId: string, asset: AssetRow, b
     if (
       !mimeType ||
       !actualMimeType ||
-      mimeType !== actualMimeType ||
       !metadata.width ||
       !metadata.height ||
       metadata.width !== asset.width ||
@@ -57,7 +56,19 @@ export async function verifyAssetBytes(projectUserId: string, asset: AssetRow, b
       (asset.byteSize !== null && asset.byteSize !== bytes.byteLength) ||
       (asset.contentSha256 !== null && asset.contentSha256 !== digest)
     ) return { kind: "blocked", code: "asset_materialization_failed" };
-    return { kind: "verified", value: { ...asset, mimeType, actualByteSize: bytes.byteLength, actualContentSha256: digest, actualWidth: metadata.width, actualHeight: metadata.height } };
+    const extension = extensionForMime(actualMimeType);
+    return {
+      kind: "verified",
+      value: {
+        ...asset,
+        fileName: replaceExtension(asset.fileName, extension),
+        mimeType: actualMimeType,
+        actualByteSize: bytes.byteLength,
+        actualContentSha256: digest,
+        actualWidth: metadata.width,
+        actualHeight: metadata.height
+      }
+    };
   } catch (error) {
     if (error instanceof Error) return { kind: "blocked", code: "asset_materialization_failed" };
     throw error;
@@ -172,6 +183,20 @@ function mimeForFormat(value: string | undefined): "image/png" | "image/jpeg" | 
     case "webp": return "image/webp";
     default: return undefined;
   }
+}
+
+function extensionForMime(value: "image/png" | "image/jpeg" | "image/webp"): "png" | "jpg" | "webp" {
+  switch (value) {
+    case "image/png": return "png";
+    case "image/jpeg": return "jpg";
+    case "image/webp": return "webp";
+  }
+}
+
+function replaceExtension(value: string, extension: "png" | "jpg" | "webp"): string {
+  const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
+  const dot = value.lastIndexOf(".");
+  return dot > slash ? `${value.slice(0, dot)}.${extension}` : `${value}.${extension}`;
 }
 
 function isWithin(root: string, candidate: string): boolean {
